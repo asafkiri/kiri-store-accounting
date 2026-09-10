@@ -14,9 +14,14 @@ export function moneyInput(value) {
   return sign + Math.floor(n / 100) + "." + String(n % 100).padStart(2, "0");
 }
 export function parseMoney(value, nullable = false) {
-  const s = String(value ?? "")
-    .trim()
-    .replace(/,/g, "");
+  let s = String(value ?? "").trim();
+  if (s.includes(",")) {
+    if (!/^-?\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(s))
+      throw Error(
+        "יש להשתמש בנקודה עשרונית, למשל 123.45. פסיק מיועד להפרדת אלפים בלבד.",
+      );
+    s = s.replace(/,/g, "");
+  }
   if (!s && nullable) return null;
   if (!/^-?\d{1,9}(\.\d{1,2})?$/.test(s))
     throw Error("יש להזין סכום תקין, עם עד שתי ספרות אחרי הנקודה.");

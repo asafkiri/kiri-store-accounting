@@ -11,6 +11,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: asafkiri/kiri-store-accounting-ai-scan
+          ref: main
+          path: api-rules-check
+      - run: |
+          cmp firestore.rules api-rules-check/test/firestore.rules
+          cmp storage.rules api-rules-check/test/storage.rules
       - uses: actions/setup-node@v4
         with:
           node-version: 22

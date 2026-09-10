@@ -37,7 +37,7 @@ export function invoicesView(ctx) {
       (i) => !i.deletedAt && i.status === "unpaid",
     ),
     openSum = allOpen.reduce((n, i) => n + i.finalAgorot, 0);
-  return `<div class="page-heading"><div><span class="eyebrow">חשבוניות ותשלומים</span><h1>${f.supplierId ? e(ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name || "חשבוניות ספק") : "מה צריך לשלם?"}</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div><div class="overview"><div><span>חשבוניות פתוחות</span><strong>${allOpen.length}</strong></div><div><span>סכום החשבוניות הפתוחות</span><strong>${e(money(openSum))}</strong></div></div><div class="main-actions">${act("invoice", "הוסף חשבונית")}${act("scan", "סרוק חשבונית", "secondary", "camera")}</div>${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="invoice">יש טיוטת חשבונית במכשיר · המשך למלא ${icon("arrow")}</button>` : ""}<div class="tabs" role="group" aria-label="מצב חשבוניות">${[
+  return `<div class="page-heading"><div><span class="eyebrow">חשבוניות ותשלומים</span><h1>${f.supplierId ? e(ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name || "חשבוניות ספק") : "מה צריך לשלם?"}</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div><div class="overview"><div><span>חשבוניות פתוחות</span><strong>${allOpen.length}</strong></div><div><span>סכום החשבוניות הפתוחות</span><strong>${e(money(openSum))}</strong></div></div><div class="main-actions">${act("invoice", "הוסף חשבונית")}${act("scan", "סרוק חשבונית", "secondary", "camera")}</div>${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="resume-draft" data-key="invoice">יש טיוטת חשבונית במכשיר · המשך למלא ${icon("arrow")}</button>` : ""}<div class="tabs" role="group" aria-label="מצב חשבוניות">${[
     ["unpaid", "לא שולמו"],
     ["paid", "שולמו"],
     ["", "הכול"],
@@ -153,11 +153,25 @@ export function settingsView(ctx) {
     )}</section><section class="settings-section"><h2>פתיחה ממסך הבית</h2><p>באייפון: שיתוף ← הוסף למסך הבית. באנדרואיד: תפריט הדפדפן ← הוסף למסך הבית.</p></section><section class="settings-section"><h2>יציאה מהחשבון</h2><p>בפתיחה רגילה נשארים מחוברים. יציאה מוחקת את הטיוטות במכשיר הזה ודורשת SMS בכניסה הבאה.</p>${act("logout", "צא מהחשבון", "secondary", null)}</section>`;
 }
 export function shell(ctx) {
+  const view = {
+    invoices: invoicesView,
+    suppliers: suppliersView,
+    cash: cashView,
+    reports: reportsView,
+    settings: settingsView,
+  }[ctx.route];
+  const content =
+    ctx.route !== "settings" && ctx.syncError
+      ? `<div class="empty" role="alert"><h1>לא התקבל עדכון מהשרת</h1><p>יש לנסות שוב כדי לראות אילו חשבוניות עדיין פתוחות ואת הסכומים העדכניים.</p>${act("refresh", "נסה שוב")}</div>`
+      : ctx.route !== "settings" && !ctx.lastRefresh
+        ? '<div class="empty" role="status"><h1>טוען את נתוני החנות…</h1><p>החשבוניות והסכומים יוצגו אחרי קבלת הנתונים מהשרת.</p></div>'
+        : view(ctx);
+
   const nav = [
     ["invoices", "חשבוניות", "invoice"],
     ["suppliers", "ספקים", "suppliers"],
     ["cash", "קופה ורב־קו", "cash"],
     ["reports", "דוחות", "reports"],
   ];
-  return `<div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${ctx.route === route ? "active" : ""}" ${ctx.route === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav><button class="settings-link ${ctx.route === "settings" ? "active" : ""}" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></aside><div class="workspace"><header class="topbar"><span>החשבונות של החנות</span><div><span id="connection-status" class="connection">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span><button class="icon-button" data-route="settings" aria-label="הגדרות וגיבוי">${icon("settings")}</button></div></header><main id="main" tabindex="-1">${{ invoices: invoicesView, suppliers: suppliersView, cash: cashView, reports: reportsView, settings: settingsView }[ctx.route](ctx)}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
+  return `<div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${ctx.route === route ? "active" : ""}" ${ctx.route === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav><button class="settings-link ${ctx.route === "settings" ? "active" : ""}" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></aside><div class="workspace"><header class="topbar"><span>החשבונות של החנות</span><div><span id="connection-status" class="connection">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span><button class="icon-button" data-route="settings" aria-label="הגדרות וגיבוי">${icon("settings")}</button></div></header><main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
 }
