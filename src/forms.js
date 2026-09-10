@@ -9,8 +9,9 @@ import {
   types,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
+import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
 
-function bindDraft(ctx, form, key, draft, collect, onSubmit) {
+function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   const status = $("[data-draft-status]", form),
     submit = $("[type=submit]", form),
     error = $("[data-form-error]", form);
@@ -113,6 +114,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit) {
         draft.pending = onSubmit(draft.fields);
         await persist(true);
       }
+      lock();
       const result = await ctx.api.save(draft.pending);
       await ctx.drafts.remove(key);
       if (key === "invoice" && draft.fields.scanJobId) {
@@ -120,10 +122,16 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit) {
         if (scan?.jobId === draft.fields.scanJobId)
           await ctx.drafts.remove("scan");
       }
+      for (const related of result.relatedRecords || [])
+        ctx.mergeRecord(related.record, related.path);
       ctx.mergeRecord(result.record, draft.pending.path);
       ctx.closeModal();
       ctx.render();
-      toast("נשמר בחנות");
+      toast(
+        result.supplierAction === "created"
+          ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר להוסיף לו פרטים במסך הספקים.`
+          : "נשמר בחנות",
+      );
       ctx.refresh(false);
     } catch (err) {
       error.hidden = false;
@@ -133,6 +141,8 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit) {
         if (err.code === "VERSION_CONFLICT") {
           draft.conflict = true;
         }
+        lock();
+        if (options.onError) await options.onError(err);
       }
       await persist();
       if (draft.conflict) showConflict();
@@ -237,8 +247,17 @@ export async function invoiceForm(
       fields: {
         supplierId:
           record?.supplierId ||
-          ctx.data.suppliers.find((s) => s.name === r?.supplierName)?.id ||
+          (!r?.uncertainFields?.includes("supplierName") &&
+            ctx.data.suppliers.find(
+              (s) => s.active && !s.deletedAt && s.name === r?.supplierName,
+            )?.id) ||
           "",
+        supplierName: record
+          ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name ||
+            ""
+          : r?.uncertainFields?.includes("supplierName")
+            ? ""
+            : r?.supplierName || "",
         documentNumber: record?.documentNumber || r?.documentNumber || "",
         invoiceDate: record?.invoiceDate || (r ? r.invoiceDate || "" : today()),
         documentType:
@@ -273,19 +292,16 @@ export async function invoiceForm(
     Boolean(r && (r[k] == null || r.uncertainFields?.includes(k)));
   const read = (k, m = false) =>
     r ? (r[k] === null ? "לא זוהה" : m ? money(r[k]) : r[k]) : "";
-  const supplierOptions = {
-    "": "בחר ספק",
-    ...Object.fromEntries(
-      ctx.data.suppliers
-        .filter((s) => s.active || s.id === f.supplierId)
-        .map((s) => [s.id, s.name]),
-    ),
-  };
+  if (f.supplierName === undefined)
+    f.supplierName =
+      draft.newSupplier?.name ||
+      ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name ||
+      (uncertain("supplierName") ? "" : r?.supplierName || "");
   const root = ctx.dialog(
     record ? "עריכת חשבונית" : r ? "בדיקת החשבונית שנסרקה" : "הוספת חשבונית",
     `${staleNotice(old, record, draft)}<form id="invoice-form">
     ${r ? `<div class="notice ${r.needsReview ? "warning" : ""}"><strong>${r.needsReview ? "יש שדות שדורשים בדיקה" : "הסריקה מוכנה לבדיקה"}</strong><p>ליד השדות מופיע מה נקרא. הערכים בתיבות הם אלה שיישמרו.</p>${r.warnings.map((w) => `<p>${e(w)}</p>`).join("")}</div>` : ""}
-    <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${select("ספק", "supplierId", f.supplierId, supplierOptions, { wide: true, required: true, uncertain: uncertain("supplierName"), read: read("supplierName") })}<button type="button" class="text-button wide" id="invoice-new-supplier">${icon("plus")} הוסף ספק חדש</button>
+    <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${supplierPickerMarkup(f, uncertain("supplierName"), read("supplierName"))}
       ${field("מספר חשבונית / תעודה", "documentNumber", f.documentNumber, { required: true, read: read("documentNumber"), uncertain: uncertain("documentNumber") })}${field("תאריך המסמך", "invoiceDate", f.invoiceDate, { type: "date", required: true, read: read("invoiceDate"), uncertain: uncertain("invoiceDate") })}
       ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", ...types }, { wide: true, required: true, uncertain: uncertain("documentType"), read: r ? types[r.documentType] || "לא זוהה" : "" })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
@@ -317,35 +333,65 @@ export async function invoiceForm(
       })),
     };
   };
-  const binding = bindDraft(ctx, form, key, draft, collect, (values) => {
-    if (!Object.hasOwn(types, values.documentType))
-      throw Error("יש לבחור סוג מסמך לפי התעודה.");
-    if (values.deductions.some((d) => d.included === "unknown"))
-      throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
-    return pendingMutation(
-      "invoices/" + draft.recordId,
-      {
-        supplierId: values.supplierId,
-        documentNumber: values.documentNumber,
-        invoiceDate: values.invoiceDate,
-        documentType: values.documentType,
-        subtotalAgorot: parseMoney(values.subtotal, true),
-        vatAgorot: parseMoney(values.vat, true),
-        totalAgorot: parseMoney(values.total),
-        finalAgorot: parseMoney(values.final),
-        deductions: values.deductions.map((d) => ({
-          label: d.label,
-          amountAgorot: parseMoney(d.amount),
-          includedInTotal: d.included === "yes",
-        })),
-        notes: values.notes,
-        attachmentIds: f.attachmentIds,
-        source: f.source,
-        scanJobId: f.scanJobId,
-        reviewConfirmed: values.review === "on",
+  let supplierPicker;
+  const binding = bindDraft(
+    ctx,
+    form,
+    key,
+    draft,
+    collect,
+    (values) => {
+      if (!Object.hasOwn(types, values.documentType))
+        throw Error("יש לבחור סוג מסמך לפי התעודה.");
+      if (values.deductions.some((d) => d.included === "unknown"))
+        throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
+      if (!values.supplierId || draft.supplierConflict)
+        throw Error("יש לבחור ספק או לאשר פתיחת ספק חדש לפני השמירה.");
+      return pendingMutation(
+        "invoices/" + draft.recordId,
+        {
+          supplierId: values.supplierId,
+          ...(draft.newSupplier
+            ? { newSupplier: { name: draft.newSupplier.name } }
+            : {}),
+          ...(draft.reactivateSupplier
+            ? {
+                reactivateSupplier: {
+                  expectedVersion: draft.reactivateSupplier.expectedVersion,
+                },
+              }
+            : {}),
+          documentNumber: values.documentNumber,
+          invoiceDate: values.invoiceDate,
+          documentType: values.documentType,
+          subtotalAgorot: parseMoney(values.subtotal, true),
+          vatAgorot: parseMoney(values.vat, true),
+          totalAgorot: parseMoney(values.total),
+          finalAgorot: parseMoney(values.final),
+          deductions: values.deductions.map((d) => ({
+            label: d.label,
+            amountAgorot: parseMoney(d.amount),
+            includedInTotal: d.included === "yes",
+          })),
+          notes: values.notes,
+          attachmentIds: f.attachmentIds,
+          source: f.source,
+          scanJobId: f.scanJobId,
+          reviewConfirmed: values.review === "on",
+        },
+        draft.version,
+      );
+    },
+    {
+      onError: async (err) => {
+        if (["SUPPLIER_EXISTS", "SUPPLIER_CHANGED"].includes(err.code))
+          await supplierPicker.recover(err);
       },
-      draft.version,
-    );
+    },
+  );
+  supplierPicker = bindSupplierPicker(ctx, form, draft, {
+    collect,
+    persist: binding.persist,
   });
   $("#add-deduction", form).onclick = () => {
     Object.assign(f, collect());
@@ -385,11 +431,6 @@ export async function invoiceForm(
     } catch (err) {
       toast(err.message, true);
     }
-  };
-  $("#invoice-new-supplier", form).onclick = async () => {
-    draft.fields = collect();
-    await binding.persist();
-    await supplierForm(ctx);
   };
   form.addEventListener("input", () => {
     try {

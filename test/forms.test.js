@@ -323,3 +323,298 @@ test("AI review marks supplier and unknown document type, requiring an explicit 
     /סוג מסמך/,
   );
 });
+
+const supplierScan = (name, uncertainFields = []) => ({
+  id: "new-supplier-scan",
+  attachmentIds: [],
+  result: {
+    supplierName: name,
+    documentNumber: "new-1001",
+    invoiceDate: "2026-09-10",
+    documentType: "invoice",
+    subtotalAgorot: null,
+    vatAgorot: null,
+    totalAgorot: 1200,
+    finalAgorot: 1200,
+    deductions: [],
+    uncertainFields,
+    needsReview: !!uncertainFields.length,
+    warnings: [],
+  },
+});
+const supplierAction = (name) =>
+  document.querySelector(`[data-supplier-action="${name}"]`);
+
+test("changing a pending supplier clears its stale option and choosing an existing one cancels creation", async () => {
+  const { ctx, drafts, saved } = setup();
+  await invoiceForm(ctx, null, supplierScan("שם חדש"));
+  supplierAction("create").click();
+  await tick();
+  const oldId = drafts.get("invoice").newSupplier.id;
+  fill("supplierId", "supplier-001");
+  await tick();
+  assert.equal(drafts.get("invoice").newSupplier, undefined);
+  assert.equal(
+    document.querySelector(`[name=supplierId] option[value="${oldId}"]`),
+    null,
+  );
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved[0].body.data.supplierId, "supplier-001");
+  assert.equal(saved[0].body.data.newSupplier, undefined);
+});
+
+test("failed conflict lookup keeps fields and allows an explicit lookup retry without another write", async () => {
+  const { ctx, drafts } = setup();
+  let writes = 0,
+    reads = 0;
+  const existing = {
+    id: "existing-after-race",
+    name: "מרינה",
+    active: false,
+    version: 1,
+  };
+  ctx.api.save = async () => {
+    writes++;
+    const err = new ApiError("כבר קיים ספק", "SUPPLIER_EXISTS", 409);
+    err.details = { supplierId: existing.id };
+    throw err;
+  };
+  ctx.api.request = async () => {
+    reads++;
+    if (reads === 1) throw new ApiError("לא התקבלה תשובה מהשרת.", "NETWORK", 0);
+    return existing;
+  };
+  ctx.mergeRecord = (record) => ctx.data.suppliers.push(record);
+  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  supplierAction("create").click();
+  fill("notes", "נשאר גם בניתוק");
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(drafts.get("invoice").fields.notes, "נשאר גם בניתוק");
+  assert.equal(drafts.get("invoice").newSupplier, undefined);
+  assert.ok(supplierAction("lookup"));
+  supplierAction("lookup").click();
+  await tick();
+  assert.ok(supplierAction("reactivate"));
+  assert.equal(writes, 1);
+  assert.equal(reads, 2);
+});
+
+test("unknown scanned supplier is editable, stays pending through refresh, and saves only with invoice review", async () => {
+  const { ctx, drafts, saved } = setup();
+  const merged = [];
+  ctx.mergeRecord = (record, path) => merged.push({ record, path });
+  ctx.api.save = async (p) => {
+    saved.push(p);
+    return {
+      record: { id: p.path.split("/")[1], supplierId: p.body.data.supplierId },
+      supplierAction: "created",
+      relatedRecords: [
+        {
+          path: "suppliers/" + p.body.data.supplierId,
+          record: {
+            id: p.body.data.supplierId,
+            name: p.body.data.newSupplier.name,
+            active: true,
+            createdBy: "owner",
+          },
+        },
+      ],
+    };
+  };
+  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  assert.match(document.body.textContent, /ספק חדש: מרינה/);
+  assert.equal(document.querySelector("[name=supplierName]").value, "מרינה");
+  assert.equal(saved.length, 0);
+  fill("supplierName", "מרינה סניף בדיקה");
+  supplierAction("create").click();
+  await tick();
+  const pendingSupplier = drafts.get("invoice").newSupplier;
+  assert.equal(pendingSupplier.name, "מרינה סניף בדיקה");
+  assert.equal(saved.length, 0);
+  await invoiceForm(ctx);
+  assert.deepEqual(drafts.get("invoice").newSupplier, pendingSupplier);
+  assert.equal(
+    document.querySelector("[name=supplierId]").value,
+    pendingSupplier.id,
+  );
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].path.startsWith("invoices/"), true);
+  assert.deepEqual(saved[0].body.data.newSupplier, {
+    name: pendingSupplier.name,
+  });
+  assert.equal(saved[0].body.data.supplierId, pendingSupplier.id);
+  assert.ok(merged.find((r) => r.path === "suppliers/" + pendingSupplier.id));
+  assert.match(
+    document.querySelector("#toast").textContent,
+    /נפתח ספק חדש: מרינה סניף בדיקה/,
+  );
+});
+
+test("normalized match needs explicit confirmation; rejecting it asks for a distinct name", async () => {
+  const { ctx, drafts, saved } = setup();
+  ctx.data.suppliers = [
+    { id: "supplier-marina", name: "מרינה בע״מ", active: true, version: 1 },
+  ];
+  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  assert.equal(document.querySelector("[name=supplierId]").value, "");
+  assert.match(document.body.textContent, /זה הספק.*מרינה בע״מ.*שכבר קיים/);
+  assert.equal(supplierAction("create"), null);
+  supplierAction("reject").click();
+  assert.equal(saved.length, 0);
+  assert.match(document.body.textContent, /שם שמבדיל/);
+  fill("supplierName", "מרינה");
+  supplierAction("confirm").click();
+  await tick();
+  assert.equal(
+    document.querySelector("[name=supplierId]").value,
+    "supplier-marina",
+  );
+  assert.equal(drafts.get("invoice").newSupplier, undefined);
+});
+
+test("inactive supplier offers reactivation inside the invoice and does not immediately write", async () => {
+  const { ctx, drafts, saved } = setup();
+  ctx.data.suppliers = [
+    { id: "supplier-marina", name: "מרינה", active: false, version: 3 },
+  ];
+  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  assert.equal(document.querySelector("[name=supplierId]").value, "");
+  assert.match(document.body.textContent, /סומן כלא פעיל.*להפעיל אותו מחדש/);
+  supplierAction("reactivate").click();
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.deepEqual(drafts.get("invoice").reactivateSupplier, {
+    id: "supplier-marina",
+    expectedVersion: 3,
+  });
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.deepEqual(saved[0].body.data.reactivateSupplier, {
+    expectedVersion: 3,
+  });
+  assert.equal(saved[0].body.data.newSupplier, undefined);
+});
+
+test("canceling review leaves no supplier on server, even after the inline confirmation", async () => {
+  const { ctx, drafts, saved } = setup();
+  await invoiceForm(ctx, null, supplierScan("חדש לביטול"));
+  supplierAction("create").click();
+  await tick();
+  document.querySelector("[data-discard-draft]").click();
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.equal(drafts.has("invoice"), false);
+});
+
+test("manual invoice uses the same inline creation flow and never opens another dialog", async () => {
+  const { ctx, saved } = setup();
+  await invoiceForm(ctx);
+  fill("supplierName", "ספק ידני חדש");
+  supplierAction("create").click();
+  fill("documentNumber", "M-001");
+  fill("total", "100");
+  fill("final", "100");
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].body.data.source, "manual");
+  assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש" });
+});
+
+test("uncertain or missing scanned supplier name starts empty and visibly requires review", async () => {
+  for (const name of [null, "ספק בדיקה"]) {
+    const { ctx } = setup();
+    await invoiceForm(ctx, null, supplierScan(name, ["supplierName"]));
+    assert.equal(document.querySelector("[name=supplierName]").value, "");
+    assert.equal(document.querySelector("[name=supplierId]").value, "");
+    assert.ok(
+      document.querySelector("[name=supplierName]").closest(".uncertain"),
+    );
+    assert.match(
+      document.querySelector("[data-supplier-picker]").textContent,
+      /דורש בדיקה/,
+    );
+    fill("supplierName", "שם שהוקלד");
+    assert.ok(supplierAction("create"));
+  }
+});
+
+test("new supplier save after network loss replays the same invoice mutation and supplier ID after reload", async () => {
+  const { ctx, drafts } = setup();
+  const attempts = [];
+  ctx.api.save = async (p) => {
+    attempts.push(structuredClone(p));
+    if (attempts.length === 1) throw new ApiError("ניתוק", "NETWORK", 0);
+    return { record: { id: p.path.split("/")[1] } };
+  };
+  await invoiceForm(ctx, null, supplierScan("ספק לניתוק"));
+  supplierAction("create").click();
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  submit();
+  await tick();
+  assert.equal(attempts.length, 1);
+  const supplierId = drafts.get("invoice").newSupplier.id;
+  await invoiceForm(ctx);
+  assert.equal(document.querySelector("[name=supplierName]").disabled, true);
+  submit();
+  await tick();
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(attempts[1].body.data.supplierId, supplierId);
+});
+
+test("concurrent supplier conflict preserves invoice fields and offers explicit association to the server record", async () => {
+  const { ctx, drafts, saved } = setup();
+  const existing = {
+    id: "supplier-other-device",
+    name: "מרינה בע״מ",
+    active: true,
+    version: 1,
+  };
+  ctx.api.request = async (path) => {
+    assert.equal(path, "suppliers/" + existing.id);
+    return existing;
+  };
+  ctx.mergeRecord = (record) => {
+    if (record.id === existing.id) ctx.data.suppliers = [existing];
+  };
+  ctx.api.save = async (p) => {
+    saved.push(structuredClone(p));
+    if (saved.length === 1) {
+      const error = new ApiError(
+        "כבר קיים ספק בשם הזה.",
+        "SUPPLIER_EXISTS",
+        409,
+      );
+      error.details = { supplierId: existing.id };
+      throw error;
+    }
+    return { record: { id: p.path.split("/")[1] } };
+  };
+  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  supplierAction("create").click();
+  fill("notes", "לא לאבד");
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(drafts.get("invoice").pending, null);
+  assert.equal(document.querySelector("[name=notes]").value, "לא לאבד");
+  assert.equal(document.querySelector("[name=supplierId]").value, "");
+  supplierAction("confirm").click();
+  submit();
+  await tick();
+  assert.equal(saved[1].body.data.supplierId, existing.id);
+  assert.equal(saved[1].body.data.newSupplier, undefined);
+  assert.equal(saved[1].body.data.notes, "לא לאבד");
+  assert.notEqual(saved[0].body.mutationId, saved[1].body.mutationId);
+});

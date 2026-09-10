@@ -1,7 +1,7 @@
 export class ApiError extends Error {
-  constructor(message, code, status, requestId) {
+  constructor(message, code, status, requestId, details) {
     super(message);
-    Object.assign(this, { code, status, requestId });
+    Object.assign(this, { code, status, requestId, details });
   }
 }
 export class Api {
@@ -39,6 +39,7 @@ export class Api {
           e?.code || "REQUEST_FAILED",
           r.status,
           e?.requestId,
+          e?.details,
         );
       }
       return blob ? r.blob() : r.json();

@@ -657,6 +657,31 @@ dialog::backdrop {
   grid-template-columns: 1fr 1fr;
   gap: 18px;
 }
+.supplier-picker {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.supplier-picker [data-supplier-proposal] {
+  display: grid;
+  gap: 12px;
+  margin-block: 12px;
+}
+.supplier-picker p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.supplier-picker button {
+  width: 100%;
+  white-space: normal;
+  min-height: 48px;
+}
+.supplier-picker summary {
+  min-height: 48px;
+  padding-block: 12px;
+  cursor: pointer;
+}
 .wide {
   grid-column: 1/-1;
 }

@@ -52,6 +52,8 @@ export function createBrowserCheckServer() {
         "/image-upload.js",
         "/scan.js",
         "/forms.js",
+        "/supplier-picker.js",
+        "/supplier-name.js",
         "/ui.js",
         "/format.js",
         "/api.js",
