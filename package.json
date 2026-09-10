@@ -1,0 +1,22 @@
+{
+  "name": "kiri-store-accounting",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "firebase": "12.2.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "fake-indexeddb": "6.2.2",
+    "jsdom": "26.1.0"
+  }
+}
