@@ -85,7 +85,7 @@ p {
 }
 small,
 .small {
-  font-size: 0.85rem;
+  font-size: 16px;
 }
 strong {
   font-weight: 700;
@@ -99,7 +99,7 @@ strong {
 .eyebrow {
   display: block;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 16px;
   margin-bottom: 0.4rem;
 }
 .primary,
@@ -142,7 +142,7 @@ strong {
   padding: 8px 13px;
   color: #185bb1;
   background: #eaf2ff;
-  font-size: 0.92rem;
+  font-size: 16px;
 }
 .icon-button {
   width: 48px;
@@ -246,7 +246,7 @@ strong {
   padding: 17px 40px;
   background: #fff;
   border-bottom: 1px solid var(--line);
-  font-size: 0.9rem;
+  font-size: 16px;
   min-height: 76px;
 }
 .topbar > div {
@@ -259,7 +259,7 @@ strong {
 }
 .connection {
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 16px;
 }
 main#main {
   max-width: 1050px;
@@ -270,7 +270,7 @@ main#main {
   max-width: 1050px;
   margin: auto;
   padding: 10px 42px 30px;
-  font-size: 0.8rem;
+  font-size: 16px;
   color: var(--muted);
 }
 .page-heading {
@@ -304,7 +304,7 @@ main#main {
 }
 .overview span {
   color: #dbe7f6;
-  font-size: 0.92rem;
+  font-size: 16px;
 }
 .overview strong {
   font-size: 2rem;
@@ -373,7 +373,7 @@ main#main {
   cursor: pointer;
   color: #36506f;
   font-size: 0.95rem;
-  min-height: 30px;
+  min-height: 44px;
 }
 .filters {
   display: flex;
@@ -387,7 +387,7 @@ main#main {
   min-width: 150px;
 }
 .filters .field span {
-  font-size: 0.85rem;
+  font-size: 16px;
 }
 .filters input,
 .filters select {
@@ -399,7 +399,7 @@ main#main {
   align-items: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 16px;
   margin: 22px 0 12px;
 }
 .invoice-list {
@@ -434,14 +434,14 @@ main#main {
 }
 .document-meta {
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 16px;
 }
 .invoice-note {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 500px;
-  font-size: 0.85rem;
+  font-size: 16px;
   color: var(--muted);
 }
 .amount {
@@ -464,7 +464,7 @@ main#main {
   gap: 5px;
   border-radius: 6px;
   padding: 3px 8px;
-  font-size: 0.84rem;
+  font-size: 16px;
   font-weight: 700;
 }
 .badge.unpaid {
@@ -551,7 +551,7 @@ main#main {
   flex: 1;
 }
 .supplier-info p {
-  font-size: 0.94rem;
+  font-size: 16px;
   margin: 5px 0 9px;
 }
 .supplier-info h2 small {
@@ -582,7 +582,7 @@ main#main {
   gap: 5px;
 }
 .summary-card span {
-  font-size: 0.9rem;
+  font-size: 16px;
   color: var(--muted);
 }
 .summary-card strong {
@@ -668,7 +668,7 @@ dialog::backdrop {
 }
 .field > span {
   font-weight: 700;
-  font-size: 0.94rem;
+  font-size: 16px;
 }
 .field input,
 .field select,
@@ -691,7 +691,7 @@ dialog::backdrop {
   text-align: right;
 }
 .field small {
-  font-size: 0.8rem;
+  font-size: 16px;
   color: var(--muted);
   line-height: 1.45;
 }
@@ -704,7 +704,7 @@ dialog::backdrop {
   align-items: center;
   margin: 20px 0;
   font-size: 0.95rem;
-  min-height: 38px;
+  min-height: 44px;
   cursor: pointer;
 }
 .checkbox input {
@@ -724,7 +724,7 @@ dialog::backdrop {
 .form-footer small {
   text-align: center;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 16px;
 }
 .form-footer .primary {
   width: 100%;
@@ -736,7 +736,7 @@ dialog::backdrop {
   color: #28496e;
   padding: 14px 17px;
   margin: 15px 0;
-  font-size: 0.92rem;
+  font-size: 16px;
   overflow-wrap: anywhere;
 }
 .notice p:last-child {
@@ -759,7 +759,7 @@ dialog::backdrop {
   background: #fffaf0;
 }
 .read-value {
-  font-size: 0.85rem;
+  font-size: 16px;
   color: #7e5c29 !important;
 }
 .deductions {
@@ -796,7 +796,7 @@ dialog::backdrop {
 }
 .attachment-links strong {
   width: 100%;
-  font-size: 0.94rem;
+  font-size: 16px;
 }
 .payment-amount {
   display: flex;
@@ -808,7 +808,7 @@ dialog::backdrop {
   margin-bottom: 22px;
 }
 .payment-amount span {
-  font-size: 0.9rem;
+  font-size: 16px;
   color: var(--muted);
 }
 .payment-amount strong {
@@ -880,10 +880,10 @@ dialog::backdrop {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.85rem;
+  font-size: 16px;
 }
 .file-preview .text-button {
-  font-size: 0.85rem;
+  font-size: 16px;
   min-height: 44px;
 }
 .scan-buttons {
@@ -896,7 +896,7 @@ dialog::backdrop {
   border-bottom: 1px solid var(--line);
 }
 .compare-row p {
-  font-size: 0.92rem;
+  font-size: 16px;
 }
 .preview-dialog {
   width: min(1000px, calc(100% - 20px));
@@ -919,7 +919,7 @@ dialog::backdrop {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   direction: ltr;
-  font-size: 0.85rem;
+  font-size: 16px;
   background: #f5f7fa;
   padding: 15px;
   border-radius: 10px;
@@ -1061,7 +1061,7 @@ dialog::backdrop {
     padding: 8px 2px;
     border-radius: 9px;
     color: #647790;
-    font-size: 0.8rem;
+    font-size: 16px;
     min-height: 63px;
   }
   .sidebar nav button.active {
@@ -1079,14 +1079,14 @@ dialog::backdrop {
   .topbar {
     padding: 7px 18px;
     min-height: 64px;
-    font-size: 0.9rem;
+    font-size: 16px;
   }
   .topbar > div {
     gap: 4px;
   }
   .topbar .connection {
     max-width: 110px;
-    font-size: 0.75rem;
+    font-size: 16px;
     line-height: 1.2;
   }
   main#main {
@@ -1104,7 +1104,7 @@ dialog::backdrop {
   }
   .page-heading .primary,
   .page-heading .secondary {
-    font-size: 0.85rem;
+    font-size: 16px;
     padding: 10px 12px;
     min-height: 47px;
   }
@@ -1112,7 +1112,7 @@ dialog::backdrop {
     width: 18px;
   }
   .eyebrow {
-    font-size: 0.84rem;
+    font-size: 16px;
   }
   .overview {
     padding: 22px 18px;
@@ -1128,7 +1128,7 @@ dialog::backdrop {
     font-size: 1.65rem;
   }
   .overview span {
-    font-size: 0.8rem;
+    font-size: 16px;
   }
   .main-actions {
     gap: 10px;
@@ -1136,7 +1136,7 @@ dialog::backdrop {
   }
   .main-actions button {
     padding: 12px 7px;
-    font-size: 0.92rem;
+    font-size: 16px;
     min-height: 55px;
   }
   .main-actions svg {
@@ -1156,7 +1156,7 @@ dialog::backdrop {
     min-height: 53px;
   }
   .search input {
-    font-size: 0.91rem;
+    font-size: 16px;
   }
   .invoice-main {
     padding: 17px 15px 12px;
@@ -1169,7 +1169,7 @@ dialog::backdrop {
     font-size: 1.05rem;
   }
   .document-meta {
-    font-size: 0.83rem;
+    font-size: 16px;
   }
   .invoice-note {
     max-width: 200px;
@@ -1187,7 +1187,7 @@ dialog::backdrop {
     min-width: calc(50% - 12px);
   }
   .list-heading {
-    font-size: 0.82rem;
+    font-size: 16px;
   }
   .supplier-card {
     padding: 18px 15px;
@@ -1202,10 +1202,10 @@ dialog::backdrop {
     font-size: 1.13rem;
   }
   .supplier-info p {
-    font-size: 0.88rem;
+    font-size: 16px;
   }
   .row-actions .secondary {
-    font-size: 0.88rem;
+    font-size: 16px;
     padding: 9px 13px;
   }
   .cash-totals,
@@ -1220,22 +1220,22 @@ dialog::backdrop {
     font-size: 1.2rem;
   }
   .summary-card span {
-    font-size: 0.85rem;
+    font-size: 16px;
   }
   .cash-row {
     grid-template-columns: 1fr 1fr 1fr;
     gap: 8px;
     padding: 15px 12px;
-    font-size: 0.88rem;
+    font-size: 16px;
   }
   .cash-row > svg {
     display: none;
   }
   .cash-row strong {
-    font-size: 0.87rem;
+    font-size: 16px;
   }
   .cash-row small {
-    font-size: 0.8rem;
+    font-size: 16px;
   }
   .settings-section {
     padding: 20px;
@@ -1244,7 +1244,7 @@ dialog::backdrop {
     font-size: 1.15rem;
   }
   .settings-section .primary {
-    font-size: 0.9rem;
+    font-size: 16px;
   }
   dialog {
     width: 100%;
@@ -1271,14 +1271,14 @@ dialog::backdrop {
     font-size: 1rem;
   }
   .field > span {
-    font-size: 0.9rem;
+    font-size: 16px;
   }
   .field small {
-    font-size: 0.79rem;
+    font-size: 16px;
   }
   .toast {
     bottom: calc(90px + env(safe-area-inset-bottom));
-    font-size: 0.9rem;
+    font-size: 16px;
     padding: 13px 17px;
   }
   .login-page {
@@ -1301,22 +1301,22 @@ dialog::backdrop {
   .capture-actions > * {
     flex: 1;
     padding: 11px 9px;
-    font-size: 0.89rem;
+    font-size: 16px;
   }
   .details-list dt {
-    font-size: 0.89rem;
+    font-size: 16px;
   }
   .details-list dd {
-    font-size: 0.94rem;
+    font-size: 16px;
   }
   .empty {
     padding: 35px 15px;
   }
   .draft-banner {
-    font-size: 0.88rem;
+    font-size: 16px;
   }
   .form-error {
-    font-size: 0.93rem;
+    font-size: 16px;
   }
   .preview-dialog {
     margin: auto;

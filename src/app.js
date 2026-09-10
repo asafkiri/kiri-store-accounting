@@ -17,9 +17,14 @@ import {
   types,
   filterInvoices,
 } from "./format.js";
-import { registerAccountingTools } from "./agent-tools.js";
 import { shell } from "./views.js";
-import { supplierForm, invoiceForm, paymentForm, cashForm } from "./forms.js";
+import {
+  supplierForm,
+  invoiceForm,
+  paymentForm,
+  cashForm,
+  retainDraft,
+} from "./forms.js";
 import { scanDialog } from "./scan.js";
 import { invoiceCsv, cashCsv, download } from "./export.js";
 const ctx = {
@@ -122,7 +127,6 @@ ctx.refresh = async (force = false) => {
     }
     ctx.lastRefresh = Date.now();
     await ctx.updateDraftNames();
-    ctx.render();
   } catch (err) {
     if (epoch !== ctx.epoch) return;
     ctx.syncError = true;
@@ -135,7 +139,9 @@ ctx.refresh = async (force = false) => {
       accessError(err);
     }
   } finally {
+    if (epoch !== ctx.epoch) return;
     ctx.loading = false;
+    ctx.render();
     const el = $("#connection-status");
     if (el)
       el.textContent = ctx.syncError
@@ -330,12 +336,23 @@ async function action(type, data = {}) {
     }
     case "saved-draft": {
       const d = await ctx.drafts.load(data.key);
+      const collection =
+        d.kind === "supplier"
+          ? "suppliers"
+          : d.kind === "cash"
+            ? "dailyCash"
+            : "invoices";
+      const current = ctx.data[collection].find((r) => r.id === d.recordId);
+      if (current && current.version !== d.version && !d.pending) {
+        ctx.dialog(
+          "טיוטה קודמת לעיון",
+          '<p class="notice">הרשומה עודכנה מאז. אלה הפרטים מהטיוטה הקודמת; לעריכה פתח את הרשומה העדכנית.</p>' +
+            draftDetails(d.fields),
+        );
+        return;
+      }
       const old = await ctx.drafts.load(d.kind);
-      if (old && old.recordId !== d.recordId)
-        await ctx.drafts.save("saved-" + d.kind + "-" + old.recordId, {
-          ...old,
-          kind: d.kind,
-        });
+      if (old) await retainDraft(ctx, d.kind, old);
       await ctx.drafts.save(d.kind, d);
       await ctx.drafts.remove(data.key);
       return ctx.reopen(d.kind, d.recordId);
@@ -477,6 +494,7 @@ function login() {
     const button = $("#login-button"),
       error = $("#login-error");
     button.disabled = true;
+    $("#restart-login").disabled = true;
     error.hidden = true;
     try {
       if (codeSession) {
@@ -493,9 +511,13 @@ function login() {
     } catch (err) {
       error.textContent = authMessage(err);
       error.hidden = false;
+      $("#restart-login").hidden = false;
     } finally {
       loginBusy = false;
-      if (button.isConnected) button.disabled = false;
+      if (button.isConnected) {
+        button.disabled = false;
+        $("#restart-login").disabled = false;
+      }
     }
   };
 }
@@ -514,6 +536,8 @@ async function startup() {
       ctx.api = null;
       ctx.version = 0;
       ctx.lastRefresh = 0;
+      ctx.loading = false;
+      ctx.syncError = false;
       ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
       ctx.closeModal();
       $("#modal").innerHTML = "";
@@ -539,7 +563,7 @@ async function startup() {
     });
   } catch (err) {
     $("#app").innerHTML =
-      `<main class="login-page"><div class="login-card"><h1>המערכת עדיין אינה מוכנה</h1><p role="alert">${e(err.message)}</p><button class="primary" id="retry-startup">נסה שוב</button></div></main>`;
+      `<main class="login-page"><div class="login-card"><h1>המערכת עדיין אינה מוכנה</h1><p role="alert">${e(errorText(err))}</p><button class="primary" id="retry-startup">נסה שוב</button></div></main>`;
     const button = $("button");
     button.onclick = () => location.reload();
   }
@@ -586,5 +610,4 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
-registerAccountingTools(ctx);
 startup();

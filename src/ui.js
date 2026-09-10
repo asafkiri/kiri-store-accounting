@@ -46,9 +46,9 @@ export function select(
   name,
   value,
   options,
-  { wide = false, required = false } = {},
+  { wide = false, required = false, uncertain = false, read = "" } = {},
 ) {
-  return `<label class="field ${wide ? "wide" : ""}"><span>${e(label)}${required ? " *" : ""}</span><select name="${e(name)}" ${required ? "required" : ""}>${Object.entries(
+  return `<label class="field ${wide ? "wide" : ""} ${uncertain ? "uncertain" : ""}"><span>${e(label)}${required ? " *" : ""}</span>${read ? `<small class="read-value">נקרא: ${e(read)}</small>` : ""}<select name="${e(name)}" ${required ? "required" : ""}>${Object.entries(
     options,
   )
     .map(
@@ -71,10 +71,15 @@ export function toast(message, error = false) {
   );
 }
 export function errorText(error) {
-  return (
-    (error.message || "הפעולה לא הושלמה.") +
-    (error.requestId ? " (קוד בדיקה: " + error.requestId.slice(0, 8) + ")" : "")
-  );
+  const message =
+    typeof error?.message === "string" && /[\u0590-\u05ff]/u.test(error.message)
+      ? error.message
+      : "הפעולה לא הושלמה. נסה שוב בעוד רגע.";
+  const reference =
+    typeof error?.requestId === "string"
+      ? error.requestId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 8)
+      : "";
+  return message + (reference ? " (קוד בדיקה: " + reference + ")" : "");
 }
 export function formObject(form) {
   return Object.fromEntries(new FormData(form));

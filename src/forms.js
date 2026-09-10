@@ -51,7 +51,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit) {
   const showConflict = () => {
     error.hidden = false;
     error.textContent =
-      "הרשומה עודכנה במכשיר אחר. הטיוטה שלך נשמרה; טען את הגרסה העדכנית לפני המשך עריכה.";
+      "הרשומה עודכנה מאז. הטיוטה שלך נשמרה; טען את הגרסה העדכנית לפני המשך עריכה.";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "secondary";
@@ -149,31 +149,48 @@ const footer = (label) =>
 const textArea = (name, value, label) =>
   `<label class="field wide"><span>${e(label)}</span><textarea name="${name}" rows="2" maxlength="4000">${e(value)}</textarea></label>`;
 
+export async function retainDraft(ctx, key, old) {
+  let name = `saved-${key}-${old.recordId}`;
+  if (await ctx.drafts.load(name)) name += "-" + crypto.randomUUID();
+  await ctx.drafts.save(name, { ...old, kind: key });
+}
+async function matchingDraft(ctx, key, old, record, compatible = true) {
+  if (!old) return null;
+  // Legacy drafts have no mode. A nonzero version belongs to an existing record.
+  const mode = old.mode || (old.version === 0 ? "new" : "edit");
+  const matches = record ? old.recordId === record.id : mode === "new";
+  const stale = record && old.version !== record.version && !old.pending;
+  if (compatible && matches && !stale) return { ...old, mode };
+  await retainDraft(ctx, key, old);
+  return null;
+}
+const staleNotice = (old, record, draft) =>
+  old &&
+  record &&
+  old.recordId === record.id &&
+  old.version !== record.version &&
+  !draft.pending
+    ? '<div class="notice warning">הרשומה עודכנה מאז. מוצגת הגרסה העדכנית; הטיוטה הקודמת נשמרה לעיון בהגדרות וגיבוי.</div>'
+    : "";
+
 export async function supplierForm(ctx, record = null) {
   const key = "supplier",
     old = await ctx.drafts.load(key);
-  if (old && record && old.recordId !== record.id)
-    await ctx.drafts.save("saved-supplier-" + old.recordId, {
-      ...old,
-      kind: "supplier",
-    });
-  const draft =
-    old && (!record || old.recordId === record.id)
-      ? old
-      : {
-          recordId: record?.id || crypto.randomUUID(),
-          version: record?.version || 0,
-          fields: {
-            name: record?.name || "",
-            contact: record?.contact || "",
-            notes: record?.notes || "",
-            active: record?.active === false ? "no" : "yes",
-          },
-        };
+  const draft = (await matchingDraft(ctx, key, old, record)) || {
+    mode: record ? "edit" : "new",
+    recordId: record?.id || crypto.randomUUID(),
+    version: record?.version || 0,
+    fields: {
+      name: record?.name || "",
+      contact: record?.contact || "",
+      notes: record?.notes || "",
+      active: record?.active === false ? "no" : "yes",
+    },
+  };
   const f = draft.fields;
   const root = ctx.dialog(
     record ? "עריכת ספק" : "הוספת ספק",
-    `<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק")}</form>`,
+    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק")}</form>`,
   );
   const form = $("form", root);
   bindDraft(
@@ -203,21 +220,17 @@ export async function invoiceForm(
 ) {
   const key = "invoice",
     old = await ctx.drafts.load(key);
-  let draft =
-    old &&
-    (!record || old.recordId === record.id) &&
-    (!scan || old.scan?.id === scan.id) &&
-    !manualAttachments.length
-      ? old
-      : null;
-  if (old && !draft)
-    await ctx.drafts.save("saved-invoice-" + old.recordId, {
-      ...old,
-      kind: "invoice",
-    });
+  let draft = await matchingDraft(
+    ctx,
+    key,
+    old,
+    record,
+    (!scan || old?.scan?.id === scan.id) && !manualAttachments.length,
+  );
   if (!draft) {
     const r = scan?.result;
     draft = {
+      mode: record ? "edit" : "new",
       recordId: record?.id || crypto.randomUUID(),
       version: record?.version || 0,
       scan: scan || null,
@@ -228,7 +241,8 @@ export async function invoiceForm(
           "",
         documentNumber: record?.documentNumber || r?.documentNumber || "",
         invoiceDate: record?.invoiceDate || (r ? r.invoiceDate || "" : today()),
-        documentType: record?.documentType || r?.documentType || "invoice",
+        documentType:
+          record?.documentType || (r ? r.documentType || "" : "invoice"),
         subtotal: moneyInput(
           record ? record.subtotalAgorot : r?.subtotalAgorot,
         ),
@@ -255,7 +269,8 @@ export async function invoiceForm(
   }
   const f = draft.fields,
     r = draft.scan?.result;
-  const uncertain = (k) => r?.uncertainFields.includes(k);
+  const uncertain = (k) =>
+    Boolean(r && (r[k] == null || r.uncertainFields?.includes(k)));
   const read = (k, m = false) =>
     r ? (r[k] === null ? "לא זוהה" : m ? money(r[k]) : r[k]) : "";
   const supplierOptions = {
@@ -268,11 +283,11 @@ export async function invoiceForm(
   };
   const root = ctx.dialog(
     record ? "עריכת חשבונית" : r ? "בדיקת החשבונית שנסרקה" : "הוספת חשבונית",
-    `<form id="invoice-form">
+    `${staleNotice(old, record, draft)}<form id="invoice-form">
     ${r ? `<div class="notice ${r.needsReview ? "warning" : ""}"><strong>${r.needsReview ? "יש שדות שדורשים בדיקה" : "הסריקה מוכנה לבדיקה"}</strong><p>ליד השדות מופיע מה נקרא. הערכים בתיבות הם אלה שיישמרו.</p>${r.warnings.map((w) => `<p>${e(w)}</p>`).join("")}</div>` : ""}
-    <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${select("ספק", "supplierId", f.supplierId, supplierOptions, { wide: true, required: true })}<button type="button" class="text-button wide" id="invoice-new-supplier">${icon("plus")} הוסף ספק חדש</button>
+    <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${select("ספק", "supplierId", f.supplierId, supplierOptions, { wide: true, required: true, uncertain: uncertain("supplierName"), read: read("supplierName") })}<button type="button" class="text-button wide" id="invoice-new-supplier">${icon("plus")} הוסף ספק חדש</button>
       ${field("מספר חשבונית / תעודה", "documentNumber", f.documentNumber, { required: true, read: read("documentNumber"), uncertain: uncertain("documentNumber") })}${field("תאריך המסמך", "invoiceDate", f.invoiceDate, { type: "date", required: true, read: read("invoiceDate"), uncertain: uncertain("invoiceDate") })}
-      ${select("סוג מסמך", "documentType", f.documentType, types, { wide: true })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
+      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", ...types }, { wide: true, required: true, uncertain: uncertain("documentType"), read: r ? types[r.documentType] || "לא זוהה" : "" })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
     <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true, read: read("finalAgorot", true), uncertain: uncertain("finalAgorot") })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
@@ -303,6 +318,8 @@ export async function invoiceForm(
     };
   };
   const binding = bindDraft(ctx, form, key, draft, collect, (values) => {
+    if (!Object.hasOwn(types, values.documentType))
+      throw Error("יש לבחור סוג מסמך לפי התעודה.");
     if (values.deductions.some((d) => d.included === "unknown"))
       throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
     return pendingMutation(

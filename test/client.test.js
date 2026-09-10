@@ -10,6 +10,33 @@ import {
 } from "../src/format.js";
 import { invoiceCsv, csvCell } from "../src/export.js";
 import { normalizePhone, authMessage } from "../src/auth.js";
+import { errorText } from "../src/ui.js";
+test("ambiguous commas cannot multiply an amount by one hundred", () => {
+  for (const s of ["123,45", "1,2", "12,34,567", "1234,567", ",123", "123,"])
+    assert.throws(() => parseMoney(s), /נקודה|סכום/);
+  assert.equal(parseMoney("1,234,567.89"), 123456789);
+});
+test("raw browser and startup errors are translated and retain a safe request reference", () => {
+  for (const message of [
+    "Load failed",
+    "Failed to fetch",
+    "QuotaExceededError",
+  ]) {
+    const shown = errorText(
+      Object.assign(new Error(message), { requestId: "abcdef12-3456" }),
+    );
+    assert.match(shown, /[א-ת]/);
+    assert.doesNotMatch(
+      shown,
+      /Load failed|Failed to fetch|QuotaExceededError/,
+    );
+    assert.match(shown, /abcdef12/);
+  }
+  assert.equal(
+    errorText(new Error("יש להזין סכום תקין.")),
+    "יש להזין סכום תקין.",
+  );
+});
 test("exact agorot parsing, roundtrip, credits and empty fields", () => {
   assert.equal(parseMoney("0.10") + parseMoney("0.20"), 30);
   assert.equal(parseMoney("1,234.56"), 123456);
@@ -89,8 +116,14 @@ test("default browser fetch keeps its Window receiver after SMS authentication",
     if (this !== globalThis) throw new TypeError("Illegal invocation");
     requests++;
     assert.equal(path, "/api/v1/me");
-    assert.equal(options.headers.Authorization, "Bearer fictional-browser-token");
-    return Promise.resolve({ ok: true, json: async () => ({ authorized: true }) });
+    assert.equal(
+      options.headers.Authorization,
+      "Bearer fictional-browser-token",
+    );
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({ authorized: true }),
+    });
   });
   const api = new Api({ getIdToken: async () => "fictional-browser-token" });
   assert.deepEqual(await api.request("me"), { authorized: true });
@@ -105,11 +138,14 @@ test("a failed login check does not claim an invoice draft was saved", async () 
     assert.doesNotMatch(error.message, /טיוטה/);
     return true;
   });
-  await assert.rejects(api.request("invoices/test", { method: "PUT", body: {} }), (error) => {
-    assert.equal(error.code, "NETWORK");
-    assert.match(error.message, /טיוטה/);
-    return true;
-  });
+  await assert.rejects(
+    api.request("invoices/test", { method: "PUT", body: {} }),
+    (error) => {
+      assert.equal(error.code, "NETWORK");
+      assert.match(error.message, /טיוטה/);
+      return true;
+    },
+  );
 });
 test("pending writes reuse mutation identity after ambiguous response and send bearer privately", async () => {
   const bodies = [];
@@ -168,7 +204,8 @@ test("phone form normalizes input without embedding an allowlisted phone", () =>
 test("SMS region rejection is explained separately from a disabled Phone provider", () => {
   const region = authMessage({
     code: "auth/operation-not-allowed",
-    message: "Firebase: SMS unable to be sent until this region enabled by the app developer. (auth/operation-not-allowed).",
+    message:
+      "Firebase: SMS unable to be sent until this region enabled by the app developer. (auth/operation-not-allowed).",
   });
   assert.match(region, /מדינה/);
   assert.match(region, /חסומה/);
@@ -183,8 +220,17 @@ test("SMS region rejection is explained separately from a disabled Phone provide
 
 test("unknown authentication errors do not expose raw diagnostics; local Hebrew validation stays readable", () => {
   const generic = "ההתחברות לא הושלמה. נסה שוב.";
-  assert.equal(authMessage({ code: "auth/internal-error", message: "private server diagnostic" }), generic);
+  assert.equal(
+    authMessage({
+      code: "auth/internal-error",
+      message: "private server diagnostic",
+    }),
+    generic,
+  );
   assert.equal(authMessage(new Error("Network failure")), generic);
   assert.equal(authMessage(null), generic);
-  assert.equal(authMessage(new Error("יש להזין מספר טלפון תקין.")), "יש להזין מספר טלפון תקין.");
+  assert.equal(
+    authMessage(new Error("יש להזין מספר טלפון תקין.")),
+    "יש להזין מספר טלפון תקין.",
+  );
 });

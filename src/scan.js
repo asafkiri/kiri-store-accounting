@@ -7,20 +7,8 @@ import {
   today,
 } from "./format.js";
 import { invoiceForm } from "./forms.js";
-export function readFile(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () =>
-      resolve({
-        name: file.name,
-        mime: file.type,
-        data: String(reader.result).split(",")[1],
-      });
-    reader.onerror = () =>
-      reject(Error("לא ניתן לקרוא את הקובץ. בחר אותו שוב."));
-    reader.readAsDataURL(file);
-  });
-}
+import { readFile } from "./image-upload.js";
+export { readFile } from "./image-upload.js";
 export async function scanDialog(ctx, purpose = "invoice") {
   const key = purpose === "invoice" ? "scan" : "reportScan";
   let draft = (await ctx.drafts.load(key)) || {
@@ -32,7 +20,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
   };
   const root = ctx.dialog(
     purpose === "invoice" ? "סריקת חשבונית" : "בדיקה מול רואה החשבון",
-    `<div class="scan-view"><p>${purpose === "invoice" ? "צלם את כל העמודים של אותה חשבונית, או בחר תמונות / PDF." : "הדוח משמש להשוואה בלבד. הוא אינו מוסיף או משנה חשבוניות."}</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 עמודים ו־12 מגה בסך הכול. ללא חיתוך אוטומטי.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="run-scan">סרוק ובדוק פרטים</button><button class="secondary" id="check-scan" hidden>בדוק תוצאה של סריקה קודמת</button><button class="text-button" id="new-scan" hidden>התחל סריקה חדשה</button><button class="secondary" id="manual-from-scan">המשך בהקלדה ידנית</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
+    `<div class="scan-view"><p>${purpose === "invoice" ? "צלם את כל העמודים של אותה חשבונית, או בחר תמונות / PDF." : "הדוח משמש להשוואה בלבד. הוא אינו מוסיף או משנה חשבוניות."}</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 עמודים ו־12 מגה אחרי הקטנת התמונות. כל העמוד נשמר ללא חיתוך. PDF נשאר כפי שנבחר.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="run-scan">סרוק ובדוק פרטים</button><button class="secondary" id="check-scan" hidden>בדוק תוצאה של סריקה קודמת</button><button class="text-button" id="new-scan" hidden>התחל סריקה חדשה</button><button class="secondary" id="manual-from-scan">המשך בהקלדה ידנית</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
   );
   let busy = false;
   const persist = () => ctx.drafts.save(key, draft);
@@ -85,16 +73,18 @@ export async function scanDialog(ctx, purpose = "invoice") {
   };
   for (const input of root.querySelectorAll("input[type=file]"))
     input.onchange = async () => {
+      if (busy || draft.jobId) return;
+      busy = true;
+      ctx.setModalBusy(true);
+      paint();
+      err.hidden = true;
       try {
         const selected = [...input.files];
-        if (
-          selected.length + draft.files.length > 8 ||
-          selected.reduce((n, f) => n + f.size, 0) +
-            draft.files.reduce((n, f) => n + (f.data.length * 3) / 4, 0) >
-            12 * 1024 * 1024
-        )
+        if (selected.length + draft.files.length > 8)
           throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
-        const files = await Promise.all(selected.map(readFile));
+        // Decode one page at a time to bound memory on phones. Check size after compression.
+        const files = [];
+        for (const file of selected) files.push(await readFile(file));
         if (
           files.some(
             (f) =>
@@ -127,12 +117,16 @@ export async function scanDialog(ctx, purpose = "invoice") {
         showError(error);
       } finally {
         input.value = "";
+        busy = false;
+        ctx.setModalBusy(false);
+        if (root.isConnected) paint();
       }
     };
   root.addEventListener("click", async (ev) => {
     const remove = ev.target.closest("[data-remove-file]"),
       preview = ev.target.closest("[data-preview-file]");
     if (remove) {
+      if (busy || draft.jobId) return;
       draft.files.splice(Number(remove.dataset.removeFile), 1);
       draft.attachmentIds = [];
       draft.jobId = null;
@@ -183,6 +177,24 @@ export async function scanDialog(ctx, purpose = "invoice") {
       await finish(job);
     } catch (error) {
       showError(error);
+      if (error.status === 409 && error.code === "SCAN_IN_PROGRESS") {
+        // A global lease can reject this request before its job exists. GET is free.
+        try {
+          await finish(await ctx.api.request("scan-jobs/" + draft.jobId));
+        } catch (lookup) {
+          if (lookup.status === 404) {
+            draft.status = "editing";
+            draft.jobId = null;
+            draft.result = null;
+            await persist();
+            status.textContent = "מתבצעת סריקה אחרת בחנות. נסה בעוד רגע.";
+          } else {
+            status.textContent =
+              "לא התקבלה תשובה. בדוק את תוצאת הסריקה לפני ניסיון נוסף.";
+          }
+        }
+        return;
+      }
       if (error.status && error.code !== "SCAN_IN_PROGRESS") {
         draft.status = "failed";
         await persist();

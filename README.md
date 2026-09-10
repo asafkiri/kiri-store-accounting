@@ -14,7 +14,7 @@
 - קופה ורב־קו: שתי תיבות עצמאיות לכל תאריך, היסטוריה וייצוא. סכום חסר שונה מאפס.
 - דוחות לפי חודש/טווח, ספק, מצב ואמצעי תשלום; סכומים לפני מע״מ, מע״מ, כולל וסופי.
 - סכום מע״מ חסר נשאר חסר ומסומן בסיכום; אין חישוב אוטומטי של 18%.
-- צילום/בחירת תמונות או PDF, עד 8 עמודים, preview וצילום מחדש. סקירה של ערכי ה־AI מול הערכים שיישמרו, ורק אז שמירה ידנית.
+- צילום/בחירת תמונות או PDF, עד 8 עמודים ועד 12 MiB אחרי הקטנת תמונות, preview וצילום מחדש. תמונות מוקטנות עד צלע ארוכה של 2500px, ללא חיתוך; PDF אינו מעובד. סקירה של ערכי ה־AI מול הערכים שיישמרו, ורק אז שמירה ידנית.
 - כלי אופציונלי להשוואת דוח רואה חשבון; אינו משנה חשבוניות.
 - CSV חודשי/מסונן, JSON של הנתונים, הדפסה או שמירת הדוח כ־PDF דרך הדפדפן.
 - טיוטות מוצפנות מקומית ב־IndexedDB, כולל בקשות שמירה ממתינות; שמירה בשרת מוצגת רק אחרי אישורו.
@@ -36,11 +36,10 @@ Firebase Hosting מפנה את `/api/**` לשירות הקיים באזור `us-
 | `src/api.js` | token, timeout, בקשות ושגיאות ללא retry סמוי |
 | `src/drafts.js` | טיוטות AES-GCM לפי UID במכשיר |
 | `src/forms.js` | חשבונית, ספק, תשלום וסגירה יומית |
-| `src/scan.js` | קבצים, סקירה והשוואת דוח |
+| `src/scan.js`, `src/image-upload.js` | הכנת תמונות, קבצים, סקירה והשוואת דוח |
 | `src/views.js`, `src/styles.css` | מסכים ועיצוב RTL responsive |
 | `src/format.js`, `src/export.js` | אגורות, תאריכים עסקיים וייצוא |
 | `src/app.js` | ניווט, טעינה וסנכרון |
-| `src/agent-tools.js` | הרחבה אופציונלית לקריאת סיכום מורשה בדפדפן תומך WebMCP |
 
 כל האוספים נמצאים תחת `stores/family`. סכומים הם integer agorot; תאריכים עסקיים הם מחרוזות `YYYY-MM-DD`. הסכמה המלאה וה־API מתועדים ב־[README של השרת](https://github.com/asafkiri/kiri-store-accounting-ai-scan#readme).
 
@@ -71,17 +70,17 @@ npm run test:browser
 npm run dev
 ```
 
-שרת הקבצים המקומי זמין ב־http://127.0.0.1:4173 לאחר build. זו תצוגה סטטית בלבד: Firebase Auth דורש את ה־reserved URL שמספק Firebase Hosting. לבדיקה מלאה מקומית השתמש ב־Firebase Hosting emulator עם הגדרת web app בפרויקט, ובאמולטורי Auth/Firestore/Storage עבור נתוני בדיקה לפי תיעוד השרת. שרת סטטי רגיל אינו יוצר תשתית או עוקף התחברות.
+שרת הקבצים המקומי זמין ב־http://127.0.0.1:4173 לאחר build. זו תצוגה סטטית בלבד: Firebase Auth דורש את ה־reserved URL שמספק Firebase Hosting. לא קיים כרגע חיבור של ממשק האפליקציה לאמולטורים או proxy מקומי ל־API. `npm test` ו־`npm run test:browser` מריצים בדיקות מבודדות; בדיקת Admin/Auth/Firestore/Storage מתבצעת בריפו השרת לפי `docs/EMULATOR.md`. בדיקת הממשק עם SMS אמיתי מתבצעת בכתובת Firebase Hosting לאחר פריסה. שרת סטטי רגיל אינו יוצר תשתית או עוקף התחברות.
 
 ## תצורת Firebase ופריסה
 
-אין `.env` ל־frontend ואין צורך להעתיק מפתחות שרת. האפליקציה קוראת את `/__/firebase/init.json` ש־Firebase Hosting מספק עבור ה־Web App בפרויקט. זהו config ציבורי של Firebase; הרשאות המידע נקבעות בשרת וב־Rules. אם עדיין אין Web App רשום, הוסף Web App בתוך הפרויקט הקיים לפי מדריך ההפעלה.
+אין `.env` ל־frontend ואין צורך להעתיק מפתחות שרת. האפליקציה קוראת את `/__/firebase/init.json` ש־Firebase Hosting מספק עבור ה־Web App בפרויקט. זהו config ציבורי של Firebase; הרשאות המידע נקבעות בשרת וב־Rules. אם עדיין אין Web App רשום, הוסף Web App בתוך הפרויקט הקיים וקשר אותה לאתר Hosting באמצעות Link to a Firebase Hosting site, לפי מדריך ההפעלה.
 
 ```sh
 npm ci
 npm test
 npm run build
-npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting,firestore:rules,storage
+npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 ```
 
 הפקודה דורשת חשבון Google מורשה. כללי Firestore/Storage נשארים חסומים. אין פריסה אוטומטית ל־Firebase על כל commit; GitHub Actions בודק build/tests, והפריסה מתבצעת עם CLI מורשה. אין צורך לחשוף service-account key ב־GitHub.
@@ -96,7 +95,6 @@ npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 - CSV/JSON כוללים מידע עסקי ולכן יש לשמור את ההורדות במקום מתאים. גיבוי JSON כולל נתונים ומטא־נתונים של קבצים, לא את התמונות/PDF עצמם. אין ייבוא שיכול לדרוס נתונים בשקט.
 - מע״מ מסוכם לפי סכומים שהוזנו, כולל סימנים של זיכויים; ניכוי ידני אינו משנה את המע״מ המודפס. הדוח אינו דיווח רשמי.
 - השוואת רואה חשבון כרגע לפי חודש שנבחר ועד 200 שורות דוח. התאמה מלאה דורשת ספק+מספר+תאריך+כולל+מע״מ, אחרת מוצג צורך בבדיקה; אין קביעה שרואה החשבון טעה.
-- התמיכה האופציונלית ב־WebMCP נבדקת באמצעות registry מדומה. לא אומתה כאן בדפדפן עם הממשק המוצע הזה.
 
 ## מקורות לתשתית
 

@@ -27,7 +27,8 @@
 9. `ALLOWED_ORIGIN` יכול להיות `https://kiri-store-accounting.web.app,https://kiri-store-accounting.firebaseapp.com` — זו גם ברירת המחדל בקוד.
 10. `ALLOWED_UID` הוא אופציונלי. השאר ריק אם רוצים לאשר לפי המספר בלבד; אם מוגדר בנוסף, נדרשת התאמה גם ל־UID.
 11. ודא את המשאבים הקיימים: min=0, max=2, concurrency=2, memory=512 MiB, CPU=1, timeout=60 שניות, request-based billing.
-12. לחץ Deploy. בלי allowlist השרת עולה לבדיקת health, אבל חוסם את המערכת ב־503. זו התנהגות מכוונת.
+12. לפני Deploy: מספר שאינו בפורמט E.164 או `OPENAI_MODEL` שאינו `gpt-5.6-luna` מונעים מה־revision לעלות. יש לתקן את הערך במסך Variables & Secrets, בלי לפרסם אותו.
+13. לחץ Deploy. בלי allowlist השרת עולה לבדיקת health, אבל חוסם את המערכת ב־503. זו התנהגות מכוונת.
 
 ברירת המחדל: עד 30 סריקות ביום ו־300 בחודש. אפשר לשנות `MAX_SCANS_PER_DAY` / `MAX_SCANS_PER_MONTH`. אלו מגבלות מספר בקשות; אינן מבטיחות חשבון של עד 25 ₪. אין escalation או retry אוטומטי.
 
@@ -52,10 +53,11 @@ Service account של ה־revision צריך להישאר:
 
 1. פתח [Firebase Console](https://console.firebase.google.com/project/kiri-store-accounting/overview).
 2. Project settings → General → Your apps. אם יש Web App, השאר אותה. אם אין, Add app → סמל `</>` → שם `Kiri Store Accounting` → רשום אותה **בפרויקט הקיים**. אין צורך להעתיק את ה־config לקוד.
-3. Build → Authentication → Sign-in method → ודא Phone = Enabled.
-4. Authentication → Settings → Authorized domains → ודא שקיימים `kiri-store-accounting.web.app` ו־`kiri-store-accounting.firebaseapp.com`.
-5. Authentication → Settings → SMS region policy → עריכת המדיניות → בחר מצב **Allow / Allowlist** (מדינות מותרות), סמן **Israel (IL)** ושמור. פתח שוב את המדיניות ובדוק שהמצב והבחירה נשמרו. אם נבחר מצב **Deny / Denylist** (מדינות חסומות), סימון ישראל דווקא חוסם אותה. אין צורך לאפשר מדינות נוספות עבור השימוש המתואר. זו מדיניות מדינות יעד ל־SMS, נפרדת מהפעלת ספק Phone ומהמספר המורשה ב־Cloud Run.
-6. אין להגדיר את מספר אבא כ־test phone number עם קוד קבוע בייצור. התחברות אמיתית צריכה לקבל SMS אמיתי.
+3. בתוך ה־Web App: לחץ **Link to a Firebase Hosting site**, בחר **kiri-store-accounting** ושמור. רישום Web App לבדו אינו מספיק: אתר Hosting צריך להיות מקושר אליה. בדוק שבכתובת `https://kiri-store-accounting.web.app/__/firebase/init.json` יש `projectId` נכון וגם `appId`.
+4. Build → Authentication → Sign-in method → ודא Phone = Enabled.
+5. Authentication → Settings → Authorized domains → ודא שקיימים `kiri-store-accounting.web.app` ו־`kiri-store-accounting.firebaseapp.com`.
+6. Authentication → Settings → SMS region policy → עריכת המדיניות → בחר מצב **Allow / Allowlist** (מדינות מותרות), סמן **Israel (IL)** ושמור. פתח שוב את המדיניות ובדוק שהמצב והבחירה נשמרו. אם נבחר מצב **Deny / Denylist** (מדינות חסומות), סימון ישראל דווקא חוסם אותה. אין צורך לאפשר מדינות נוספות עבור השימוש המתואר. זו מדיניות מדינות יעד ל־SMS, נפרדת מהפעלת ספק Phone ומהמספר המורשה ב־Cloud Run.
+7. אין להגדיר את מספר אבא כ־test phone number עם קוד קבוע בייצור. התחברות אמיתית צריכה לקבל SMS אמיתי.
 
 האפליקציה טוענת config ציבורי אוטומטית מ־`/__/firebase/init.json`. מפתח OpenAI ומספר הטלפון אינם נמצאים ב־config הזה. [תיעוד כתובות Firebase Hosting](https://firebase.google.com/docs/hosting/reserved-urls).
 
@@ -76,13 +78,13 @@ cd kiri-store-accounting
 
 אם התיקייה כבר קיימת, היכנס אליה והריץ `git pull --ff-only origin main` במקום clone. אל תדרוס עריכות מקומיות.
 
-4. הרץ:
+4. ודא Node.js בגרסה 22 ומעלה (`node --version`). ב־Cloud Shell אפשר לבחור גרסה כך: `nvm install 22` ואז `nvm use 22`. הרץ:
 
 ```sh
-npm ci
-npm test
-npm run build
-npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting,firestore:rules,storage
+npm ci &&
+npm test &&
+npm run build &&
+npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 ```
 
 5. אם ה־CLI מבקש התחברות, הרץ `npx firebase-tools@14.16.0 login --no-localhost`, השלם את הכניסה בדפדפן לפי ההוראות, ואז הרץ שוב את פקודת deploy. אין להעתיק tokens לריפו או לצ׳אט.
@@ -116,6 +118,8 @@ npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 | מה רואים | מה לבדוק |
 |---|---|
 | המערכת עדיין אינה מוכנה | פריסת Hosting, רישום Web App ו־`/__/firebase/init.json` |
+| הגדרת Firebase אינה תואמת לחנות | Project settings → Your apps → Web App → Link to a Firebase Hosting site → kiri-store-accounting; בדוק `appId` ב־init.json |
+| לא ניתן לאמת את ההתחברות כרגע / 503 | תקלה זמנית או הרשאות IAM של שירות האימות; בדוק request ID ו־errorCategory בלוג. אין צורך לשנות את המספר המורשה |
 | גישה טרם הוגדרה / 503 | `ALLOWED_PHONE_NUMBER` ב־revision הפעיל |
 | לחשבון אין הרשאה / 403 | המספר בפורמט E.164, וה־UID אם הוגדר; אין לפרסם אותם |
 | שגיאת SMS / captcha | Phone Enabled, דומיינים מורשים, SMS region policy ומכסה |

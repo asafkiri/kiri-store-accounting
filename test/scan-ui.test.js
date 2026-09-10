@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { scanDialog } from "../src/scan.js";
+import { ApiError } from "../src/api.js";
 function setup(draft) {
   const dom = new JSDOM(
     '<body><div id="modal"></div><div id="toast"></div></body>',
@@ -93,3 +94,33 @@ test("failed AI can continue with a manual invoice retaining already-uploaded fi
   assert.equal(cache.get("invoice").fields.source, "manual");
   assert.equal(cache.get("invoice").fields.scanJobId, null);
 });
+for (const existing of [false, true, "offline"]) {
+  test(`scan lock recovery checks whether this job exists (${existing}) without another paid request`, async () => {
+    const { ctx, cache, calls } = setup({
+      files: [{ name: "page.jpg", mime: "image/jpeg", data: "AAAA" }],
+      attachmentIds: ["a".repeat(64)],
+      jobId: null,
+      status: "editing",
+    });
+    ctx.api.request = async (path) => {
+      calls.push(path);
+      if (path === "scan-invoice")
+        throw new ApiError("כבר מתבצעת סריקה", "SCAN_IN_PROGRESS", 409);
+      if (existing === "offline") throw new ApiError("ניתוק", "NETWORK", 0);
+      if (!existing) throw new ApiError("לא נמצא", "NOT_FOUND", 404);
+      return { id: cache.get("scan").jobId, status: "running" };
+    };
+    await scanDialog(ctx);
+    document.getElementById("run-scan").click();
+    await tick();
+    assert.equal(calls.length, 2);
+    assert.match(calls[1], /^scan-jobs\//);
+    assert.equal(cache.get("scan").status, existing ? "running" : "editing");
+    assert.equal(Boolean(cache.get("scan").jobId), Boolean(existing));
+    assert.equal(
+      document.getElementById("run-scan").disabled,
+      Boolean(existing),
+    );
+    assert.deepEqual(cache.get("scan").attachmentIds, ["a".repeat(64)]);
+  });
+}

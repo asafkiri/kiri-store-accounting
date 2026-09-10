@@ -32,6 +32,6 @@ createServer(async (req, res) => {
   }
 }).listen(4173, "127.0.0.1", () =>
   console.log(
-    "Local static preview: http://127.0.0.1:4173 (use Firebase emulators for Auth/API)",
+    "Local static preview: http://127.0.0.1:4173 (static only; no local Auth/API wiring)",
   ),
 );

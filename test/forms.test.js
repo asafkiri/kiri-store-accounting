@@ -187,3 +187,139 @@ test("version conflict recovery survives reload and does not silently overwrite 
   );
   assert.equal(document.querySelector("[name=notes]").value, "הערה שלא תידרס");
 });
+
+const existingInvoice = () => ({
+  id: "invoice-existing",
+  version: 1,
+  supplierId: "supplier-001",
+  documentNumber: "old",
+  invoiceDate: "2026-09-10",
+  documentType: "invoice",
+  subtotalAgorot: null,
+  vatAgorot: null,
+  totalAgorot: 100,
+  finalAgorot: 100,
+  deductions: [],
+  attachmentIds: [],
+  source: "manual",
+  scanJobId: null,
+  notes: "original",
+});
+for (const kind of ["invoice", "supplier"]) {
+  test(`${kind}: Add never adopts an abandoned edit, including a legacy draft`, async () => {
+    const { ctx, drafts, saved } = setup();
+    const record =
+      kind === "invoice"
+        ? existingInvoice()
+        : {
+            id: "supplier-existing",
+            version: 1,
+            name: "existing",
+            active: true,
+          };
+    ctx.data[kind === "invoice" ? "invoices" : "suppliers"].push(record);
+    const open = kind === "invoice" ? invoiceForm : supplierForm;
+    await open(ctx, record);
+    fill("notes", "abandoned edit");
+    await tick();
+    delete drafts.get(kind).mode; // Upgrade safety for drafts from the previous version.
+    await open(ctx);
+    assert.notEqual(drafts.get(kind).recordId, record.id);
+    assert.equal(drafts.get(kind).version, 0);
+    assert.equal(drafts.get(kind).mode, "new");
+    assert.equal(
+      drafts.get(`saved-${kind}-${record.id}`).fields.notes,
+      "abandoned edit",
+    );
+    if (kind === "invoice") {
+      fill("supplierId", "supplier-001");
+      fill("documentNumber", "new");
+      fill("total", "2");
+      fill("final", "2");
+      document.querySelector("[name=review]").checked = true;
+    } else fill("name", "new supplier");
+    submit();
+    await tick();
+    assert.equal(saved.length, 1);
+    assert.notEqual(saved[0].path.split("/")[1], record.id);
+    assert.equal(saved[0].body.expectedVersion, 0);
+  });
+}
+test("reopening stale fields archives them and opens the current version without overwriting newer data", async () => {
+  const { ctx, drafts, saved } = setup();
+  const old = existingInvoice();
+  await invoiceForm(ctx, old);
+  fill("notes", "abandoned edit");
+  await tick();
+  const current = {
+    ...old,
+    version: 2,
+    notes: "newer saved note",
+    totalAgorot: 200,
+    finalAgorot: 200,
+  };
+  ctx.data.invoices = [current];
+  await invoiceForm(ctx, current);
+  assert.equal(drafts.get("invoice").version, 2);
+  assert.equal(
+    document.querySelector("[name=notes]").value,
+    "newer saved note",
+  );
+  assert.equal(
+    drafts.get("saved-invoice-" + old.id).fields.notes,
+    "abandoned edit",
+  );
+  assert.match(document.body.textContent, /הרשומה עודכנה/);
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved[0].body.data.totalAgorot, 200);
+});
+test("an ambiguous pending save keeps its exact mutation when a newer record is available", async () => {
+  const { ctx, drafts } = setup();
+  const record = existingInvoice();
+  ctx.api.save = async () => {
+    throw new ApiError("ניתוק", "NETWORK", 0);
+  };
+  await invoiceForm(ctx, record);
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  const pending = structuredClone(drafts.get("invoice").pending);
+  await invoiceForm(ctx, { ...record, version: 2 });
+  assert.deepEqual(drafts.get("invoice").pending, pending);
+});
+test("AI review marks supplier and unknown document type, requiring an explicit document choice", async () => {
+  const { ctx, saved } = setup();
+  await invoiceForm(ctx, null, {
+    id: "unknown-type",
+    attachmentIds: [],
+    result: {
+      supplierName: "ספק בדיקה",
+      documentNumber: "a",
+      invoiceDate: "2026-09-10",
+      documentType: null,
+      subtotalAgorot: null,
+      vatAgorot: null,
+      totalAgorot: 100,
+      finalAgorot: 100,
+      deductions: [],
+      uncertainFields: ["supplierName", "documentType"],
+      needsReview: true,
+      warnings: [],
+    },
+  });
+  const select = document.querySelector("[name=documentType]");
+  assert.equal(select.value, "");
+  assert.equal(select.required, true);
+  assert.ok(select.closest(".uncertain"));
+  assert.ok(document.querySelector("[name=supplierId]").closest(".uncertain"));
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.match(
+    document.querySelector("[data-form-error]").textContent,
+    /סוג מסמך/,
+  );
+});

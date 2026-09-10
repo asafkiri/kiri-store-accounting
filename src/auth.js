@@ -42,17 +42,33 @@ export function normalizePhone(value) {
   return s;
 }
 export async function sendCode(auth, phone, element) {
-  const verifier = new RecaptchaVerifier(auth, element, { size: "invisible" });
+  const normalized = normalizePhone(phone);
+  const container =
+    typeof element === "string" ? document.getElementById(element) : element;
+  if (!container) throw Error("בדיקת האבטחה לא נטענה. רענן את העמוד ונסה שוב.");
+  container.replaceChildren();
+  let verifier,
+    cleared = false;
+  const clear = () => {
+    if (cleared) return;
+    cleared = true;
+    try {
+      verifier?.clear();
+    } finally {
+      container.replaceChildren();
+    }
+  };
   try {
+    verifier = new RecaptchaVerifier(auth, container, { size: "invisible" });
     await verifier.render();
     const confirmation = await signInWithPhoneNumber(
       auth,
-      normalizePhone(phone),
+      normalized,
       verifier,
     );
-    return { confirmation, clear: () => verifier.clear() };
+    return { confirmation, clear };
   } catch (e) {
-    verifier.clear();
+    clear();
     throw e;
   }
 }
@@ -62,7 +78,11 @@ export function authMessage(e) {
   if (code === "auth/operation-not-allowed") {
     // This code also covers a disabled Phone provider; only the specific
     // Firebase region diagnostic proves that the destination is blocked.
-    if (/SMS unable to be sent until this region enabled by the app developer/i.test(detail))
+    if (
+      /SMS unable to be sent until this region enabled by the app developer/i.test(
+        detail,
+      )
+    )
       return "שליחת SMS למדינה של מספר הטלפון חסומה כרגע. יש לאפשר אותה בהגדרות מדינות ה־SMS ב־Firebase.";
     return "הכניסה באמצעות SMS אינה מאופשרת כרגע. יש לבדוק שהתחברות בטלפון מופעלת בהגדרות Firebase.";
   }
