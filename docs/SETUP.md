@@ -63,6 +63,8 @@ Service account של ה־revision צריך להישאר:
 
 הקוד ב־GitHub אינו מתפרסם אוטומטית ל־Hosting. הפעולה הזו דורשת כניסה לחשבון Google עם הרשאה לפרויקט.
 
+בבדיקת הריפו נמצאה הגדרת GitHub Pages קיימת שמפעילה `pages build and deployment`. האפליקציה אינה משתמשת בה. כדי לכבות אותה: בריפו האפליקציה → **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: None → Save**. אל תמחק את הריפו. ההגדרה אינה משנה את Firebase Hosting. [הוראות GitHub](https://docs.github.com/en/pages/getting-started-with-github-pages/deleting-a-github-pages-site).
+
 1. פתח [Google Cloud Console](https://console.cloud.google.com/?project=kiri-store-accounting).
 2. לחץ למעלה על סמל **Activate Cloud Shell** (`>_`). אשר את ההרשאה לחשבון שלך אם Google מבקש.
 3. אם זו הפעם הראשונה, הרץ:
