@@ -5,6 +5,144 @@ import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: mobile supplier review confirms creation, similar names and reactivation before saving`, async (t) => {
+    const server = createBrowserCheckServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const browser = await engine.launch();
+    t.after(() => browser.close());
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.waitForFunction(
+      () => document.querySelector("#result").textContent !== "Running…",
+    );
+    await page.evaluate(async () => {
+      const { invoiceForm } = await import("/forms.js");
+      document.documentElement.lang = "he";
+      document.documentElement.dir = "rtl";
+      document.body.innerHTML =
+        '<div id="modal" style="max-width:390px;padding:16px"></div><div id="toast"></div>';
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "/styles.css";
+      document.head.append(css);
+      const drafts = new Map();
+      window.supplierRequests = [];
+      const ctx = {
+        data: {
+          suppliers: [
+            {
+              id: "supplier-marina",
+              name: "מרינה בע״מ",
+              active: true,
+              version: 1,
+            },
+            {
+              id: "supplier-inactive",
+              name: "ספק לא פעיל",
+              active: false,
+              version: 2,
+            },
+          ],
+          invoices: [],
+          dailyCash: [],
+        },
+        drafts: {
+          load: async (key) => structuredClone(drafts.get(key)),
+          save: async (key, value) => drafts.set(key, structuredClone(value)),
+          remove: async (key) => drafts.delete(key),
+        },
+        dialog: (_title, html) => {
+          document.querySelector("#modal").innerHTML = html;
+          return document.querySelector("#modal");
+        },
+        setModalBusy() {},
+        closeModal() {},
+        mergeRecord() {},
+        render() {},
+        refresh() {},
+        api: {
+          save: async (pending) => {
+            window.supplierRequests.push(structuredClone(pending));
+            return {
+              record: { id: pending.path.split("/")[1] },
+              ...(pending.body.data.newSupplier
+                ? {
+                    supplierAction: "created",
+                    relatedRecords: [
+                      {
+                        path: "suppliers/" + pending.body.data.supplierId,
+                        record: {
+                          id: pending.body.data.supplierId,
+                          name: pending.body.data.newSupplier.name,
+                        },
+                      },
+                    ],
+                  }
+                : {}),
+            };
+          },
+        },
+      };
+      window.openSupplierReview = (name) =>
+        invoiceForm(ctx, null, {
+          id: crypto.randomUUID(),
+          attachmentIds: [],
+          result: {
+            supplierName: name,
+            documentNumber: crypto.randomUUID(),
+            invoiceDate: "2026-09-10",
+            documentType: "invoice",
+            subtotalAgorot: null,
+            vatAgorot: null,
+            totalAgorot: 1200,
+            finalAgorot: 1200,
+            deductions: [],
+            uncertainFields: [],
+            needsReview: false,
+            warnings: [],
+          },
+        });
+      await window.openSupplierReview("ספק מהצילום");
+    });
+    const create = page.locator("[data-supplier-action=create]");
+    const box = await create.boundingBox();
+    assert.ok(box.height >= 48 && box.width >= 240);
+    await create.click();
+    assert.equal(await page.evaluate(() => window.supplierRequests.length), 0);
+    await page.locator("[name=review]").check();
+    await page.locator("[type=submit]").click();
+    await page.waitForFunction(() => window.supplierRequests.length === 1);
+    assert.match(
+      await page.locator("#toast").innerText(),
+      /נפתח ספק חדש: ספק מהצילום/,
+    );
+    await page.evaluate(() => window.openSupplierReview("מרינה"));
+    assert.equal(await page.locator("[name=supplierId]").inputValue(), "");
+    assert.equal(
+      await page.locator("[data-supplier-action=create]").count(),
+      0,
+    );
+    await page.locator("[data-supplier-action=confirm]").click();
+    await page.locator("[name=review]").check();
+    await page.locator("[type=submit]").click();
+    await page.waitForFunction(() => window.supplierRequests.length === 2);
+    await page.evaluate(() => window.openSupplierReview("ספק לא פעיל"));
+    await page.locator("[data-supplier-action=reactivate]").click();
+    await page.locator("[name=review]").check();
+    await page.locator("[type=submit]").click();
+    await page.waitForFunction(() => window.supplierRequests.length === 3);
+    const requests = await page.evaluate(() => window.supplierRequests);
+    assert.equal(requests[0].body.data.newSupplier.name, "ספק מהצילום");
+    assert.equal(requests[1].body.data.supplierId, "supplier-marina");
+    assert.equal(requests[1].body.data.newSupplier, undefined);
+    assert.equal(requests[2].body.data.reactivateSupplier.expectedVersion, 2);
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= 390),
+    );
+  });
   test(`${engine.name()}: reproduce the old receiver failure and verify the fixed API`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

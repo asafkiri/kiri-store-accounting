@@ -19,6 +19,7 @@ jobs:
       - run: |
           cmp firestore.rules api-rules-check/test/firestore.rules
           cmp storage.rules api-rules-check/test/storage.rules
+          cmp src/supplier-name.js api-rules-check/src/supplier-name.js
       - uses: actions/setup-node@v4
         with:
           node-version: 22

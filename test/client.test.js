@@ -129,6 +129,33 @@ test("default browser fetch keeps its Window receiver after SMS authentication",
   assert.deepEqual(await api.request("me"), { authorized: true });
   assert.equal(requests, 1);
 });
+test("supplier conflict details reach the review without a second write", async () => {
+  let calls = 0;
+  const api = new Api(
+    { getIdToken: async () => "fictional-token" },
+    async () => {
+      calls++;
+      return {
+        ok: false,
+        status: 409,
+        json: async () => ({
+          error: {
+            code: "SUPPLIER_EXISTS",
+            message: "כבר קיים ספק בשם הזה.",
+            details: { supplierId: "existing-supplier" },
+          },
+        }),
+      };
+    },
+  );
+  await assert.rejects(
+    api.save(pendingMutation("invoices/invoice-001", {})),
+    (err) =>
+      err.code === "SUPPLIER_EXISTS" &&
+      err.details.supplierId === "existing-supplier",
+  );
+  assert.equal(calls, 1);
+});
 test("a failed login check does not claim an invoice draft was saved", async () => {
   const api = new Api({ getIdToken: async () => "unit-token" }, async () => {
     throw new TypeError("Failed to fetch");
