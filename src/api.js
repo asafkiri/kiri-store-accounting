@@ -7,7 +7,9 @@ export class ApiError extends Error {
 export class Api {
   constructor(user, fetchImpl = fetch) {
     this.user = user;
-    this.fetch = fetchImpl;
+    // Native Window.fetch requires its browser receiver. Calling an unbound
+    // reference as this.fetch() supplies the Api instance and fails before I/O.
+    this.fetch = fetchImpl.bind(globalThis);
   }
   async request(
     path,
@@ -43,7 +45,9 @@ export class Api {
     } catch (e) {
       if (e instanceof ApiError) throw e;
       throw new ApiError(
-        "אין כרגע אישור מהשרת. הטיוטה נשמרת במכשיר; בדוק חיבור ונסה שוב.",
+        method === "GET"
+          ? "לא התקבלה תשובה מהשרת. בדוק את החיבור ונסה שוב."
+          : "אין כרגע אישור מהשרת. הטיוטה נשמרת במכשיר; בדוק חיבור ונסה שוב.",
         "NETWORK",
         0,
       );

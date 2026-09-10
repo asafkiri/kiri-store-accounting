@@ -82,6 +82,35 @@ test("API rejects network loss and server failures; no automatic repeated writes
   );
   await assert.rejects(failApi.request("invoices"), (e) => e.status === 403);
 });
+test("default browser fetch keeps its Window receiver after SMS authentication", async (t) => {
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", function (path, options) {
+    // Browser Web IDL rejects Api instances as the receiver; Node fetch does not.
+    if (this !== globalThis) throw new TypeError("Illegal invocation");
+    requests++;
+    assert.equal(path, "/api/v1/me");
+    assert.equal(options.headers.Authorization, "Bearer fictional-browser-token");
+    return Promise.resolve({ ok: true, json: async () => ({ authorized: true }) });
+  });
+  const api = new Api({ getIdToken: async () => "fictional-browser-token" });
+  assert.deepEqual(await api.request("me"), { authorized: true });
+  assert.equal(requests, 1);
+});
+test("a failed login check does not claim an invoice draft was saved", async () => {
+  const api = new Api({ getIdToken: async () => "unit-token" }, async () => {
+    throw new TypeError("Failed to fetch");
+  });
+  await assert.rejects(api.request("me"), (error) => {
+    assert.equal(error.code, "NETWORK");
+    assert.doesNotMatch(error.message, /טיוטה/);
+    return true;
+  });
+  await assert.rejects(api.request("invoices/test", { method: "PUT", body: {} }), (error) => {
+    assert.equal(error.code, "NETWORK");
+    assert.match(error.message, /טיוטה/);
+    return true;
+  });
+});
 test("pending writes reuse mutation identity after ambiguous response and send bearer privately", async () => {
   const bodies = [];
   const api = new Api(
