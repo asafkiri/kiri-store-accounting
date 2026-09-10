@@ -54,7 +54,7 @@ Service account של ה־revision צריך להישאר:
 2. Project settings → General → Your apps. אם יש Web App, השאר אותה. אם אין, Add app → סמל `</>` → שם `Kiri Store Accounting` → רשום אותה **בפרויקט הקיים**. אין צורך להעתיק את ה־config לקוד.
 3. Build → Authentication → Sign-in method → ודא Phone = Enabled.
 4. Authentication → Settings → Authorized domains → ודא שקיימים `kiri-store-accounting.web.app` ו־`kiri-store-accounting.firebaseapp.com`.
-5. Authentication → Settings → SMS region policy → ודא שישראל מותרת. אין צורך לאפשר מדינות נוספות עבור השימוש המתואר.
+5. Authentication → Settings → SMS region policy → עריכת המדיניות → בחר מצב **Allow / Allowlist** (מדינות מותרות), סמן **Israel (IL)** ושמור. פתח שוב את המדיניות ובדוק שהמצב והבחירה נשמרו. אם נבחר מצב **Deny / Denylist** (מדינות חסומות), סימון ישראל דווקא חוסם אותה. אין צורך לאפשר מדינות נוספות עבור השימוש המתואר. זו מדיניות מדינות יעד ל־SMS, נפרדת מהפעלת ספק Phone ומהמספר המורשה ב־Cloud Run.
 6. אין להגדיר את מספר אבא כ־test phone number עם קוד קבוע בייצור. התחברות אמיתית צריכה לקבל SMS אמיתי.
 
 האפליקציה טוענת config ציבורי אוטומטית מ־`/__/firebase/init.json`. מפתח OpenAI ומספר הטלפון אינם נמצאים ב־config הזה. [תיעוד כתובות Firebase Hosting](https://firebase.google.com/docs/hosting/reserved-urls).
@@ -119,6 +119,7 @@ npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 | גישה טרם הוגדרה / 503 | `ALLOWED_PHONE_NUMBER` ב־revision הפעיל |
 | לחשבון אין הרשאה / 403 | המספר בפורמט E.164, וה־UID אם הוגדר; אין לפרסם אותם |
 | שגיאת SMS / captcha | Phone Enabled, דומיינים מורשים, SMS region policy ומכסה |
+| `SMS unable to be sent until this region enabled` / `auth/operation-not-allowed` | Firebase דחה את בקשת ה־SMS בגלל מדינת היעד. בדוק בפרויקט הזה שמדיניות SMS היא Allow עם Israel מסומנת ושמורה. קוד `operation-not-allowed` בלי פירוט המדינה יכול לציין גם שספק Phone כבוי. שינוי מדיניות זו אינו דורש פריסת Hosting מחדש. |
 | health לא עולה | build, Dockerfile, revision Ready, `$PORT`, והגעה ציבורית לשירות |
 | me עובד אבל שמירה נכשלת | הרשאות IAM ל־Firestore, מסד `(default)` וה־service account הפעיל |
 | העלאת מסמך נכשלת | הרשאות bucket, סוג וגודל קובץ; עד 8 עמודים ו־12 מגה |

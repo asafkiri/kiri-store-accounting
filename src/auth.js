@@ -57,6 +57,15 @@ export async function sendCode(auth, phone, element) {
   }
 }
 export function authMessage(e) {
+  const code = typeof e?.code === "string" ? e.code : "";
+  const detail = typeof e?.message === "string" ? e.message : "";
+  if (code === "auth/operation-not-allowed") {
+    // This code also covers a disabled Phone provider; only the specific
+    // Firebase region diagnostic proves that the destination is blocked.
+    if (/SMS unable to be sent until this region enabled by the app developer/i.test(detail))
+      return "שליחת SMS למדינה של מספר הטלפון חסומה כרגע. יש לאפשר אותה בהגדרות מדינות ה־SMS ב־Firebase.";
+    return "הכניסה באמצעות SMS אינה מאופשרת כרגע. יש לבדוק שהתחברות בטלפון מופעלת בהגדרות Firebase.";
+  }
   return (
     {
       "auth/invalid-verification-code": "הקוד אינו נכון. בדוק את הודעת ה־SMS.",
@@ -70,8 +79,9 @@ export function authMessage(e) {
         "שליחת ה־SMS אינה זמינה כרגע. יש לבדוק את הגדרת השירות.",
       "auth/unauthorized-domain":
         "כתובת האפליקציה לא אושרה להתחברות. יש להשלים את הגדרת Firebase.",
-    }[e.code] ||
-    e.message ||
-    "ההתחברות לא הושלמה. נסה שוב."
+    }[code] ||
+    (!code && /[\u0590-\u05ff]/u.test(detail)
+      ? detail
+      : "ההתחברות לא הושלמה. נסה שוב.")
   );
 }

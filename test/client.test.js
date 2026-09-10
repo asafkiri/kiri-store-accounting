@@ -9,7 +9,7 @@ import {
   totals,
 } from "../src/format.js";
 import { invoiceCsv, csvCell } from "../src/export.js";
-import { normalizePhone } from "../src/auth.js";
+import { normalizePhone, authMessage } from "../src/auth.js";
 test("exact agorot parsing, roundtrip, credits and empty fields", () => {
   assert.equal(parseMoney("0.10") + parseMoney("0.20"), 30);
   assert.equal(parseMoney("1,234.56"), 123456);
@@ -132,5 +132,30 @@ test("CSV quotes formulas, retains business/payment dates and unknown VAT as bla
 });
 test("phone form normalizes input without embedding an allowlisted phone", () => {
   assert.equal(normalizePhone("050-000-0000"), "+972500000000");
+  assert.equal(normalizePhone("058-000-0000"), "+972580000000");
   assert.throws(() => normalizePhone("1"));
+});
+
+test("SMS region rejection is explained separately from a disabled Phone provider", () => {
+  const region = authMessage({
+    code: "auth/operation-not-allowed",
+    message: "Firebase: SMS unable to be sent until this region enabled by the app developer. (auth/operation-not-allowed).",
+  });
+  assert.match(region, /מדינה/);
+  assert.match(region, /חסומה/);
+  assert.doesNotMatch(region, /auth\/|unable to be sent/);
+  const provider = authMessage({
+    code: "auth/operation-not-allowed",
+    message: "Firebase: Error (auth/operation-not-allowed).",
+  });
+  assert.match(provider, /התחברות בטלפון/);
+  assert.doesNotMatch(provider, /מדינה|חסומה/);
+});
+
+test("unknown authentication errors do not expose raw diagnostics; local Hebrew validation stays readable", () => {
+  const generic = "ההתחברות לא הושלמה. נסה שוב.";
+  assert.equal(authMessage({ code: "auth/internal-error", message: "private server diagnostic" }), generic);
+  assert.equal(authMessage(new Error("Network failure")), generic);
+  assert.equal(authMessage(null), generic);
+  assert.equal(authMessage(new Error("יש להזין מספר טלפון תקין.")), "יש להזין מספר טלפון תקין.");
 });
