@@ -9,6 +9,14 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Match the Playwright version pinned in package.json. Browsers and their
+    # system libraries are preinstalled, avoiding stalled apt mirror downloads.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -30,20 +38,6 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Install browsers with bounded package-download waits
-        run: |
-          # The runner's Azure mirror has stalled font downloads for over ten
-          # minutes. Keep the configured suites and signed-package checks, but
-          # fetch through Ubuntu's primary archive on mirror-list runners.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-          fi
-          sudo tee /etc/apt/apt.conf.d/80-ksa-network-timeouts >/dev/null <<'APT'
-          Acquire::Retries "2";
-          Acquire::http::Timeout "20";
-          Acquire::https::Timeout "20";
-          APT
-          npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
       - name: Save the tested Hosting build
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
