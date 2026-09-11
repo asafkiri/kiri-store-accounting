@@ -90,10 +90,27 @@ export function reviewPhoto(ctx, root, firstFile) {
     const undo = $("[data-crop-undo]", editor), zoom = $("[data-crop-zoom]", editor), viewport = $(".crop-source-area", editor);
     const handles = [...editor.querySelectorAll("[data-crop-corner]")], retake = $("[data-crop-retake]", editor);
     let file = firstFile, worker, resultUrl, previewBlob, frame;
-    // Only geometry and scroll positions, never another photo-sized pixel buffer.
+    // Only crop geometry, never another photo-sized pixel buffer.
     let history = [];
     let points, generation = 0, revision = 0, disposed = false, ready = false, saving = false, rendering = false, dragging = null;
     const allCorners = () => [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    const fitPreview = () => {
+      if (disposed || !resultImage.naturalWidth || !resultImage.naturalHeight) return;
+      // Fit BOTH dimensions. A width-only fit enlarged long receipts after
+      // trimming their sides and hid the bottom behind a scrolling viewport.
+      // Padding reserves space for the full touch targets around all corners.
+      const style = getComputedStyle(viewport);
+      const width = Math.max(1, viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+      const height = Math.max(1, viewport.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom));
+      const scale = Math.min(width / resultImage.naturalWidth, height / resultImage.naturalHeight);
+      stage.style.width = resultImage.naturalWidth * scale + "px";
+      stage.style.height = resultImage.naturalHeight * scale + "px";
+      viewport.scrollTop = viewport.scrollLeft = 0;
+    };
+    // Status wrapping, rotation and browser chrome can all change the space
+    // available to the photo. Observe that space, not the image being resized.
+    const sizeObserver = new ResizeObserver(fitPreview);
+    sizeObserver.observe(viewport);
     const redraw = () => {
       const coords = points.map(p => `${p.x * 100},${p.y * 100}`).join(" ");
       $("polygon", stage).setAttribute("points", coords);
@@ -115,7 +132,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     const finish = value => {
       if (disposed) return;
       disposed = true; generation++; revision++;
-      removalObserver.disconnect(); release(); editor.remove();
+      removalObserver.disconnect(); sizeObserver.disconnect(); release(); editor.remove();
       root.classList.remove("crop-modal-content");
       if (!modal?.querySelector(".scan-crop")) modal?.classList.remove("crop-modal");
       if (scanView) scanView.hidden = false;
@@ -134,12 +151,13 @@ export function reviewPhoto(ctx, root, firstFile) {
       await resultImage.decode();
       if (disposed || session !== generation || current !== revision) return false;
       frame = response.frame; points = allCorners(); redraw(); stage.hidden = false;
+      fitPreview();
       return true;
     };
     const showPreview = async (back = false) => {
       if (!ready || disposed || saving || rendering || dragging || (back && !history.length)) return;
       const current = ++revision, session = generation;
-      const previous = { frame, scrollTop: viewport.scrollTop }, restored = back ? history.at(-1) : null;
+      const previous = { frame }, restored = back ? history.at(-1) : null;
       rendering = true; controls();
       status.textContent = "מעדכן את החיתוך בתמונה המשופרת…";
       status.setAttribute("aria-busy", "true");
@@ -147,7 +165,7 @@ export function reviewPhoto(ctx, root, firstFile) {
         const response = back ? await worker.request("restore", { frame: restored.frame })
           : await worker.request("preview", { points, frame });
         if (!await display(response, session, current)) return;
-        if (back) { history.pop(); viewport.scrollTop = restored.scrollTop; }
+        if (back) history.pop();
         else history.push(previous);
         status.textContent = back
           ? "חזרנו צעד אחורה. אפשר להתאים שוב את החיתוך."
@@ -161,6 +179,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       } finally {
         if (!disposed && session === generation && current === revision) {
           rendering = false; controls(); status.setAttribute("aria-busy", "false");
+          fitPreview();
         }
       }
     };
@@ -188,12 +207,13 @@ export function reviewPhoto(ctx, root, firstFile) {
         if (!await display(response, current, revision)) return;
         // The automatic crop is also one reversible step, so a missed edge can
         // be recovered with the same Back button as any manual edit.
-        if (response.detected) history.push({ frame: response.originalFrame, scrollTop: 0 });
+        if (response.detected) history.push({ frame: response.originalFrame });
         ready = true; controls();
         status.setAttribute("aria-busy", "false");
         status.textContent = response.detected
-          ? "גרור את הפינות לחיתוך מלבני. גלול כדי לבדוק גם את תחתית התעודה."
+          ? "כל התעודה מוצגת. גרור את הפינות לחיתוך מלבני."
           : "לא זוהו גבולות. אפשר לגרור את הפינות או להמשיך ללא חיתוך.";
+        fitPreview();
       } catch {
         if (!disposed && current === generation) {
           status.textContent = "העיבוד אינו זמין לצילום הזה. אפשר לצלם שוב או להמשיך ללא חיתוך.";

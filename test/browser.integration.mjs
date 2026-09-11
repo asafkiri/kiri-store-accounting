@@ -42,6 +42,40 @@ async function scannerPage(t, engine) {
   return page;
 }
 
+async function assertWholeCropVisible(page) {
+  // Let layout and ResizeObserver settle after image/status/viewport changes.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const layout = await page.evaluate(() => {
+    const area = document.querySelector(".crop-source-area"), img = document.querySelector("[data-crop-result]");
+    const rect = el => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+    };
+    const style = getComputedStyle(area);
+    return {
+      area: rect(area), image: rect(img), ratio: img.naturalWidth / img.naturalHeight,
+      available: [area.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), area.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)],
+      scroll: [area.scrollWidth - area.clientWidth, area.scrollHeight - area.clientHeight, area.scrollLeft, area.scrollTop],
+      handles: [...document.querySelectorAll("[data-crop-corner]")].map(handle => {
+        const r = rect(handle), hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+        return { ...r, reachable: handle.contains(hit) };
+      }),
+      actions: [...document.querySelectorAll(".crop-actions button")].map(rect),
+      screen: { left: 0, top: 0, right: innerWidth, bottom: innerHeight },
+    };
+  });
+  const inside = (r, container) => r.left >= container.left - 1 && r.top >= container.top - 1 && r.right <= container.right + 1 && r.bottom <= container.bottom + 1;
+  assert.ok(inside(layout.image, layout.area) && inside(layout.area, layout.screen), `the entire image must fit: ${JSON.stringify(layout)}`);
+  assert.ok(layout.scroll.every(value => Math.abs(value) <= 1), `no hidden or scrolled document edges: ${JSON.stringify(layout.scroll)}`);
+  assert.ok(Math.abs(layout.image.width / layout.image.height / layout.ratio - 1) < .005, "screen fitting preserves image proportions");
+  assert.ok(Math.abs(layout.image.width - layout.available[0]) <= 1 || Math.abs(layout.image.height - layout.available[1]) <= 1, "use the largest size that shows the whole page");
+  for (const handle of layout.handles) {
+    assert.ok(inside(handle, layout.area) && handle.reachable, `all four full corner targets must stay reachable: ${JSON.stringify(layout)}`);
+    assert.ok(handle.width >= 48 && handle.height >= 48, "keep large touch targets");
+  }
+  assert.ok(layout.actions.every(r => inside(r, layout.screen)), "approval actions remain on screen");
+}
+
 for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: scanner geometry, perspective/20-degree/long fixtures and thin text preservation`, async t => {
     const page = await scannerPage(t, engine);
@@ -219,7 +253,7 @@ for (const engine of [chromium, webkit]) {
     console.log(`${engine.name()}: shaded-paper correction ${Math.round(result.elapsed)}ms on the test machine; faint-stroke contrast preserved`);
   });
 
-  test(`${engine.name()}: long receipt stays large, repeated crops undo individually, including the automatic crop`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: whole long receipt stays visible without scrolling after crops, Back and viewport changes`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     await page.evaluate(async () => {
       window.cropMessages = [];
@@ -243,42 +277,46 @@ for (const engine of [chromium, webkit]) {
       window.pendingPhotoSelection = input.onchange();
     });
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
-    const initial = await page.locator("[data-crop-result]").evaluate(img => ({ width: img.clientWidth, ratio: img.naturalWidth / img.naturalHeight, edge: Math.max(img.naturalWidth, img.naturalHeight) }));
-    assert.ok(initial.width >= page.viewportSize().width * .8 && initial.ratio < .3, JSON.stringify(initial));
-    assert.equal(initial.edge, 2500, "the large preview uses the final resolution");
-    const viewport = page.locator(".crop-source-area");
-    assert.ok(await viewport.evaluate(el => el.scrollHeight > el.clientHeight), "long pages scroll at a readable width");
-    await viewport.evaluate(el => { el.scrollTop = el.scrollHeight; });
-    for (const action of ["accept", "original", "retake-button"]) {
-      const box = await page.locator(`[data-crop-${action}]`).boundingBox();
-      assert.ok(box.y >= 0 && box.y + box.height <= page.viewportSize().height, `action ${action} stays visible`);
-    }
+    const initial = await page.locator("[data-crop-result]").evaluate(img => ({ ratio: img.naturalWidth / img.naturalHeight, edge: Math.max(img.naturalWidth, img.naturalHeight) }));
+    assert.ok(initial.ratio < .3, "exercise an unusually narrow, long page");
+    assert.equal(initial.edge, 2500, "fitting the screen must not reduce the actual image resolution");
+    await assertWholeCropVisible(page);
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/scanner-long-${engine.name()}.png`, fullPage: true });
     assert.equal(await page.locator("[data-crop-reset]").count(), 0, "Back replaces Reset");
     const bytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
     const initialBytes = await bytes();
-    await viewport.evaluate(el => { el.scrollTop = 0; });
     const crop = async key => {
       const before = await page.locator("[data-crop-result]").getAttribute("src");
       await page.locator('[data-crop-corner="0"]').press(key);
       await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+      await assertWholeCropVisible(page);
     };
     const undo = async () => {
       const before = await page.locator("[data-crop-result]").getAttribute("src");
       await page.locator("[data-crop-undo]").tap();
       await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+      await assertWholeCropVisible(page);
     };
     await crop("Shift+ArrowRight");
     const firstBytes = await bytes();
     await crop("Shift+ArrowDown");
+    await page.screenshot({ path: `test-artifacts/scanner-long-cropped-${engine.name()}.png`, fullPage: true });
+    const croppedUrl = await page.locator("[data-crop-result]").getAttribute("src");
+    const requestsBeforeResize = await page.evaluate(() => window.cropMessages.length);
+    for (const size of [{ width: 360, height: 640 }, { width: 740, height: 390 }, phoneOptions(engine).viewport]) {
+      await page.setViewportSize(size);
+      await assertWholeCropVisible(page);
+      if (size.width > size.height) await page.screenshot({ path: `test-artifacts/scanner-landscape-${engine.name()}.png`, fullPage: true });
+      assert.equal(await page.locator("[data-crop-result]").getAttribute("src"), croppedUrl, "rotation changes only the display, not the crop");
+    }
+    assert.equal(await page.evaluate(() => window.cropMessages.length), requestsBeforeResize, "screen resizing does not reprocess or degrade the photo");
     await undo(); assert.deepEqual(await bytes(), firstBytes, "one Back restores the preceding crop exactly");
     await undo(); assert.deepEqual(await bytes(), initialBytes, "another Back restores the initial straightened image exactly");
     await undo();
     const ratio = await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth / img.naturalHeight);
     assert.ok(Math.abs(ratio - .5) < .001, "Back can recover edges missed by the automatic crop");
     assert.equal(await page.locator("[data-crop-undo]").isDisabled(), true, "history stops at the full enhanced photo");
-    assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
     // Compare the actual JPEG displayed by the image element with the upload.
     await page.evaluate(async () => {
       const blob = window.cropBlobs.get(document.querySelector("[data-crop-result]").src);
@@ -311,8 +349,7 @@ for (const engine of [chromium, webkit]) {
     const handle = page.locator('[data-crop-corner="0"]');
     assert.equal(await page.locator(".scan-crop img").count(), 1, "one processed image is the crop surface");
     assert.equal(await page.locator("[data-crop-source]").count(), 0, "the unprocessed original is not displayed");
-    const surface = await page.locator("[data-crop-result]").boundingBox();
-    assert.ok(surface.width >= page.viewportSize().width * .8, "the document must fill the phone width");
+    await assertWholeCropVisible(page);
     const before = await page.locator("[data-crop-result]").getAttribute("src");
     const box = await handle.boundingBox(); assert.ok(box.width >= 48 && box.height >= 48);
     if (engine.name() === "chromium") {
@@ -329,6 +366,7 @@ for (const engine of [chromium, webkit]) {
       await page.mouse.move(box.x + box.width / 2 + 8, box.y + box.height / 2 + 8, { steps: 4 }); await page.mouse.up();
     }
     await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+    await assertWholeCropVisible(page);
     assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]], "handles follow the newly rectified image");
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     // A cancelled retake leaves the current selection intact.
@@ -395,6 +433,7 @@ for (const engine of [chromium, webkit]) {
     await page.evaluate(() => window.openScanner());
     await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
     await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא זוהו גבולות"));
+    await assertWholeCropVisible(page);
     assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]]);
     await page.locator("[data-crop-original]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
