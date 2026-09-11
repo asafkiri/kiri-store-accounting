@@ -42,11 +42,11 @@ export function invoicesView(ctx) {
   const f = ctx.filters, items = filterInvoices(ctx.data.invoices, f, ctx.data.suppliers);
   const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
   const openTotals = totals(allOpen), itemTotals = totals(items);
-  return `<div class="page-heading"><div><h1>החשבוניות של החנות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
+  return `<div class="page-heading"><div><h1>חשבוניות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
     <section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>סרוק חשבונית</strong><small>צילום או העלאת קובץ</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>
     ${ctx.draftNames.includes("scan") ? `<button class="draft-banner" data-action="resume-draft" data-key="scan">המשך סריקת חשבונית שהתחלת ${icon("arrow")}</button>` : ""}
     ${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="resume-draft" data-key="invoice">המשך טיוטת חשבונית ${icon("arrow")}</button>` : ""}
-    <button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? allOpen.length + " חשבוניות לתשלום" : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button>
+    <button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button>
     <div class="section-label browser-heading"><h2>חשבוניות לפי חודש וספק</h2><button class="text-button" data-route="documents">${icon("image")} צילומים</button></div>
     ${statusTabs(f.status)}${searchBox(ctx, "invoice-search", "חפש ספק או מספר חשבונית")}${filters(ctx)}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
     <div class="list-heading"><span>${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>

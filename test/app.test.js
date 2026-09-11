@@ -210,3 +210,24 @@ test("saved invoice exposes its attachments and opens the linked file through th
   assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
   document.querySelector(".preview-dialog").onclose();
 });
+
+test("photo archive opens its file directly without opening invoice details or scanning again", async t => {
+  const id = "b".repeat(64), requests = [];
+  await setup(t, {
+    request: async (path, options) => {
+      requests.push({ path, options });
+      if (path === "me") return { uid: "owner" };
+      if (path === "documents/" + id) return new Blob(["photo"], { type: "image/png" });
+      return { full: true, version: 1, suppliers: [], dailyCash: [], invoices: [{ id: "archive-invoice", documentNumber: "ARCHIVE", documentType: "invoice", invoiceDate: "2026-09-10", status: "paid", finalAgorot: 100, deductions: [], attachmentIds: [id] }] };
+    },
+  });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="documents"]').click();
+  document.querySelector('[data-open-document]').click();
+  await tick();
+  assert.equal(document.querySelector("#modal").open, false);
+  assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
+  assert.equal(requests.filter(r => r.path === "documents/" + id).length, 1);
+  assert.equal(requests.some(r => r.path.includes("scan-invoice")), false);
+  document.querySelector(".preview-dialog").onclose();
+});

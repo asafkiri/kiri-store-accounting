@@ -188,6 +188,8 @@ function bindShell() {
       navigate(nav.dataset.route);
       return;
     }
+    const documentButton = ev.target.closest("[data-open-document]");
+    if (documentButton) return openDocument(documentButton);
     const button = ev.target.closest("[data-action]");
     if (!button) return;
     try {
@@ -634,22 +636,24 @@ $("#modal").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-close-modal]") && !ctx.modalBusy)
     ctx.closeModal();
   const doc = ev.target.closest("[data-open-document]");
-  if (doc) {
+  if (doc) await openDocument(doc);
+});
+async function openDocument(doc) {
+  if (doc.disabled || !ctx.api) return;
+  const api = ctx.api;
     doc.disabled = true;
     try {
-      ctx.previewBlob(
-        await ctx.api.request("documents/" + doc.dataset.openDocument, {
+      const blob = await api.request("documents/" + doc.dataset.openDocument, {
           blob: true,
           timeout: 50_000,
-        }),
-      );
+        });
+      if (doc.isConnected && ctx.api === api) ctx.previewBlob(blob);
     } catch (err) {
       toast(errorText(err), true);
     } finally {
       doc.disabled = false;
     }
-  }
-});
+}
 window.addEventListener("online", () => ctx.refresh(false));
 window.addEventListener("offline", () => {
   const status = $("#connection-status");
