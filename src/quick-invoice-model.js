@@ -33,7 +33,9 @@ export function invoiceQuestions(draft) {
   if (expected !== null && actualFinal !== null && (f.documentType === "credit" ? -Math.abs(actualFinal) : actualFinal) !== expected && !confirmed.finalArithmetic)
     questions.push("finalArithmetic");
   const subtotal = amountOrNull(f.subtotal), vat = amountOrNull(f.vat), total = amountOrNull(f.total);
-  if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) !== Math.abs(total) && !confirmed.arithmetic)
+  const rounding = f.deductions.filter(d => d.included === "yes" && /עיגול|\brounding\b/iu.test(d.label || ""))
+    .reduce((sum, d) => sum + (amountOrNull(d.amount) || 0), 0);
+  if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) + (f.documentType === "credit" ? -rounding : rounding) !== Math.abs(total) && !confirmed.arithmetic)
     questions.push("arithmetic");
   if (r.warnings?.length && !confirmed.warnings) questions.push("warnings");
   return questions;

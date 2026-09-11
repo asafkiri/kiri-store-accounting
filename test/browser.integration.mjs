@@ -554,9 +554,11 @@ for (const engine of [chromium, webkit]) {
     await page.locator("#run-scan").tap();
     await page.waitForSelector("#invoice-form");
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents", "scan-invoice"]);
-    assert.equal(await page.locator("[name=review]").isChecked(), false);
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.equal(await page.locator('.quick-invoice [type="submit"]').isVisible(), true);
+    assert.match(await page.locator('.quick-invoice [type="submit"]').innerText(), /אשר ושמור/);
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
-    assert.equal(await page.locator("[name=final]").inputValue(), "3995.00");
+    assert.match(await page.locator("[data-quick-final]").innerText(), /3,995\.00/);
     assert.deepEqual(errors, []);
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
     console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);

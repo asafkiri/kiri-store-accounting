@@ -117,3 +117,14 @@ test("empty forms and legacy empty scans make no banners; linked scan/review mak
   document.querySelector("[data-discard-draft]").click(); await tick();
   assert.deepEqual(await actionableDraftNames(ctx.drafts, ctx.data), []);
 });
+
+test("a separately recorded included rounding line does not create a false VAT question", async () => {
+  const { ctx, writes } = setup();
+  await invoiceForm(ctx, null, scan({ subtotalAgorot: 338550, vatAgorot: 60941, totalAgorot: 399500, finalAgorot: 399500,
+    deductions: [{ label: "הפרש עיגול", amountAgorot: 9, includedInTotal: true }] }));
+  assert.equal(document.querySelector(".quick-question"), null);
+  assert.equal(writes.length, 0);
+  submit(); await tick();
+  assert.equal(writes[0].body.data.vatAgorot, 60941);
+  assert.equal(writes[0].body.data.finalAgorot, 399500);
+});
