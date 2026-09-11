@@ -378,17 +378,27 @@ for (const engine of [chromium, webkit]) {
       }
       assert.equal(await page.locator("[data-crop-result]").getAttribute("src"), initialUrl, "moving individual corners does not repeatedly stretch the preview");
     }
-    await session?.detach();
     const selected = await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => ({ x: parseFloat(h.style.left) / 100, y: parseFloat(h.style.top) / 100 })));
     for (let i = 0; i < 4; i++) assert.ok(Math.hypot(selected[i].x - corners[i].x, selected[i].y - corners[i].y) < .01, "four independent corners follow the paper");
     assert.equal(await page.evaluate(() => window.cropMessages.filter(m => ["preview", "straighten"].includes(m.type)).length), 0);
-    await page.locator("[data-crop-accept]").tap();
+    await page.evaluate(() => {
+      const button = document.querySelector("[data-crop-accept]"), handler = button.onclick;
+      window.applyClicks = 0; button.onclick = event => { window.applyClicks++; return handler(event); };
+    });
+    if (session) {
+      // Exercise the drags and final Apply tap in one native touch stream.
+      const button = await page.locator("[data-crop-accept]").boundingBox();
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: button.x + button.width / 2, y: button.y + button.height / 2 }] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } else await page.locator("[data-crop-accept]").tap();
     try {
       await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, initialUrl, { timeout: 18000 });
     } catch (error) {
-      const state = await page.evaluate(() => ({ status: document.querySelector("[data-crop-status]")?.textContent, accept: document.querySelector("[data-crop-accept]")?.outerHTML, messages: window.cropMessages.map(({ type, points, frame }) => ({ type, points, frame })) }));
+      const state = await page.evaluate(() => ({ status: document.querySelector("[data-crop-status]")?.textContent, accept: document.querySelector("[data-crop-accept]")?.outerHTML, clicks: window.applyClicks, viewport: { scale: visualViewport.scale, x: visualViewport.offsetLeft, y: visualViewport.offsetTop }, messages: window.cropMessages.map(({ type, points, frame }) => ({ type, points, frame })) }));
       throw Error(`${error.message}\n${JSON.stringify({ state, errors })}`);
     }
+    await session?.detach();
+    assert.equal(await page.evaluate(() => window.applyClicks), 1);
     await assertWholeCropVisible(page);
     assert.equal(await page.locator("[data-crop-accept]").textContent(), "אשר", "show the result before saving it");
     assert.equal(await page.evaluate(() => window.cropMessages.filter(m => m.type === "straighten").length), 1);

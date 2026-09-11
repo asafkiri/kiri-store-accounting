@@ -266,7 +266,9 @@ export function enhanceImage(image) {
     const cell = Math.min(gh - 1, Math.floor(y * gh / h)) * gw + Math.min(gw - 1, Math.floor(x * gw / w));
     // Do not average the dark half of a mixed paper/logo cell into the paper.
     // A narrow band near the upper quantile also avoids grid-dependent halos.
-    if (lum < Math.max(low[cell], high[cell] * .94 - 3) || lum > high[cell]) continue;
+    // Luminance is fractional: the bin ending at integer 99 includes 99.7.
+    // Excluding that fraction left whole patches without any paper samples.
+    if (lum < Math.max(low[cell], high[cell] * .94 - 3) || lum >= high[cell] + 1) continue;
     for (let c = 0; c < 3; c++) background[c][cell] += data[i + c];
     counts[cell]++;
   }
