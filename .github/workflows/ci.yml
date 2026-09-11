@@ -9,6 +9,14 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Match the Playwright version pinned in package.json. Browsers and their
+    # system libraries are preinstalled, avoiding stalled apt mirror downloads.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+      options: --user 1001 --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +38,6 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
       - name: Save the tested Hosting build
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

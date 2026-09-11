@@ -21,8 +21,15 @@ const phoneOptions = (engine) => ({
 async function scannerPage(t, engine) {
   const server = createBrowserCheckServer();
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const browser = await engine.launch(); t.after(() => browser.close());
+  let browser;
+  // Close the browser before its HTTP server. A failed UI check can leave an
+  // active connection, which otherwise hides the failure behind a stuck hook.
+  t.after(async () => {
+    try { await browser?.close(); }
+    finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  }, { timeout: 15000 });
+  console.log(`Starting ${t.name}`);
+  browser = await engine.launch();
   const page = await browser.newPage(phoneOptions(engine));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => document.querySelector("#result").textContent !== "Running…");
@@ -143,7 +150,7 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: repeated crops of a perspective photo preserve the proportions of printed shapes`, async t => {
     const page = await scannerPage(t, engine);
     const result = await page.evaluate(async () => {
-      const { homography, projectPoint, fullCorners, imageFrame, cropFrame, warpImage } = await import("/scan-worker.js");
+      const { homography, projectPoint, fullCorners, imageFrame, perspectiveFrame, cropFrame, warpImage } = await import("/scan-worker.js");
       const source = new ImageData(900, 1000);
       const corners = [{ x: .1, y: .06 }, { x: .91, y: .27 }, { x: .67, y: .94 }, { x: .22, y: .86 }];
       const toPaper = homography(corners.map(p => ({ x: p.x * 899, y: p.y * 999 })), fullCorners());
@@ -154,7 +161,7 @@ for (const engine of [chromium, webkit]) {
         source.data.set([gray, gray, gray, 255], (y * source.width + x) * 4);
       }
       const measurements = [], canvases = [];
-      let frame = imageFrame(source, corners);
+      let frame = perspectiveFrame(corners, imageFrame(source));
       for (let step = 0; step < 5; step++) {
         const image = warpImage(source, frame.corners, 2500, frame);
         let left = image.width, top = image.height, right = 0, bottom = 0;
@@ -251,6 +258,153 @@ for (const engine of [chromium, webkit]) {
     assert.ok(new Set(result.tones).size >= 40, "preserve many gray tones instead of thresholding/posterizing");
     assert.ok(result.colour[2] - result.colour[0] >= 40, "coloured marks must retain their colour");
     console.log(`${engine.name()}: shaded-paper correction ${Math.round(result.elapsed)}ms on the test machine; faint-stroke contrast preserved`);
+  });
+
+  test(`${engine.name()}: blue paper, deep shadows and underexposure preserve faint strokes and decimal points`, async t => {
+    const page = await scannerPage(t, engine);
+    const results = await page.evaluate(async () => {
+      const { enhanceImage } = await import("/scan-worker.js");
+      const results = [], comparison = document.createElement("div");
+      comparison.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:16px";
+      for (const kind of ["blue", "deep", "dim"]) {
+        const { canvas, samples } = window.makeDifficultPaper(kind), pen = canvas.getContext("2d");
+        const before = pen.getImageData(0, 0, canvas.width, canvas.height);
+        const start = performance.now();
+        const after = enhanceImage(new ImageData(new Uint8ClampedArray(before.data), before.width, before.height));
+        const elapsed = performance.now() - start;
+        const rgb = (image, x, y) => [...image.data.slice((y * image.width + x) * 4, (y * image.width + x) * 4 + 3)];
+        const gray = values => values.reduce((a, b) => a + b, 0) / 3;
+        const measurements = samples.map(({ x, y, ratio }) => {
+          const paper = rgb(after, x + 4, y), ink = rgb(after, x, y), dot = rgb(after, x + 6, y + 4);
+          return { ratio, paper, ink, dot, before: gray(rgb(before, x + 4, y)) - gray(rgb(before, x, y)), after: gray(paper) - gray(ink), dotContrast: gray(rgb(after, x + 6, y + 7)) - gray(dot) };
+        });
+        const original = document.createElement("canvas"); original.width = canvas.width; original.height = canvas.height;
+        original.getContext("2d").putImageData(before, 0, 0); pen.putImageData(after, 0, 0);
+        for (const image of [original, canvas]) { image.style.width = "100%"; comparison.append(image); }
+        const boundary = [];
+        if (kind !== "dim") for (const y of [660, 680, 690, 695, 705, 710, 720]) for (const x of [20, 380, 920]) boundary.push(rgb(after, x, y));
+        results.push({ kind, measurements, boundary, elapsed });
+      }
+      const black = new ImageData(160, 160); black.data.fill(5);
+      const untouched = new Uint8ClampedArray(black.data); enhanceImage(black);
+      results.push({ kind: "no-light", unchanged: black.data.every((value, i) => value === untouched[i]) });
+      document.body.replaceChildren(comparison); return results;
+    });
+    for (const result of results) {
+      if (result.kind === "no-light") { assert.equal(result.unchanged, true); continue; }
+      for (const sample of result.measurements) {
+        const label = `${result.kind}: ${JSON.stringify(sample)}`;
+        assert.ok(Math.min(...sample.paper) >= 235, `paper should become light: ${label}`);
+        assert.ok(Math.max(...sample.paper) - Math.min(...sample.paper) <= 5, `remove paper cast: ${label}`);
+        assert.ok(sample.after >= sample.before * 1.6 && sample.after >= 2, `preserve faint strokes: ${label}`);
+        assert.ok(sample.dotContrast >= 2, `preserve decimal points: ${label}`);
+      }
+      assert.ok(result.boundary.every(rgb => Math.min(...rgb) >= 230), `no broad dark band at a shadow boundary: ${JSON.stringify(result.boundary)}`);
+      console.log(`${engine.name()}: ${result.kind} paper correction ${Math.round(result.elapsed)}ms on the CI machine`);
+    }
+    await mkdir("test-artifacts", { recursive: true });
+    await page.setViewportSize({ width: 1000, height: 1000 });
+    await page.screenshot({ path: `test-artifacts/difficult-paper-${engine.name()}.png`, fullPage: true });
+  });
+
+  test(`${engine.name()}: logo edges stay uniform at every illumination-grid offset`, async t => {
+    const page = await scannerPage(t, engine);
+    const results = await page.evaluate(async () => {
+      const { enhanceImage } = await import("/scan-worker.js");
+      const results = [], canvas = document.createElement("canvas"); canvas.width = canvas.height = 384;
+      const pen = canvas.getContext("2d");
+      for (const colour of ["#000000", "#343434", "#606060", "#808080", "#204ca0"]) for (let shift = 0; shift < 16; shift++) {
+        pen.fillStyle = "rgb(232,220,205)"; pen.fillRect(0, 0, 384, 384);
+        const left = 74 + shift, top = 94 + shift, width = 111, height = 155;
+        pen.fillStyle = colour; pen.fillRect(left, top, width, height);
+        const image = enhanceImage(pen.getImageData(0, 0, 384, 384));
+        const rgb = (x, y) => [...image.data.slice((y * 384 + x) * 4, (y * 384 + x) * 4 + 3)];
+        const centre = rgb(left + 50, top + 70), paper = rgb(20, 20);
+        let inner = 0, outer = 0;
+        for (let y = top - 20; y < top + height + 20; y++) for (let x = left - 20; x < left + width + 20; x++) {
+          const inside = x >= left + 2 && x < left + width - 2 && y >= top + 2 && y < top + height - 2;
+          // Exclude only the immediate one-pixel unsharp-mask edge, not the
+          // surrounding band where a bad illumination field produces halos.
+          const outside = x < left - 1 || x > left + width || y < top - 1 || y > top + height;
+          const reference = inside ? centre : paper;
+          if (!inside && !outside) continue;
+          const difference = Math.max(...rgb(x, y).map((v, c) => Math.abs(v - reference[c])));
+          if (inside) inner = Math.max(inner, difference); else outer = Math.max(outer, difference);
+        }
+        results.push({ colour, shift, inner, outer, centre });
+      }
+      return results;
+    });
+    for (const result of results) {
+      assert.ok(result.inner <= 2 && result.outer <= 2, `no grid-dependent halo: ${JSON.stringify(result)}`);
+      assert.ok(Math.max(...result.centre) < 210, `solid ink must not become paper: ${JSON.stringify(result)}`);
+      if (result.colour === "#204ca0") assert.ok(result.centre[2] - result.centre[0] >= 40);
+    }
+  });
+
+  test(`${engine.name()}: missed automatic boundaries can be aligned manually before a single perspective render`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(async () => {
+      window.cropMessages = []; const NativeWorker = window.Worker;
+      window.cropBlobs = new Map(); const createObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = object => { const url = createObjectURL(object); window.cropBlobs.set(url, object); return url; };
+      window.Worker = class extends NativeWorker {
+        postMessage(message, ...args) { window.cropMessages.push(structuredClone(message)); super.postMessage(message, ...args); }
+      };
+      await window.openScanner();
+      const { file, corners } = await window.makePhoto("manual", 1600); window.manualCorners = corners;
+      const transfer = new DataTransfer(); transfer.items.add(file);
+      const input = document.querySelector("#camera-file"); input.files = transfer.files; window.pendingPhotoSelection = input.onchange();
+    });
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    assert.match(await page.locator("[data-crop-status]").textContent(), /לא זוהו גבולות/);
+    const initialUrl = await page.locator("[data-crop-result]").getAttribute("src");
+    const initialBytes = await page.evaluate(async () => [...new Uint8Array(await window.cropBlobs.get(document.querySelector("[data-crop-result]").src).arrayBuffer())]);
+    await page.locator("[data-crop-straighten]").press("Enter");
+    await assertWholeCropVisible(page);
+    const corners = await page.evaluate(() => window.manualCorners), box = await page.locator(".crop-source").boundingBox();
+    const session = engine.name() === "chromium" ? await page.context().newCDPSession(page) : null;
+    for (let index = 0; index < 4; index++) {
+      const handle = await page.locator(`[data-crop-corner="${index}"]`).boundingBox();
+      const from = { x: handle.x + handle.width / 2, y: handle.y + handle.height / 2 };
+      const to = { x: box.x + box.width * corners[index].x, y: box.y + box.height * corners[index].y };
+      if (session) {
+        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [from] });
+        await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [to] });
+        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      } else {
+        await page.mouse.move(from.x, from.y); await page.mouse.down(); await page.mouse.move(to.x, to.y); await page.mouse.up();
+      }
+      assert.equal(await page.locator("[data-crop-result]").getAttribute("src"), initialUrl, "moving individual corners does not repeatedly stretch the preview");
+    }
+    const selected = await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => ({ x: parseFloat(h.style.left) / 100, y: parseFloat(h.style.top) / 100 })));
+    for (let i = 0; i < 4; i++) assert.ok(Math.hypot(selected[i].x - corners[i].x, selected[i].y - corners[i].y) < .01, "four independent corners follow the paper");
+    assert.equal(await page.evaluate(() => window.cropMessages.filter(m => ["preview", "straighten"].includes(m.type)).length), 0);
+    await session?.detach();
+    // Use the button's native keyboard activation after the four pointer drags.
+    // Native camera/crop touch coverage remains in the existing integration test.
+    await page.locator("[data-crop-accept]").press("Enter");
+    await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, initialUrl);
+    await assertWholeCropVisible(page);
+    assert.equal(await page.locator("[data-crop-accept]").textContent(), "אשר", "show the result before saving it");
+    assert.equal(await page.evaluate(() => window.cropMessages.filter(m => m.type === "straighten").length), 1);
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/manual-perspective-${engine.name()}.png`, fullPage: true });
+    const correctedUrl = await page.locator("[data-crop-result]").getAttribute("src");
+    await page.locator("[data-crop-undo]").press("Enter");
+    await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, correctedUrl);
+    const restoredBytes = await page.evaluate(async () => [...new Uint8Array(await window.cropBlobs.get(document.querySelector("[data-crop-result]").src).arrayBuffer())]);
+    assert.deepEqual(restoredBytes, initialBytes, "Back restores the exact image before manual straightening");
+    await page.locator("[data-crop-straighten]").press("Enter");
+    await page.locator('[data-crop-corner="0"]').press("Shift+ArrowRight");
+    await page.locator("[data-crop-undo]").press("Enter");
+    assert.equal(await page.locator("[data-crop-straighten]").getAttribute("aria-pressed"), "false", "Back also cancels unapplied alignment");
+    assert.equal(await page.evaluate(() => window.cropMessages.filter(m => m.type === "straighten").length), 1);
+    await page.locator("[data-crop-original]").press("Enter");
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 
   test(`${engine.name()}: whole long receipt stays visible without scrolling after crops, Back and viewport changes`, { timeout: 60000 }, async t => {
@@ -520,9 +674,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: today's cash starts clean and a failed save can be cancelled, edited and discarded offline`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage(phoneOptions(engine));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
@@ -641,9 +798,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: mobile supplier review confirms creation, similar names and reactivation before saving`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage(phoneOptions(engine));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
@@ -780,9 +940,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: reproduce the old receiver failure and verify the fixed API`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => {
@@ -801,9 +964,12 @@ for (const engine of [chromium, webkit]) {
     async (t) => {
       const server = createBrowserCheckServer();
       await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-      t.after(() => new Promise((resolve) => server.close(resolve)));
-      const browser = await engine.launch();
-      t.after(() => browser.close());
+      let browser;
+      t.after(async () => {
+        try { await browser?.close(); }
+        finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+      }, { timeout: 15000 });
+      browser = await engine.launch();
       const page = await browser.newPage(phoneOptions(engine));
       await page.goto(`http://127.0.0.1:${server.address().port}`);
       await page.waitForFunction(

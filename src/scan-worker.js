@@ -201,6 +201,12 @@ export function cropFrame(points, frame) {
     width: (frame.width - 1) * (points[1].x - points[0].x) + 1,
     height: (frame.height - 1) * (points[3].y - points[0].y) + 1 };
 }
+export function perspectiveFrame(points, frame) {
+  // Measure in the displayed page's pixel coordinates, not the oblique camera
+  // frame. Subsequent rectangular trims keep this metric through cropFrame.
+  const metric = imageFrame({ width: frame.width, height: frame.height }, points);
+  return { ...metric, corners: mapCropCorners(points, frame.corners) };
+}
 export function warpImage(image, points, maxEdge = 2500, frame = imageFrame(image, points)) {
   if (!validCorners(points)) throw Error("Invalid corners");
   const q = points.map(p => ({ x: p.x * (image.width - 1), y: p.y * (image.height - 1) }));
@@ -232,7 +238,8 @@ export function enhanceImage(image) {
   // Unlike a maximum, these samples resist isolated glare. A broad, smooth RGB
   // field removes both lighting gradients and the warm/blue cast of the paper.
   // The histogram only estimates illumination; it never classifies output ink.
-  const gw = Math.max(2, Math.round(w / Math.max(w, h) * 64)), gh = Math.max(2, Math.round(h / Math.max(w, h) * 64));
+  const gridEdge = Math.min(96, Math.max(24, Math.round(Math.max(w, h) / 16)));
+  const gw = Math.max(2, Math.round(w / Math.max(w, h) * gridEdge)), gh = Math.max(2, Math.round(h / Math.max(w, h) * gridEdge));
   const cells = gw * gh, counts = new Uint32Array(cells), histogram = new Uint32Array(cells * 64);
   const stride = Math.max(w, h) < 800 ? 1 : 2;
   for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) {
@@ -251,25 +258,56 @@ export function enhanceImage(image) {
   }
   let background = Array.from({ length: 3 }, () => new Float32Array(cells));
   const paperLevel = [...high].sort((a, b) => a - b)[Math.floor(cells * .9)];
+  // With almost no recorded light there is no reliable paper/ink separation.
+  if (paperLevel < 16) return image;
   counts.fill(0);
   for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) {
     const i = (y * w + x) * 4, lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
     const cell = Math.min(gh - 1, Math.floor(y * gh / h)) * gw + Math.min(gw - 1, Math.floor(x * gw / w));
-    const maximum = Math.max(data[i], data[i + 1], data[i + 2]), minimum = Math.min(data[i], data[i + 1], data[i + 2]);
-    if (lum < low[cell] || lum > high[cell] || maximum - minimum > maximum * .3) continue;
+    // Do not average the dark half of a mixed paper/logo cell into the paper.
+    // A narrow band near the upper quantile also avoids grid-dependent halos.
+    // Luminance is fractional: the bin ending at integer 99 includes 99.7.
+    // Excluding that fraction left whole patches without any paper samples.
+    if (lum < Math.max(low[cell], high[cell] * .94 - 3) || lum >= high[cell] + 1) continue;
     for (let c = 0; c < 3; c++) background[c][cell] += data[i + c];
     counts[cell]++;
   }
+  // Learn the colour of the photographed paper. An absolute saturation limit
+  // rejected white paper under blue daylight as if it were coloured printing.
+  const paperSamples = [[], [], []];
+  for (let cell = 0; cell < cells; cell++) {
+    if (!counts[cell]) continue;
+    for (let c = 0; c < 3; c++) background[c][cell] /= counts[cell];
+    if (high[cell] < paperLevel * .65) continue;
+    const sum = background.reduce((s, channel) => s + channel[cell], 0);
+    for (let c = 0; c < 3; c++) paperSamples[c].push(background[c][cell] / Math.max(1, sum));
+  }
+  const paperColour = paperSamples.map(values => values.sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 1 / 3);
   // A solid logo has no trustworthy paper samples. Never substitute its dark
   // histogram value: that created a bright halo both inside and around logos.
   // Extend neighbouring paper into those cells, then smooth the illumination.
-  const known = new Uint8Array(cells), queue = new Int32Array(cells);
+  const known = new Uint8Array(cells), candidates = new Uint8Array(cells), queue = new Int32Array(cells);
   let head = 0, tail = 0;
   for (let cell = 0; cell < cells; cell++) {
-    if (counts[cell] < Math.max(1, totals[cell] * .15) || high[cell] < Math.max(100, paperLevel * .6)) continue;
-    known[cell] = 1; queue[tail++] = cell;
-    for (let c = 0; c < 3; c++) background[c][cell] /= counts[cell];
+    const sum = background.reduce((s, channel) => s + channel[cell], 0);
+    const coloured = background.some((channel, c) => Math.abs(channel[cell] / Math.max(1, sum) - paperColour[c]) > .11);
+    if (counts[cell] < Math.max(1, totals[cell] * .08) || high[cell] < paperLevel * .3 || coloured) continue;
+    candidates[cell] = 1;
+    const x = cell % gw, y = Math.floor(cell / gw);
+    if (high[cell] >= paperLevel * .65 || x === 0 || x === gw - 1 || y === 0 || y === gh - 1) {
+      known[cell] = 1; queue[tail++] = cell;
+    }
   }
+  // Deep shadows that reach the page edge and gradual changes in illumination
+  // are still paper. Do not jump from paper into an enclosed, solid gray logo.
+  while (head < tail) {
+    const cell = queue[head++], x = cell % gw, y = Math.floor(cell / gw);
+    for (const n of [x > 0 ? cell - 1 : -1, x + 1 < gw ? cell + 1 : -1, y > 0 ? cell - gw : -1, y + 1 < gh ? cell + gw : -1]) {
+      if (n < 0 || known[n] || !candidates[n] || Math.abs(high[n] - high[cell]) > paperLevel * .12) continue;
+      known[n] = 1; queue[tail++] = n;
+    }
+  }
+  head = 0;
   if (!tail) for (const channel of background) channel.fill(255);
   while (head < tail) {
     const cell = queue[head++], x = cell % gw, y = Math.floor(cell / gw);
@@ -279,15 +317,30 @@ export function enhanceImage(image) {
       known[neighbour] = 1; queue[tail++] = neighbour;
     }
   }
-  for (let c = 0; c < 3; c++) {
-    for (let pass = 0; pass < 2; pass++) background[c] = gaussian3(background[c], gw, gh);
+  const rawBackground = background;
+  background = rawBackground.map(channel => gaussian3(channel, gw, gh));
+  let edgeCells = new Float32Array(cells);
+  const backgroundLight = new Float32Array(cells);
+  for (let i = 0; i < cells; i++) backgroundLight[i] = rawBackground[0][i] * .299 + rawBackground[1][i] * .587 + rawBackground[2][i] * .114;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let low = 255, high = 0;
+    for (let yy = Math.max(0, y - 2); yy <= Math.min(gh - 1, y + 2); yy++) for (let xx = Math.max(0, x - 2); xx <= Math.min(gw - 1, x + 2); xx++) {
+      const value = backgroundLight[yy * gw + xx]; low = Math.min(low, value); high = Math.max(high, value);
+    }
+    edgeCells[y * gw + x] = high - low > Math.max(12, high * .18) ? 1 : 0;
   }
+  edgeCells = gaussian3(edgeCells, gw, gh);
+  // Reuse this luminance buffer for sharpening after colour correction. Near a
+  // hard shadow, it guides interpolation toward the paper on the SAME side of
+  // the edge, instead of averaging sunlit paper into shadow (a dark fringe).
+  const gray = grayImage(image);
+  const weights = new Float32Array(16), neighbours = new Int32Array(16);
   // Expand the distance of ink from its local paper instead of brightening ink
   // along with the background. This monotone curve has a soft highlight shoulder
   // and a linear dark toe: gray strokes stay gray, with no threshold or posterize.
   // Leave highlight headroom for very pale thermal ink rather than driving its
   // local paper almost to 255 before sharpening has a chance to preserve it.
-  const tone = new Float32Array(6145), paper = 244, contrast = 2.2, headroom = 255 - paper;
+  const tone = new Float32Array(6145), paper = 247, contrast = 2.4, headroom = 255 - paper;
   for (let i = 0; i < tone.length; i++) {
     const ratio = i / 2048;
     tone[i] = ratio <= 1 ? paper * ratio / (contrast - (contrast - 1) * ratio)
@@ -297,24 +350,52 @@ export function enhanceImage(image) {
     // Samples describe cell centres, not the outer edges of the whole photo.
     const gx = clamp((x + .5) * gw / w - .5, 0, gw - 1), gy = clamp((y + .5) * gh / h - .5, 0, gh - 1);
     const ix = Math.floor(gx), iy = Math.floor(gy), dx = gx - ix, dy = gy - iy;
+    const ia = iy * gw + ix, ib = iy * gw + Math.min(ix + 1, gw - 1);
+    const ic = Math.min(iy + 1, gh - 1) * gw + ix, id = Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1);
+    const edgeMix = (edgeCells[ia] * (1 - dx) + edgeCells[ib] * dx) * (1 - dy) + (edgeCells[ic] * (1 - dx) + edgeCells[id] * dx) * dy;
     const i = (y * w + x) * 4;
+    const originalSum = data[i] + data[i + 1] + data[i + 2];
+    let castDifference = 0;
+    for (let c = 0; c < 3; c++) castDifference = Math.max(castDifference, Math.abs(data[i + c] / Math.max(1, originalSum) - paperColour[c]));
+    let count = 0, weightSum = 0;
+    if (edgeMix > .001) {
+      let guide = 0;
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        guide += gray[clamp(y + oy * 2, 0, h - 1) * w + clamp(x + ox * 2, 0, w - 1)] * (ox ? 1 : 2) * (oy ? 1 : 2) / 16;
+      }
+      for (let yy = Math.max(0, iy - 1); yy <= Math.min(gh - 1, iy + 2); yy++) for (let xx = Math.max(0, ix - 1); xx <= Math.min(gw - 1, ix + 2); xx++) {
+        const n = yy * gw + xx, difference = (backgroundLight[n] - guide) / Math.max(12, guide * .08);
+        // A compact, continuous kernel reaches zero when a sample enters or
+        // leaves the neighbourhood. Changing grid cells must not make seams.
+        const spatial = Math.max(0, 1 - ((xx - gx) / 2) ** 2) ** 2 * Math.max(0, 1 - ((yy - gy) / 2) ** 2) ** 2;
+        const weight = spatial / (1 + difference ** 4);
+        neighbours[count] = n; weights[count++] = weight; weightSum += weight;
+      }
+    }
     for (let channel = 0; channel < 3; channel++) {
       const grid = background[channel];
-      const a = grid[iy * gw + ix], b = grid[iy * gw + Math.min(ix + 1, gw - 1)], c = grid[Math.min(iy + 1, gh - 1) * gw + ix], d = grid[Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1)];
-      const bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
+      const a = grid[ia], b = grid[ib], c = grid[ic], d = grid[id];
+      let bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
+      if (weightSum) {
+        let guided = 0;
+        for (let n = 0; n < count; n++) guided += rawBackground[channel][neighbours[n]] * weights[n] / weightSum;
+        bg += (guided - bg) * edgeMix;
+      }
       // Dark surroundings and solid logos are not treated as white paper.
-      const index = clamp(data[i + channel] * 2048 / Math.max(110, bg), 0, tone.length - 1);
+      const index = clamp(data[i + channel] * 2048 / Math.max(8, paperLevel * .15, bg), 0, tone.length - 1);
       const lower = Math.floor(index), fraction = index - lower;
       data[i + channel] = tone[lower] * (1 - fraction) + tone[Math.min(lower + 1, tone.length - 1)] * fraction;
     }
-    // Remove a residual cast only from bright, nearly neutral paper. Luminance
-    // is preserved, so this cannot erase pale gray strokes or turn a blue stamp gray.
+    // Paper-coloured pixels can retain a cast at hard shadow edges. Neutralize
+    // that cast without changing luminance; distinct stamp/logo colours survive.
     const lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
     const spread = Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]);
-    const neutral = clamp((lum - 180) / 60, 0, .75) * clamp(1 - spread / 40, 0, 1);
+    const neutral = Math.max(clamp((lum - 180) / 60, 0, .75) * clamp(1 - spread / 40, 0, 1),
+      clamp((.08 - castDifference) / .03, 0, 1));
     for (let channel = 0; channel < 3; channel++) data[i + channel] += (lum - data[i + channel]) * neutral;
   }
-  const gray = grayImage(image), blurred = gaussian3(gray, w, h);
+  for (let i = 0; i < gray.length; i++) gray[i] = data[i * 4] * .299 + data[i * 4 + 1] * .587 + data[i * 4 + 2] * .114;
+  const blurred = gaussian3(gray, w, h);
   for (let i = 0; i < gray.length; i++) {
     const detail = clamp((gray[i] - blurred[i]) * .4, -10, 10);
     for (let c = 0; c < 3; c++) data[i * 4 + c] += detail;
@@ -377,6 +458,7 @@ async function handle({ type, file, image, points, frame }) {
     prepared = preparedKey = preparedBlob = null;
     thumbnail = warpImage(sourcePixels, fullCorners(), 1000);
   } else if (type === "preview") return prepare(cropFrame(points, frame));
+  else if (type === "straighten") return prepare(perspectiveFrame(points, frame));
   else if (type === "process" || type === "restore") return prepare(frame);
   else throw Error("Unknown image operation");
   const corners = detectCorners(thumbnail);

@@ -74,7 +74,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     editor.setAttribute("aria-label", "אישור צילום התעודה");
     editor.innerHTML = `<div class="crop-heading"><h3>בדיקת צילום התעודה</h3><button type="button" class="text-button" data-crop-cancel>בטל</button></div>
       <p class="small" data-crop-status role="status" aria-live="polite" aria-busy="true">משפר את התאורה ומיישר את התעודה…</p>
-      <div class="crop-toolbar"><button type="button" class="text-button" data-crop-undo disabled>אחורה</button><button type="button" class="text-button" data-crop-zoom disabled>הגדל</button></div>
+      <div class="crop-toolbar"><button type="button" class="text-button" data-crop-undo disabled>אחורה</button><button type="button" class="text-button" data-crop-straighten aria-pressed="false" disabled>יישור פינות</button><button type="button" class="text-button" data-crop-zoom disabled>הגדל</button></div>
       <div class="crop-source-area"><div class="crop-source" hidden>
       <img data-crop-result alt="תעודה משופרת — גרור את הפינות להתאמת החיתוך" draggable="false">
       <svg class="crop-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path fill="rgba(0,0,0,.42)" fill-rule="evenodd"></path><polygon fill="none" stroke="#7dd3fc" stroke-width="2" vector-effect="non-scaling-stroke"></polygon></svg>
@@ -88,11 +88,13 @@ export function reviewPhoto(ctx, root, firstFile) {
     const status = $("[data-crop-status]", editor), resultImage = $("[data-crop-result]", editor);
     const stage = $(".crop-source", editor), accept = $("[data-crop-accept]", editor), originalButton = $("[data-crop-original]", editor);
     const undo = $("[data-crop-undo]", editor), zoom = $("[data-crop-zoom]", editor), viewport = $(".crop-source-area", editor);
+    const straighten = $("[data-crop-straighten]", editor);
     const handles = [...editor.querySelectorAll("[data-crop-corner]")], retake = $("[data-crop-retake]", editor);
     let file = firstFile, worker, resultUrl, previewBlob, frame;
     // Only crop geometry, never another photo-sized pixel buffer.
     let history = [];
     let points, generation = 0, revision = 0, disposed = false, ready = false, saving = false, rendering = false, dragging = null;
+    let straightening = false;
     const allCorners = () => [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const fitPreview = () => {
       if (disposed || !resultImage.naturalWidth || !resultImage.naturalHeight) return;
@@ -119,8 +121,12 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     const controls = () => {
       const disabled = !ready || saving || rendering;
-      accept.disabled = zoom.disabled = disabled;
-      undo.disabled = disabled || !history.length;
+      const busy = disabled || Boolean(dragging);
+      accept.disabled = zoom.disabled = straighten.disabled = busy;
+      undo.disabled = busy || (!straightening && !history.length);
+      accept.textContent = straightening ? "הצג יישור" : "אשר";
+      straighten.textContent = straightening ? "בטל יישור" : "יישור פינות";
+      straighten.setAttribute("aria-pressed", String(straightening));
       handles.forEach(handle => handle.disabled = disabled);
     };
     const release = () => {
@@ -154,7 +160,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       fitPreview();
       return true;
     };
-    const showPreview = async (back = false) => {
+    const showPreview = async (back = false, perspective = false) => {
       if (!ready || disposed || saving || rendering || dragging || (back && !history.length)) return;
       const current = ++revision, session = generation;
       const previous = { frame }, restored = back ? history.at(-1) : null;
@@ -163,8 +169,9 @@ export function reviewPhoto(ctx, root, firstFile) {
       status.setAttribute("aria-busy", "true");
       try {
         const response = back ? await worker.request("restore", { frame: restored.frame })
-          : await worker.request("preview", { points, frame });
+          : await worker.request(perspective ? "straighten" : "preview", { points, frame });
         if (!await display(response, session, current)) return;
+        straightening = false;
         if (back) history.pop();
         else history.push(previous);
         status.textContent = back
@@ -185,7 +192,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     const load = async nextFile => {
       const current = ++generation; revision++; release();
-      file = nextFile; points = allCorners(); frame = null; history = []; ready = false; saving = false; rendering = false; dragging = null;
+      file = nextFile; points = allCorners(); frame = null; history = []; ready = false; saving = false; rendering = false; dragging = null; straightening = false;
       originalButton.disabled = false; controls(); redraw();
       stage.hidden = true; viewport.scrollTop = 0;
       status.textContent = "משפר את התאורה ומיישר את התעודה…";
@@ -212,7 +219,7 @@ export function reviewPhoto(ctx, root, firstFile) {
         status.setAttribute("aria-busy", "false");
         status.textContent = response.detected
           ? "כל התעודה מוצגת. גרור את הפינות לחיתוך מלבני."
-          : "לא זוהו גבולות. אפשר לגרור את הפינות או להמשיך ללא חיתוך.";
+          : "לא זוהו גבולות. אפשר לבחור ״יישור פינות״ או להמשיך ללא חיתוך.";
         fitPreview();
       } catch {
         if (!disposed && current === generation) {
@@ -223,6 +230,16 @@ export function reviewPhoto(ctx, root, firstFile) {
       }
     };
     const move = (index, x, y) => {
+      if (straightening) {
+        const next = points.map((point, i) => i === index ? { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) } : point);
+        // Keep a convex, clockwise quadrilateral; crossed handles cannot be
+        // submitted to the worker. Wait for explicit Apply to move all corners.
+        if (next.some((a, i) => {
+          const b = next[(i + 1) % 4], c = next[(i + 2) % 4];
+          return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) <= .003;
+        }) || (next[index].x === points[index].x && next[index].y === points[index].y)) return false;
+        points = next; revision++; redraw(); return true;
+      }
       const opposite = points[(index + 2) % 4], leftCorner = index === 0 || index === 3, topCorner = index < 2;
       const xx = Math.max(leftCorner ? 0 : opposite.x + .02, Math.min(leftCorner ? opposite.x - .02 : 1, x));
       const yy = Math.max(topCorner ? 0 : opposite.y + .02, Math.min(topCorner ? opposite.y - .02 : 1, y));
@@ -237,7 +254,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     handles.forEach((handle, index) => {
       handle.onpointerdown = ev => {
         if (!ready || saving || rendering || dragging) return;
-        ev.preventDefault(); dragging = { index, id: ev.pointerId }; handle.setPointerCapture(ev.pointerId);
+        ev.preventDefault(); dragging = { index, id: ev.pointerId, points: points.map(p => ({ ...p })) }; handle.setPointerCapture(ev.pointerId); controls();
       };
       handle.onpointermove = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
@@ -246,22 +263,34 @@ export function reviewPhoto(ctx, root, firstFile) {
       };
       handle.onpointerup = handle.onpointercancel = handle.onlostpointercapture = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
-        dragging = null;
-        if (ev.type !== "pointerup") { points = allCorners(); redraw(); return; }
+        const previous = dragging.points; dragging = null;
+        controls();
+        if (ev.type !== "pointerup") { points = previous; redraw(); return; }
+        if (straightening) return;
         if (points.some((p, i) => p.x !== allCorners()[i].x || p.y !== allCorners()[i].y)) void showPreview();
       };
       handle.onkeydown = ev => {
         const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
-        if (!delta || !ready || saving || rendering) return;
+        if (!delta || !ready || saving || rendering || dragging) return;
         ev.preventDefault();
         const step = ev.shiftKey ? .02 : .005;
-        if (move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step)) void showPreview();
+        if (move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step) && !straightening) void showPreview();
       };
     });
     $("[data-crop-cancel]", editor).onclick = () => finish(null);
     $("[data-crop-retake-button]", editor).onclick = () => retake.click();
     zoom.onclick = () => { if (previewBlob) ctx.previewBlob(previewBlob); };
-    undo.onclick = () => void showPreview(true);
+    const cancelStraightening = () => {
+      straightening = false; points = allCorners(); redraw(); controls();
+      status.textContent = "כל התעודה מוצגת. גרור את הפינות לחיתוך מלבני.";
+    };
+    straighten.onclick = () => {
+      if (!ready || saving || rendering || dragging) return;
+      if (straightening) { cancelStraightening(); return; }
+      straightening = true; controls();
+      status.textContent = "גרור כל פינה לקצה הנייר, ואז לחץ ״הצג יישור״.";
+    };
+    undo.onclick = () => { if (straightening) cancelStraightening(); else void showPreview(true); };
     retake.onchange = () => {
       const nextFile = retake.files[0]; retake.value = "";
       if (!nextFile) return; // Cancelling the camera preserves the current photo.
@@ -272,6 +301,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       // Original remains actionable during processing: terminate the worker first.
       if (disposed || (saving && !original)) return;
       if (!original && (!ready || dragging || rendering)) return;
+      if (!original && straightening) { await showPreview(false, true); return; }
       saving = true; controls();
       const current = ++generation; revision++;
       status.textContent = original ? "מכין את הצילום המלא…" : "מיישר ושומר את הצילום…";

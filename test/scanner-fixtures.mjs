@@ -1,5 +1,29 @@
 // Procedural fixtures; no customer documents or real accounts in the repository.
 export function installScannerFixtures() {
+  window.makeDifficultPaper = (kind = "blue") => {
+    const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 1280;
+    const pen = canvas.getContext("2d"), pixels = pen.createImageData(canvas.width, canvas.height), samples = [];
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      const shaded = y < 700, light = 1 - .05 * x / canvas.width;
+      const paper = kind === "dim" ? [60, 56, 50] : kind === "blue"
+        ? (shaded ? [123, 168, 216] : [207, 213, 222])
+        : (shaded ? [104, 99, 92] : [232, 220, 205]);
+      for (let c = 0; c < 3; c++) pixels.data[(y * canvas.width + x) * 4 + c] = paper[c] * light;
+      pixels.data[(y * canvas.width + x) * 4 + 3] = 255;
+    }
+    for (const y of [240, 520, 1000]) for (const x of [120, 480, 840]) for (const [index, ratio] of [.84, .97, .99].entries()) {
+      const xx = x + index * 12;
+      for (let yy = y - 10; yy <= y + 10; yy++) for (let c = 0; c < 3; c++) pixels.data[(yy * canvas.width + xx) * 4 + c] *= ratio;
+      // A decimal point is only one pixel: brightening must not erase it.
+      for (let c = 0; c < 3; c++) pixels.data[((y + 4) * canvas.width + xx + 6) * 4 + c] *= ratio;
+      samples.push({ x: xx, y, ratio });
+    }
+    pen.putImageData(pixels, 0, 0);
+    pen.font = "28px sans-serif"; pen.fillStyle = "#343434";
+    pen.fillText("Invoice 3385.50   VAT 609.41   Total 3995.00", 80, 100);
+    pen.fillText("832.89   7.89   07/09/26   99041151", 80, 650);
+    return { canvas, samples };
+  };
   window.makeShadedPaper = () => {
     const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 1280;
     const pen = canvas.getContext("2d"), pixels = pen.createImageData(canvas.width, canvas.height), samples = [];
@@ -29,7 +53,7 @@ export function installScannerFixtures() {
     const canvas = document.createElement("canvas");
     canvas.width = size; canvas.height = mode === "long" ? size * 2 : size * aspect;
     const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#303847"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = mode === "manual" ? "#8e99a8" : "#303847"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     let corners = [{ x: .18, y: .10 }, { x: .88, y: .18 }, { x: .80, y: .92 }, { x: .12, y: .84 }];
     if (mode === "long") corners = [{ x: .28, y: .04 }, { x: .60, y: .055 }, { x: .68, y: .95 }, { x: .36, y: .935 }];
     if (mode === "rotated") {
@@ -47,7 +71,8 @@ export function installScannerFixtures() {
     const pixelCorners = corners.map(p => ({ x: p.x * (canvas.width - 1), y: p.y * (canvas.height - 1) }));
     ctx.beginPath(); pixelCorners.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath();
     const illumination = ctx.createLinearGradient(0, 0, size, canvas.height);
-    illumination.addColorStop(0, "#f8f5ef"); illumination.addColorStop(1, "#d4d1c9");
+    illumination.addColorStop(0, mode === "manual" ? "#929dab" : "#f8f5ef");
+    illumination.addColorStop(1, mode === "manual" ? "#939dac" : "#d4d1c9");
     ctx.fillStyle = illumination; ctx.fill();
     ctx.save(); ctx.clip();
     ctx.fillStyle = "#303030"; ctx.font = `${size * .025}px sans-serif`;
