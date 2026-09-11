@@ -74,7 +74,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     editor.setAttribute("aria-label", "אישור צילום התעודה");
     editor.innerHTML = `<div class="crop-heading"><h3>בדיקת צילום התעודה</h3><button type="button" class="text-button" data-crop-cancel>בטל</button></div>
       <p class="small" data-crop-status role="status" aria-live="polite" aria-busy="true">משפר את התאורה ומיישר את התעודה…</p>
-      <div class="crop-toolbar"><button type="button" class="text-button" data-crop-reset disabled>איפוס חיתוך</button><button type="button" class="text-button" data-crop-zoom disabled>הגדל</button></div>
+      <div class="crop-toolbar"><button type="button" class="text-button" data-crop-undo disabled>אחורה</button><button type="button" class="text-button" data-crop-zoom disabled>הגדל</button></div>
       <div class="crop-source-area"><div class="crop-source" hidden>
       <img data-crop-result alt="תעודה משופרת — גרור את הפינות להתאמת החיתוך" draggable="false">
       <svg class="crop-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path fill="rgba(0,0,0,.42)" fill-rule="evenodd"></path><polygon fill="none" stroke="#7dd3fc" stroke-width="2" vector-effect="non-scaling-stroke"></polygon></svg>
@@ -87,9 +87,11 @@ export function reviewPhoto(ctx, root, firstFile) {
     if (modal) modal.scrollTop = 0;
     const status = $("[data-crop-status]", editor), resultImage = $("[data-crop-result]", editor);
     const stage = $(".crop-source", editor), accept = $("[data-crop-accept]", editor), originalButton = $("[data-crop-original]", editor);
-    const reset = $("[data-crop-reset]", editor), zoom = $("[data-crop-zoom]", editor), viewport = $(".crop-source-area", editor);
+    const undo = $("[data-crop-undo]", editor), zoom = $("[data-crop-zoom]", editor), viewport = $(".crop-source-area", editor);
     const handles = [...editor.querySelectorAll("[data-crop-corner]")], retake = $("[data-crop-retake]", editor);
-    let file = firstFile, worker, resultUrl, previewBlob, basePoints;
+    let file = firstFile, worker, resultUrl, previewBlob, frame;
+    // Only geometry and scroll positions, never another photo-sized pixel buffer.
+    let history = [];
     let points, generation = 0, revision = 0, disposed = false, ready = false, saving = false, rendering = false, dragging = null;
     const allCorners = () => [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const redraw = () => {
@@ -100,7 +102,8 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     const controls = () => {
       const disabled = !ready || saving || rendering;
-      accept.disabled = reset.disabled = zoom.disabled = disabled;
+      accept.disabled = zoom.disabled = disabled;
+      undo.disabled = disabled || !history.length;
       handles.forEach(handle => handle.disabled = disabled);
     };
     const release = () => {
@@ -130,24 +133,24 @@ export function reviewPhoto(ctx, root, firstFile) {
       if (oldUrl) URL.revokeObjectURL(oldUrl);
       await resultImage.decode();
       if (disposed || session !== generation || current !== revision) return false;
-      basePoints = response.corners; points = allCorners(); redraw(); stage.hidden = false;
+      frame = response.frame; points = allCorners(); redraw(); stage.hidden = false;
       return true;
     };
-    const showPreview = async (resetCrop = false) => {
-      if (!ready || disposed || saving || rendering) return;
+    const showPreview = async (back = false) => {
+      if (!ready || disposed || saving || rendering || dragging || (back && !history.length)) return;
       const current = ++revision, session = generation;
+      const previous = { frame, scrollTop: viewport.scrollTop }, restored = back ? history.at(-1) : null;
       rendering = true; controls();
       status.textContent = "מעדכן את החיתוך בתמונה המשופרת…";
       status.setAttribute("aria-busy", "true");
       try {
-        const response = await worker.request("preview", {
-          points: resetCrop ? allCorners() : points,
-          basePoints: resetCrop ? allCorners() : basePoints,
-        });
+        const response = back ? await worker.request("restore", { frame: restored.frame })
+          : await worker.request("preview", { points, frame });
         if (!await display(response, session, current)) return;
-        if (resetCrop) viewport.scrollTop = 0;
-        status.textContent = resetCrop
-          ? "כל התמונה מוצגת עם השיפור. גרור את הפינות סביב התעודה."
+        if (back) { history.pop(); viewport.scrollTop = restored.scrollTop; }
+        else history.push(previous);
+        status.textContent = back
+          ? "חזרנו צעד אחורה. אפשר להתאים שוב את החיתוך."
           : "החיתוך עודכן. בדוק שכל הטקסט בפנים, גם בתחתית התעודה.";
       } catch {
         if (!disposed && session === generation && current === revision) {
@@ -163,7 +166,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     const load = async nextFile => {
       const current = ++generation; revision++; release();
-      file = nextFile; points = allCorners(); basePoints = allCorners(); ready = false; saving = false; rendering = false; dragging = null;
+      file = nextFile; points = allCorners(); frame = null; history = []; ready = false; saving = false; rendering = false; dragging = null;
       originalButton.disabled = false; controls(); redraw();
       stage.hidden = true; viewport.scrollTop = 0;
       status.textContent = "משפר את התאורה ומיישר את התעודה…";
@@ -176,17 +179,20 @@ export function reviewPhoto(ctx, root, firstFile) {
           const decoded = await decodeImage(file);
           if (disposed || current !== generation) { decoded.close?.(); return; }
           let pixels;
-          try { pixels = await pixelsFromImage(decoded); }
+          try { pixels = await pixelsFromImage(decoded, 3000); }
           finally { decoded.close?.(); }
           if (disposed || current !== generation) return;
           response = await worker.request("initPixels", { image: pixels });
         }
         if (disposed || current !== generation) return;
         if (!await display(response, current, revision)) return;
+        // The automatic crop is also one reversible step, so a missed edge can
+        // be recovered with the same Back button as any manual edit.
+        if (response.detected) history.push({ frame: response.originalFrame, scrollTop: 0 });
         ready = true; controls();
         status.setAttribute("aria-busy", "false");
         status.textContent = response.detected
-          ? "גרור את הפינות לחיתוך. גלול כדי לבדוק גם את תחתית התעודה."
+          ? "גרור את הפינות לחיתוך מלבני. גלול כדי לבדוק גם את תחתית התעודה."
           : "לא זוהו גבולות. אפשר לגרור את הפינות או להמשיך ללא חיתוך.";
       } catch {
         if (!disposed && current === generation) {
@@ -197,14 +203,16 @@ export function reviewPhoto(ctx, root, firstFile) {
       }
     };
     const move = (index, x, y) => {
-      const candidate = points.map(p => ({ ...p }));
-      candidate[index] = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
-      // Keep handle identities and prevent crossing, concavity and collapsed crops.
-      if (!candidate.every((a, i) => {
-        const b = candidate[(i + 1) % 4], c = candidate[(i + 2) % 4];
-        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) > .00005;
-      })) return;
-      points = candidate; revision++; redraw();
+      const opposite = points[(index + 2) % 4], leftCorner = index === 0 || index === 3, topCorner = index < 2;
+      const xx = Math.max(leftCorner ? 0 : opposite.x + .02, Math.min(leftCorner ? opposite.x - .02 : 1, x));
+      const yy = Math.max(topCorner ? 0 : opposite.y + .02, Math.min(topCorner ? opposite.y - .02 : 1, y));
+      const left = leftCorner ? xx : opposite.x, right = leftCorner ? opposite.x : xx;
+      const top = topCorner ? yy : opposite.y, bottom = topCorner ? opposite.y : yy;
+      if ((right - left) * (bottom - top) < .003 || (points[index].x === xx && points[index].y === yy)) return false;
+      // Move the two adjacent edges together. Independent corners re-warped and
+      // stretched the already straightened text instead of simply trimming it.
+      points = [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }];
+      revision++; redraw(); return true;
     };
     handles.forEach((handle, index) => {
       handle.onpointerdown = ev => {
@@ -227,14 +235,13 @@ export function reviewPhoto(ctx, root, firstFile) {
         if (!delta || !ready || saving || rendering) return;
         ev.preventDefault();
         const step = ev.shiftKey ? .02 : .005;
-        move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step);
-        void showPreview();
+        if (move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step)) void showPreview();
       };
     });
     $("[data-crop-cancel]", editor).onclick = () => finish(null);
     $("[data-crop-retake-button]", editor).onclick = () => retake.click();
     zoom.onclick = () => { if (previewBlob) ctx.previewBlob(previewBlob); };
-    reset.onclick = () => void showPreview(true);
+    undo.onclick = () => void showPreview(true);
     retake.onchange = () => {
       const nextFile = retake.files[0]; retake.value = "";
       if (!nextFile) return; // Cancelling the camera preserves the current photo.
@@ -254,7 +261,7 @@ export function reviewPhoto(ctx, root, firstFile) {
         let value;
         if (original) value = await readFile(file);
         else {
-          const response = await worker.request("process", { points: basePoints });
+          const response = await worker.request("process", { frame });
           value = await encodeFile(await resultBlob(response), file.name.replace(/\.[^.]+$/, "") + ".jpg");
         }
         if (!disposed && current === generation) finish(value);

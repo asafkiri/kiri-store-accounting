@@ -106,6 +106,77 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(result.small, [200, 300], "no enlargement of a small original");
   });
 
+  test(`${engine.name()}: repeated crops of a perspective photo preserve the proportions of printed shapes`, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { homography, projectPoint, fullCorners, imageFrame, cropFrame, warpImage } = await import("/scan-worker.js");
+      const source = new ImageData(900, 1000);
+      const corners = [{ x: .1, y: .06 }, { x: .91, y: .27 }, { x: .67, y: .94 }, { x: .22, y: .86 }];
+      const toPaper = homography(corners.map(p => ({ x: p.x * 899, y: p.y * 999 })), fullCorners());
+      // Render a known printed shape THROUGH a projective camera transform,
+      // rather than putting horizontal text inside a slanted outline.
+      for (let y = 0; y < source.height; y++) for (let x = 0; x < source.width; x++) {
+        const p = projectPoint(toPaper, { x, y }), gray = Math.hypot(p.x - .5, p.y - .5) < .12 ? 50 : 230;
+        source.data.set([gray, gray, gray, 255], (y * source.width + x) * 4);
+      }
+      const measurements = [], canvases = [];
+      let frame = imageFrame(source, corners);
+      for (let step = 0; step < 5; step++) {
+        const image = warpImage(source, frame.corners, 2500, frame);
+        let left = image.width, top = image.height, right = 0, bottom = 0;
+        for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) if (image.data[(y * image.width + x) * 4] < 100) {
+          left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+        }
+        measurements.push({ width: right - left + 1, height: bottom - top + 1, output: [image.width, image.height] });
+        if (step === 0 || step === 4) {
+          const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+          canvas.getContext("2d").putImageData(image, 0, 0); canvas.style.cssText = "width:100%;height:auto"; canvases.push(canvas);
+        }
+        frame = cropFrame([{ x: .06, y: .035 }, { x: .96, y: .035 }, { x: .96, y: .97 }, { x: .06, y: .97 }], frame);
+      }
+      const comparison = document.createElement("div"); comparison.style.cssText = "display:grid;grid-template-columns:1fr 1fr;align-items:start;gap:24px";
+      comparison.append(...canvases); document.body.replaceChildren(comparison);
+      return measurements;
+    });
+    await mkdir("test-artifacts", { recursive: true });
+    await page.setViewportSize({ width: 960, height: 850 });
+    await page.screenshot({ path: `test-artifacts/crop-proportions-${engine.name()}.png`, fullPage: true });
+    const ratio = result[0].width / result[0].height;
+    for (const measurement of result.slice(1)) {
+      assert.ok(Math.abs(measurement.width / measurement.height / ratio - 1) < .01, `printed proportions must survive repeated crops: ${JSON.stringify(result)}`);
+      assert.ok(Math.abs(measurement.width - result[0].width) <= 2 && Math.abs(measurement.height - result[0].height) <= 2, "trimming must not rescale the remaining ink");
+    }
+  });
+
+  test(`${engine.name()}: large dark and coloured logos do not introduce illumination halos`, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { enhanceImage } = await import("/scan-worker.js");
+      const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 720;
+      const pen = canvas.getContext("2d"); pen.fillStyle = "rgb(232,220,205)"; pen.fillRect(0, 0, 960, 720);
+      const blocks = [{ x: 130, y: 160, w: 300, h: 320, colour: "#204ca0" }, { x: 550, y: 160, w: 250, h: 320, colour: "#343434" }];
+      for (const block of blocks) { pen.fillStyle = block.colour; pen.fillRect(block.x, block.y, block.w, block.h); }
+      pen.putImageData(enhanceImage(pen.getImageData(0, 0, 960, 720)), 0, 0);
+      const rgb = (x, y) => [...pen.getImageData(x, y, 1, 1).data.slice(0, 3)];
+      const measurements = blocks.map(b => ({
+        centre: rgb(b.x + b.w / 2, b.y + b.h / 2),
+        inside: [rgb(b.x + 8, b.y + b.h / 2), rgb(b.x + b.w - 9, b.y + b.h / 2), rgb(b.x + b.w / 2, b.y + 8)],
+        outside: [rgb(b.x - 8, b.y + b.h / 2), rgb(b.x + b.w + 8, b.y + b.h / 2)],
+      }));
+      canvas.style.width = "100%"; document.body.replaceChildren(canvas);
+      return { measurements, paper: rgb(30, 30) };
+    });
+    await mkdir("test-artifacts", { recursive: true });
+    await page.setViewportSize({ width: 960, height: 760 });
+    await page.screenshot({ path: `test-artifacts/logo-illumination-${engine.name()}.png`, fullPage: true });
+    for (const block of result.measurements) {
+      for (const inside of block.inside) assert.ok(inside.every((v, c) => Math.abs(v - block.centre[c]) <= 2), `no inner glow: ${JSON.stringify(block)}`);
+      for (const outside of block.outside) assert.ok(outside.every((v, c) => Math.abs(v - result.paper[c]) <= 2), `no paper halo: ${JSON.stringify(block)}`);
+    }
+    const blue = result.measurements[0].centre;
+    assert.ok(blue[2] - blue[0] >= 40, "logo colour is preserved");
+  });
+
   test(`${engine.name()}: shaded paper becomes neutral and faint single-pixel ink gains contrast without binarization`, async t => {
     const page = await scannerPage(t, engine);
     const result = await page.evaluate(async () => {
@@ -148,7 +219,7 @@ for (const engine of [chromium, webkit]) {
     console.log(`${engine.name()}: shaded-paper correction ${Math.round(result.elapsed)}ms on the test machine; faint-stroke contrast preserved`);
   });
 
-  test(`${engine.name()}: long processed receipt fills the screen, scrolls with reachable actions and resets to the full enhanced photo`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: long receipt stays large, repeated crops undo individually, including the automatic crop`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     await page.evaluate(async () => {
       window.cropMessages = [];
@@ -162,7 +233,7 @@ for (const engine of [chromium, webkit]) {
       const NativeWorker = window.Worker;
       window.Worker = class extends NativeWorker {
         postMessage(message, ...args) {
-          window.cropMessages.push({ type: message.type, points: message.points, basePoints: message.basePoints });
+          window.cropMessages.push({ type: message.type, points: message.points, frame: message.frame });
           super.postMessage(message, ...args);
         }
       };
@@ -184,10 +255,29 @@ for (const engine of [chromium, webkit]) {
     }
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/scanner-long-${engine.name()}.png`, fullPage: true });
-    await page.locator("[data-crop-reset]").tap();
-    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled && document.querySelector("[data-crop-status]").textContent.includes("כל התמונה"));
+    assert.equal(await page.locator("[data-crop-reset]").count(), 0, "Back replaces Reset");
+    const bytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
+    const initialBytes = await bytes();
+    await viewport.evaluate(el => { el.scrollTop = 0; });
+    const crop = async key => {
+      const before = await page.locator("[data-crop-result]").getAttribute("src");
+      await page.locator('[data-crop-corner="0"]').press(key);
+      await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+    };
+    const undo = async () => {
+      const before = await page.locator("[data-crop-result]").getAttribute("src");
+      await page.locator("[data-crop-undo]").tap();
+      await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+    };
+    await crop("Shift+ArrowRight");
+    const firstBytes = await bytes();
+    await crop("Shift+ArrowDown");
+    await undo(); assert.deepEqual(await bytes(), firstBytes, "one Back restores the preceding crop exactly");
+    await undo(); assert.deepEqual(await bytes(), initialBytes, "another Back restores the initial straightened image exactly");
+    await undo();
     const ratio = await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth / img.naturalHeight);
-    assert.ok(Math.abs(ratio - .5) < .001, "reset restores all source edges, including content outside the automatic crop");
+    assert.ok(Math.abs(ratio - .5) < .001, "Back can recover edges missed by the automatic crop");
+    assert.equal(await page.locator("[data-crop-undo]").isDisabled(), true, "history stops at the full enhanced photo");
     assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
     // Compare the actual JPEG displayed by the image element with the upload.
     await page.evaluate(async () => {
@@ -201,7 +291,7 @@ for (const engine of [chromium, webkit]) {
       return { identical: bytes.length === window.confirmedPreviewBytes.length && bytes.every((value, i) => value === window.confirmedPreviewBytes[i]), process: window.cropMessages.find(m => m.type === "process") };
     });
     assert.equal(saved.identical, true, "preview and upload must have identical JPEG bytes");
-    assert.deepEqual(saved.process.points, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
+    assert.deepEqual(saved.process.frame.corners, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
     assert.equal(await page.locator(".crop-modal, .crop-modal-content").count(), 0, "normal scan layout is restored");
     assert.equal(await page.locator(".modal-heading").isVisible(), true);
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
@@ -230,6 +320,8 @@ for (const engine of [chromium, webkit]) {
       const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
       await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
       await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x + 8, y: point.y + 8 }] });
+      const edges = await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top]));
+      assert.equal(edges[0][1], edges[1][1]); assert.equal(edges[0][0], edges[3][0]);
       await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
       await session.detach();
     } else {
@@ -252,7 +344,8 @@ for (const engine of [chromium, webkit]) {
       const result = { keys: Object.keys(file).sort(), width: bitmap.width, height: bitmap.height, mime: file.mime, bytes: blob.size }; bitmap.close(); return result;
     });
     assert.deepEqual(photo.keys, ["data", "mime", "name"]);
-    assert.equal(photo.mime, "image/jpeg"); assert.equal(Math.max(photo.width, photo.height), 2500);
+    assert.equal(photo.mime, "image/jpeg");
+    assert.ok(Math.max(photo.width, photo.height) >= 2000 && Math.max(photo.width, photo.height) <= 2500, "retain available resolution without enlarging a trimmed source");
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     await page.locator("#run-scan").tap();
     await page.waitForSelector("#invoice-form");
@@ -334,19 +427,32 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator("#run-scan").isEnabled(), true);
   });
 
-  test(`${engine.name()}: EXIF orientation and canvas fallback preserve resolution and strip metadata`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: 24MP EXIF capture and canvas fallback cap retained source at 3000px and strip metadata`, { timeout: 60000 }, async t => {
     for (const fallback of [false, true]) {
       const page = await scannerPage(t, engine);
       await page.evaluate(() => window.openScanner());
       await page.evaluate(async fallback => {
         if (fallback) window.SCAN_WORKER_URL = "/scan-worker-no-offscreen.js";
-        const canvas = document.createElement("canvas"); canvas.width = 3000; canvas.height = 2000;
-        const pen = canvas.getContext("2d"); pen.fillStyle = "white"; pen.fillRect(0, 0, 3000, 2000);
+        window.sourceFrames = []; window.transferredSizes = [];
+        const NativeWorker = window.Worker;
+        window.Worker = class extends NativeWorker {
+          constructor(...args) {
+            super(...args);
+            this.addEventListener("message", ({ data }) => { if (data.result?.originalFrame) window.sourceFrames.push(data.result.originalFrame); });
+          }
+          postMessage(message, ...args) {
+            if (message.image) window.transferredSizes.push([message.image.width, message.image.height]);
+            super.postMessage(message, ...args);
+          }
+        };
+        const canvas = document.createElement("canvas"); canvas.width = 6000; canvas.height = 4000;
+        const pen = canvas.getContext("2d"); pen.fillStyle = "white"; pen.fillRect(0, 0, canvas.width, canvas.height);
         pen.fillStyle = "#222"; pen.fillRect(100, 100, 200, 200);
         const jpeg = new Uint8Array(await (await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .94))).arrayBuffer());
         // A minimal EXIF APP1 segment: orientation 6 (90 degrees clockwise).
         const exif = new Uint8Array([255,225,0,34,69,120,105,102,0,0,73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
         const photo = new File([jpeg.slice(0, 2), exif, jpeg.slice(2)], "rotated.jpg", { type: "image/jpeg" });
+        canvas.width = canvas.height = 1;
         const transfer = new DataTransfer(); transfer.items.add(photo);
         const input = document.querySelector("#camera-file"); input.files = transfer.files;
         window.pendingPhotoSelection = input.onchange();
@@ -355,6 +461,8 @@ for (const engine of [chromium, webkit]) {
       await page.waitForFunction(() => !document.querySelector("[data-crop-zoom]").disabled);
       const preview = await page.locator("[data-crop-result]").evaluate(img => [img.naturalWidth, img.naturalHeight]);
       assert.ok(preview[1] > preview[0], "EXIF is applied before positioning corners");
+      assert.deepEqual(await page.evaluate(() => window.sourceFrames.map(f => [f.width, f.height])), [[2000, 3000]], "retained oriented RGBA is 24MB instead of 96MB");
+      if (fallback) assert.deepEqual(await page.evaluate(() => window.transferredSizes), [[2000, 3000]], "fallback scales before transferring pixels to the worker");
       await page.locator("[data-crop-accept]").tap();
       await page.waitForFunction(() => !document.querySelector(".scan-crop"));
       const dimensions = await page.evaluate(async () => {

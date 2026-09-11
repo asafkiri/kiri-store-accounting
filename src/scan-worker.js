@@ -185,11 +185,27 @@ export function mapCropCorners(points, basePoints = fullCorners()) {
   if (!validCorners(mapped)) throw Error("Crop too small");
   return mapped;
 }
-export function warpImage(image, points, maxEdge = 2500) {
+export function imageFrame(image, points = fullCorners()) {
   if (!validCorners(points)) throw Error("Invalid corners");
   const q = points.map(p => ({ x: p.x * (image.width - 1), y: p.y * (image.height - 1) }));
-  const naturalWidth = Math.max(distance(q[0], q[1]), distance(q[3], q[2])) + 1;
-  const naturalHeight = Math.max(distance(q[0], q[3]), distance(q[1], q[2])) + 1;
+  return { corners: points, width: Math.max(distance(q[0], q[1]), distance(q[3], q[2])) + 1,
+    height: Math.max(distance(q[0], q[3]), distance(q[1], q[2])) + 1 };
+}
+export function cropFrame(points, frame) {
+  // Refining an already straightened page is a rectangular crop, not another
+  // perspective correction. Keep its pixel metric instead of measuring the
+  // slanted source edges again (which stretched the print on each edit).
+  if (!validCorners(points) || points[0].y !== points[1].y || points[1].x !== points[2].x ||
+      points[2].y !== points[3].y || points[3].x !== points[0].x) throw Error("Invalid crop rectangle");
+  return { corners: mapCropCorners(points, frame.corners),
+    width: (frame.width - 1) * (points[1].x - points[0].x) + 1,
+    height: (frame.height - 1) * (points[3].y - points[0].y) + 1 };
+}
+export function warpImage(image, points, maxEdge = 2500, frame = imageFrame(image, points)) {
+  if (!validCorners(points)) throw Error("Invalid corners");
+  const q = points.map(p => ({ x: p.x * (image.width - 1), y: p.y * (image.height - 1) }));
+  const naturalWidth = frame.width, naturalHeight = frame.height;
+  if (![naturalWidth, naturalHeight].every(n => Number.isFinite(n) && n >= 2)) throw Error("Invalid crop size");
   const scale = Math.min(1, maxEdge / Math.max(naturalWidth, naturalHeight));
   const w = Math.max(2, Math.floor(naturalWidth * scale)), h = Math.max(2, Math.floor(naturalHeight * scale));
   const transform = homography([{ x: 0, y: 0 }, { x: w - 1, y: 0 }, { x: w - 1, y: h - 1 }, { x: 0, y: h - 1 }], q);
@@ -224,7 +240,7 @@ export function enhanceImage(image) {
     const cell = Math.min(gh - 1, Math.floor(y * gh / h)) * gw + Math.min(gw - 1, Math.floor(x * gw / w));
     histogram[cell * 64 + (lum >> 2)]++; counts[cell]++;
   }
-  const low = new Uint8Array(cells), high = new Uint8Array(cells);
+  const totals = counts.slice(), low = new Uint8Array(cells), high = new Uint8Array(cells);
   for (let cell = 0; cell < cells; cell++) {
     let sum = 0, lower = false;
     for (let bin = 0; bin < 64; bin++) {
@@ -234,6 +250,7 @@ export function enhanceImage(image) {
     }
   }
   let background = Array.from({ length: 3 }, () => new Float32Array(cells));
+  const paperLevel = [...high].sort((a, b) => a - b)[Math.floor(cells * .9)];
   counts.fill(0);
   for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) {
     const i = (y * w + x) * 4, lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
@@ -243,22 +260,43 @@ export function enhanceImage(image) {
     for (let c = 0; c < 3; c++) background[c][cell] += data[i + c];
     counts[cell]++;
   }
+  // A solid logo has no trustworthy paper samples. Never substitute its dark
+  // histogram value: that created a bright halo both inside and around logos.
+  // Extend neighbouring paper into those cells, then smooth the illumination.
+  const known = new Uint8Array(cells), queue = new Int32Array(cells);
+  let head = 0, tail = 0;
+  for (let cell = 0; cell < cells; cell++) {
+    if (counts[cell] < Math.max(1, totals[cell] * .15) || high[cell] < Math.max(100, paperLevel * .6)) continue;
+    known[cell] = 1; queue[tail++] = cell;
+    for (let c = 0; c < 3; c++) background[c][cell] /= counts[cell];
+  }
+  if (!tail) for (const channel of background) channel.fill(255);
+  while (head < tail) {
+    const cell = queue[head++], x = cell % gw, y = Math.floor(cell / gw);
+    for (const neighbour of [x > 0 ? cell - 1 : -1, x + 1 < gw ? cell + 1 : -1, y > 0 ? cell - gw : -1, y + 1 < gh ? cell + gw : -1]) {
+      if (neighbour < 0 || known[neighbour]) continue;
+      for (let c = 0; c < 3; c++) background[c][neighbour] = background[c][cell];
+      known[neighbour] = 1; queue[tail++] = neighbour;
+    }
+  }
   for (let c = 0; c < 3; c++) {
-    for (let cell = 0; cell < cells; cell++)
-      background[c][cell] = counts[cell] ? background[c][cell] / counts[cell] : high[cell];
     for (let pass = 0; pass < 2; pass++) background[c] = gaussian3(background[c], gw, gh);
   }
   // Expand the distance of ink from its local paper instead of brightening ink
   // along with the background. This monotone curve has a soft highlight shoulder
   // and a linear dark toe: gray strokes stay gray, with no threshold or posterize.
-  const tone = new Float32Array(6145), paper = 248, contrast = 2.2;
+  // Leave highlight headroom for very pale thermal ink rather than driving its
+  // local paper almost to 255 before sharpening has a chance to preserve it.
+  const tone = new Float32Array(6145), paper = 244, contrast = 2.2, headroom = 255 - paper;
   for (let i = 0; i < tone.length; i++) {
     const ratio = i / 2048;
     tone[i] = ratio <= 1 ? paper * ratio / (contrast - (contrast - 1) * ratio)
-      : paper + 7 * (1 - Math.exp(-(ratio - 1) * paper * contrast / 7));
+      : paper + headroom * (1 - Math.exp(-(ratio - 1) * paper * contrast / headroom));
   }
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const gx = x * (gw - 1) / Math.max(1, w - 1), gy = y * (gh - 1) / Math.max(1, h - 1), ix = Math.floor(gx), iy = Math.floor(gy), dx = gx - ix, dy = gy - iy;
+    // Samples describe cell centres, not the outer edges of the whole photo.
+    const gx = clamp((x + .5) * gw / w - .5, 0, gw - 1), gy = clamp((y + .5) * gh / h - .5, 0, gh - 1);
+    const ix = Math.floor(gx), iy = Math.floor(gy), dx = gx - ix, dy = gy - iy;
     const i = (y * w + x) * 4;
     for (let channel = 0; channel < 3; channel++) {
       const grid = background[channel];
@@ -304,19 +342,20 @@ async function output(image, retain = false) {
     return { blob: await canvas.convertToBlob({ type: "image/jpeg", quality: .88 }) };
   } finally { canvas.width = canvas.height = 1; }
 }
-async function prepare(points) {
-  const key = JSON.stringify(points);
+async function prepare(frame) {
+  const key = JSON.stringify(frame);
   if (key !== preparedKey) {
-    prepared = enhanceImage(warpImage(sourcePixels, points));
+    prepared = null; preparedBlob = null;
+    prepared = enhanceImage(warpImage(sourcePixels, frame.corners, 2500, frame));
     preparedKey = key; preparedBlob = null;
   }
   // The displayed preview and accepted upload use the very same 2500px result.
   // In the canvas fallback, retain the pixels when transferring to the UI.
   const result = preparedBlob ? { blob: preparedBlob } : await output(prepared, true);
   if (result.blob && key === preparedKey) preparedBlob = result.blob;
-  return { corners: points, ...result };
+  return { frame, ...result };
 }
-async function handle({ type, file, image, points, basePoints }) {
+async function handle({ type, file, image, points, frame }) {
   let thumbnail;
   if (type === "init") {
     if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function") return { needsPixels: true };
@@ -325,20 +364,24 @@ async function handle({ type, file, image, points, basePoints }) {
       original = await createImageBitmap(file, { imageOrientation: "from-image" });
       if (!original.width || original.width * original.height > 80_000_000) throw Error("Image too large");
       thumbnail = bitmapPixels(original, 1000);
-      sourcePixels = bitmapPixels(original);
+      // Retain at most 3000px per side, not a 12/24MP RGBA capture. The decoded
+      // bitmap is transient and closed immediately; output is still <=2500px.
+      sourcePixels = bitmapPixels(original, 3000);
     } catch {
       original?.close(); original = null;
       return { needsPixels: true };
     }
     original.close(); original = null;
   } else if (type === "initPixels") {
-    sourcePixels = image; prepared = preparedKey = preparedBlob = null;
+    sourcePixels = Math.max(image.width, image.height) > 3000 ? warpImage(image, fullCorners(), 3000) : image;
+    prepared = preparedKey = preparedBlob = null;
     thumbnail = warpImage(sourcePixels, fullCorners(), 1000);
-  } else if (type === "preview") return prepare(mapCropCorners(points, basePoints));
-  else if (type === "process") return prepare(points);
+  } else if (type === "preview") return prepare(cropFrame(points, frame));
+  else if (type === "process" || type === "restore") return prepare(frame);
   else throw Error("Unknown image operation");
   const corners = detectCorners(thumbnail);
-  return { detected: Boolean(corners), ...(await prepare(corners || fullCorners())) };
+  return { detected: Boolean(corners), originalFrame: imageFrame(sourcePixels),
+    ...(await prepare(imageFrame(sourcePixels, corners || fullCorners()))) };
 }
 if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
   self.onmessage = async ({ data }) => {
