@@ -184,3 +184,29 @@ test("async export errors reach the Hebrew action error handler", async t => {
   assert.match(document.querySelector("#toast").textContent, /הפעולה לא הושלמה/);
   assert.doesNotMatch(document.querySelector("#toast").textContent, /NotAllowedError/);
 });
+
+test("saved invoice exposes its attachments and opens the linked file through the API", async t => {
+  const id = "a".repeat(64), requests = [];
+  await setup(t, {
+    request: async (path, options) => {
+      requests.push({ path, options });
+      if (path === "me") return { uid: "owner" };
+      if (path === "documents/" + id) return new Blob(["test photo"], { type: "image/jpeg" });
+      return {
+        full: true, version: 1, suppliers: [], dailyCash: [],
+        invoices: [{ id: "photo-invoice", documentNumber: "PHOTO-1", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000, deductions: [], attachmentIds: [id] }],
+      };
+    },
+  });
+  await globalThis.appAuthCallback({});
+  const card = document.querySelector('[data-action="detail"][data-id="photo-invoice"]');
+  assert.match(card.textContent, /מסמך מצורף/);
+  card.click();
+  assert.match(document.getElementById("modal").textContent, /תמונות ומסמכים מצורפים/);
+  document.querySelector("[data-open-document]").click();
+  await tick();
+  const request = requests.find(request => request.path === "documents/" + id);
+  assert.equal(request.options.blob, true);
+  assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
+  document.querySelector(".preview-dialog").onclose();
+});
