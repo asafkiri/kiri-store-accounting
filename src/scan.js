@@ -9,6 +9,7 @@ import {
 import { invoiceForm } from "./forms.js";
 import { readFile, encodeFile, decodeImage, validateFile } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
+import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
 export { readFile } from "./image-upload.js";
 
 async function pixelsFromImage(image, maxEdge = Infinity) {
@@ -460,14 +461,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
             ? await readFile(file)
             : await reviewPhoto(ctx, root, file);
           if (!root.isConnected || !prepared) break;
-          if ([...draft.files, prepared].reduce((n, f) => n + f.data.length * 3 / 4, 0) > 12 * 1024 * 1024)
-            throw Error("הקבצים גדולים מ־12 מגה. בחר פחות עמודים.");
-          draft.files.push(prepared);
-          draft.attachmentIds = [];
-          draft.jobId = null;
-          draft.status = "editing";
-          await persist();
-          paint();
+          await acceptPage(prepared);
         }
       } catch (error) {
         showError(error);
@@ -478,6 +472,42 @@ export async function scanDialog(ctx, purpose = "invoice") {
         if (root.isConnected) paint();
       }
     };
+  // "Take a page" opens the in-app camera when it is available; otherwise the
+  // label activates the phone camera natively (no scripted input.click()).
+  const cameraInput = $("#camera-file", root);
+  const captureLive = async () => {
+    if (busy || draft.jobId) return;
+    busy = true;
+    ctx.setModalBusy(true);
+    paint();
+    err.hidden = true;
+    try {
+      if (draft.files.length >= 8) throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
+      let result = await liveCapture(ctx, root);
+      while (root.isConnected && result?.file) {
+        const prepared = await reviewPhoto(ctx, root, result.file, { worker: result.worker, hint: result.hint, onRetake: !result.unavailable });
+        if (!root.isConnected) break;
+        if (prepared?.retake) { result = await liveCapture(ctx, root); continue; }
+        if (prepared) await acceptPage(prepared);
+        break;
+      }
+      if (root.isConnected && result?.unavailable && !result.file) {
+        status.hidden = false;
+        status.textContent = "המצלמה בתוך האפליקציה לא זמינה בדפדפן הזה. לחיצה על ״צלם עמוד״ פותחת את מצלמת הטלפון.";
+      }
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy = false;
+      ctx.setModalBusy(false);
+      if (root.isConnected) paint();
+    }
+  };
+  cameraInput.closest("label").addEventListener("click", ev => {
+    if (busy || draft.jobId || cameraInput.disabled || !liveCameraSupported() || isLiveCameraUnavailable()) return;
+    ev.preventDefault();
+    void captureLive();
+  });
   root.addEventListener("click", async (ev) => {
     const remove = ev.target.closest("[data-remove-file]"),
       preview = ev.target.closest("[data-preview-file]");

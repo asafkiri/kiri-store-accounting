@@ -735,6 +735,254 @@ for (const engine of [chromium, webkit]) {
       await page.close();
     }
   });
+
+  // Seeded procedural photographs (test/scanner-fixtures.mjs), each drawn at
+  // 1000px and detected both as a 320px live frame (canvas downscale, as the
+  // camera view does) and through the still path (box downscale and refinement
+  // at 1000px). Tolerances are percent of the long edge; "inward" is how far a
+  // found corner sits inside the true page, where print would be cut off.
+  test(`${engine.name()}: procedural fixtures are found within tolerance at 320px and in the still path, negatives stay null`, { timeout: 180000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
+      const positives = ["beige-texture", "dark-counter", "wood-grain", "white-table-soft-shadow", "cut-off", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
+      const frame = (canvas, maxEdge) => {
+        const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
+        if (scale === 1) return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+        const small = document.createElement("canvas"); small.width = Math.round(canvas.width * scale); small.height = Math.round(canvas.height * scale);
+        const pen = small.getContext("2d", { willReadFrequently: true }); pen.drawImage(canvas, 0, 0, small.width, small.height);
+        return pen.getImageData(0, 0, small.width, small.height);
+      };
+      const rows = [];
+      for (const mode of positives) {
+        const made = window.makeDocumentCanvas(mode, 1000, .85, 1), truth = made.expected || made.corners;
+        for (const [path, image] of [["live", frame(made.canvas, DETECT_EDGE)], ["still", frame(made.canvas, 1000)]]) {
+          const found = detectDocument(image), deviation = found.corners ? window.cornerDeviation(found.corners, truth, image.width, image.height) : null;
+          rows.push({ mode, path, confidence: found.confidence, reason: found.reason, borderSides: found.borderSides,
+            max: deviation && +deviation.max.toFixed(2), inward: deviation && +deviation.maxInward.toFixed(2) });
+        }
+      }
+      const negatives = [];
+      for (const mode of ["none", "circle", "texture-only"]) {
+        const made = window.makeDocumentCanvas(mode, 1000, .85, 1);
+        for (const [path, image] of [["live", frame(made.canvas, DETECT_EDGE)], ["still", frame(made.canvas, 1000)]]) {
+          const found = detectDocument(image);
+          negatives.push({ mode, path, corners: found.corners, confidence: found.confidence, reason: found.reason });
+        }
+      }
+      let textureFalsePositives = 0;
+      for (let seed = 1; seed <= 100; seed++) {
+        if (detectDocument(frame(window.makeDocumentCanvas("texture-only", 1000, .85, seed).canvas, DETECT_EDGE)).corners) textureFalsePositives++;
+      }
+      return { rows, negatives, textureFalsePositives };
+    });
+    for (const row of result.rows) {
+      const label = `${row.mode}/${row.path}: ${JSON.stringify(row)}`;
+      assert.ok(row.max !== null, `document must be found: ${label}`);
+      assert.ok(row.max <= (row.mode === "crumpled" ? 2.5 : 1.5), `corner within tolerance: ${label}`);
+      assert.ok(row.inward <= .5, `no print cut off: ${label}`);
+      assert.ok(row.confidence >= .6, `confidence reaches the auto-capture lock: ${label}`);
+      assert.equal(row.borderSides, row.mode === "cut-off" ? 1 : 0, `frame borders used only where the page leaves the frame: ${label}`);
+    }
+    for (const row of result.negatives) {
+      assert.equal(row.corners, null, `no document: ${JSON.stringify(row)}`);
+      assert.equal(row.confidence, 0, JSON.stringify(row));
+      assert.ok(["no-lines", "fills-frame", "no-supported-quad"].includes(row.reason), JSON.stringify(row));
+    }
+    assert.ok(result.textureFalsePositives <= 1, `texture-only false positives over 100 seeds: ${result.textureFalsePositives}`);
+    t.diagnostic(`${engine.name()} texture-only false positives /100: ${result.textureFalsePositives}`);
+  });
+
+  // Timing is printed for every run; the guards are wide so a busy shared runner
+  // cannot fail CI, while a large regression still does.
+  test(`${engine.name()}: detection time at 320px and in the still path stays within the guards`, { timeout: 120000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const measure = () => page.evaluate(async () => {
+      const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
+      const { canvas } = window.makeDocumentCanvas("beige-texture", 1000, .85, 1);
+      const small = document.createElement("canvas"); small.width = Math.round(canvas.width * DETECT_EDGE / canvas.height); small.height = DETECT_EDGE;
+      small.getContext("2d").drawImage(canvas, 0, 0, small.width, small.height);
+      const live = small.getContext("2d").getImageData(0, 0, small.width, small.height), still = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      const time = (image, runs) => {
+        const samples = [];
+        for (let k = 0; k < runs; k++) { const t0 = performance.now(); detectDocument(image); samples.push(performance.now() - t0); }
+        samples.sort((a, b) => a - b);
+        return { median: +samples[samples.length >> 1].toFixed(1), p95: +samples[Math.min(samples.length - 1, Math.floor(samples.length * .95))].toFixed(1) };
+      };
+      detectDocument(live);
+      return { live: time(live, 20), still: time(still, 10) };
+    });
+    const timing = await measure();
+    t.diagnostic(`${engine.name()} detect 320px median ${timing.live.median}ms p95 ${timing.live.p95}ms; still path (1000px) median ${timing.still.median}ms p95 ${timing.still.p95}ms`);
+    assert.ok(timing.live.median <= 60, `320px detection median ${timing.live.median}ms`);
+    assert.ok(timing.still.median <= 300, `still path median ${timing.still.median}ms`);
+    if (engine.name() === "chromium") {
+      // A 4x CPU slowdown approximates a mid-range phone; printed, not asserted.
+      const session = await page.context().newCDPSession(page);
+      await session.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      const throttled = await measure();
+      await session.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+      t.diagnostic(`chromium 4x CPU throttle: detect 320px median ${throttled.live.median}ms p95 ${throttled.live.p95}ms`);
+    }
+  });
+
+  // The in-app camera is exercised with a fake getUserMedia backed by
+  // canvas.captureStream: a page slides across the frame, then holds still.
+  const fakeCamera = () => {
+    window.liveStreams = []; window.workerLog = []; window.workerCount = 0; window.cameraMode = "page";
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args); window.workerCount++;
+        this.addEventListener("message", ({ data }) => {
+          if (data.result && "hintUsed" in data.result) window.workerLog.push({ type: "init-result", hintUsed: data.result.hintUsed, detected: data.result.detected, blob: data.result.blob });
+        });
+      }
+      postMessage(message, ...args) { window.workerLog.push({ type: message.type, hint: Boolean(message.hint) }); super.postMessage(message, ...args); }
+    };
+    const { canvas: paper } = window.makeDocumentCanvas("dark-counter", 1000, .85, 1);
+    const scene = document.createElement("canvas"); scene.width = 1800; scene.height = 2400;
+    const small = document.createElement("canvas"); small.width = 1280; small.height = 720;
+    const pen = scene.getContext("2d"), smallPen = small.getContext("2d");
+    window.sceneMoving = true; let step = 0;
+    // Redraw continuously: a captured canvas only produces frames when it is drawn to.
+    setInterval(() => {
+      step++;
+      const dx = window.sceneMoving ? [0, 60, 120, 180][step % 4] - 90 : 0;
+      pen.fillStyle = "#282624"; pen.fillRect(0, 0, scene.width, scene.height);
+      pen.drawImage(paper, dx, 0, scene.width, scene.height);
+      smallPen.fillStyle = "#282624"; smallPen.fillRect(0, 0, small.width, small.height);
+      smallPen.drawImage(paper, 300, -100, 700, 933);
+    }, 66);
+    if (!navigator.mediaDevices) Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    navigator.mediaDevices.getUserMedia = async constraints => {
+      window.lastConstraints = constraints;
+      if (window.cameraMode === "denied") throw new DOMException("Permission denied", "NotAllowedError");
+      const stream = (window.cameraMode === "small" ? small : scene).captureStream(15);
+      window.liveStreams.push(stream);
+      return stream;
+    };
+  };
+  test(`${engine.name()}: the live camera shows the polygon, locks only when still, hands the frame with a hint to the review, and falls back cleanly`, { timeout: 180000 }, async t => {
+    const page = await scannerPage(t, engine);
+    if (!await page.evaluate(() => typeof HTMLCanvasElement.prototype.captureStream === "function")) { t.skip("canvas.captureStream is not available in this engine"); return; }
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(fakeCamera);
+    const cameraLabel = page.locator("label:has(#camera-file)");
+    const detectCount = () => page.evaluate(() => window.workerLog.filter(entry => entry.type === "detect").length);
+    const tracksEnded = () => page.evaluate(() => window.liveStreams.every(stream => stream.getTracks().every(track => track.readyState === "ended")));
+    // 1. Moving page: the polygon follows it, nothing is captured.
+    await cameraLabel.tap();
+    await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    assert.deepEqual(await page.evaluate(() => [window.lastConstraints.video.facingMode.ideal, window.lastConstraints.video.width.ideal]), ["environment", 3840]);
+    await page.waitForFunction(() => !document.querySelector("[data-live-polygon]").hasAttribute("hidden"));
+    await page.waitForFunction(() => window.workerLog.filter(entry => entry.type === "detect").length >= 12);
+    assert.equal(await page.locator(".scan-crop").count(), 0, "no capture while the page moves");
+    const polygon = await page.evaluate(() => {
+      const element = document.querySelector("[data-live-polygon]"), points = element.getAttribute("points").trim().split(/\s+/).map(pair => pair.split(",").map(Number));
+      const area = Math.abs(points.reduce((sum, p, i) => { const q = points[(i + 1) % points.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+      return { hidden: element.hasAttribute("hidden"), display: getComputedStyle(element).display, points, area };
+    });
+    assert.ok(!polygon.hidden && polygon.display !== "none" && polygon.points.length === 4 && polygon.area > 2000 && polygon.points.every(p => p.every(v => v >= 0 && v <= 100)), `the polygon outlines the page: ${JSON.stringify(polygon)}`);
+    assert.equal(await page.locator("[data-live-shutter]").isEnabled(), true);
+    const layout = await page.evaluate(() => {
+      const rect = el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; };
+      return { frame: rect(document.querySelector("[data-live-frame]")), shutter: rect(document.querySelector("[data-live-shutter]")), status: document.querySelector("[data-live-status]").textContent, viewport: [innerWidth, innerHeight] };
+    });
+    assert.ok(layout.frame[2] - layout.frame[0] > 100 && layout.frame[3] - layout.frame[1] > 100, `camera frame is laid out: ${JSON.stringify(layout)}`);
+    assert.ok(layout.shutter[3] <= layout.viewport[1] && layout.shutter[1] >= layout.frame[3] - 1, `shutter below the frame and on screen: ${JSON.stringify(layout)}`);
+    assert.ok(Math.abs((layout.frame[2] - layout.frame[0]) / (layout.frame[3] - layout.frame[1]) - .75) < .02, `frame keeps the 3:4 video proportions: ${JSON.stringify(layout)}`);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/live-camera-${engine.name()}.png` });
+    // 2. Still page: lock within a few detections, then the review opens with the hint.
+    const before = await detectCount();
+    await page.evaluate(() => { window.sceneMoving = false; });
+    await page.waitForSelector(".scan-crop");
+    assert.ok(await detectCount() - before <= 12, `locks within a few frames after the page holds still (${await detectCount() - before})`);
+    assert.equal(await page.locator(".scan-live").count(), 0, "the live view closes when the review opens");
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    const handover = await page.evaluate(() => ({ workers: window.workerCount, init: window.workerLog.find(entry => entry.type === "init"), result: window.workerLog.find(entry => entry.type === "init-result") }));
+    assert.equal(handover.workers, 1, "the review reuses the live view's worker");
+    assert.equal(handover.init?.hint, true, "the captured frame carries the detection hint");
+    assert.deepEqual([handover.result?.hintUsed, handover.result?.detected], [true, true], JSON.stringify(handover));
+    assert.equal(await tracksEnded(), true, "camera tracks stop once the frame is captured");
+    assert.match(await page.locator("[data-crop-status]").textContent(), /בדוק שכל התעודה נראית/);
+    // 3. Retake returns to the camera; cancelling it keeps no page.
+    await page.locator("[data-crop-retake-button]").tap();
+    await page.waitForSelector(".scan-live");
+    await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    assert.equal(await page.locator(".scan-crop").count(), 0);
+    await page.locator("[data-live-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.equal(await tracksEnded(), true, "cancelling stops the camera");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0]?.[1].files.length ?? 0), 0);
+    // 4. Hiding the tab pauses the camera and stops its tracks; showing it resumes.
+    await page.evaluate(() => { window.sceneMoving = true; });
+    await cameraLabel.tap();
+    await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    const streamsBefore = await page.evaluate(() => window.liveStreams.length);
+    await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => true, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await page.waitForFunction(() => !document.querySelector("[data-live-paused]").hidden);
+    assert.equal(await tracksEnded(), true, "a hidden tab releases the camera");
+    await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await page.waitForFunction(streams => window.liveStreams.length > streams && document.querySelector("[data-live-paused]").hidden && document.querySelector("[data-live-video]").videoWidth === 1800, streamsBefore);
+    // 5. Approval saves the review's own result, byte for byte.
+    await page.evaluate(() => { window.sceneMoving = false; });
+    await page.waitForSelector(".scan-crop");
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy && window.scanDrafts()[0]?.[1].files.length === 1);
+    assert.equal(await page.evaluate(async () => {
+      const saved = window.scanDrafts()[0][1].files[0], blob = window.workerLog.filter(entry => entry.type === "init-result").at(-1).blob;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      return saved.mime === "image/jpeg" && btoa(binary) === saved.data;
+    }), true, "the saved page is the worker's own output");
+    // 6. A stream below 1600px falls back to the phone camera and stays out of the way afterwards.
+    await page.evaluate(() => { window.cameraMode = "small"; });
+    await cameraLabel.tap();
+    await page.waitForFunction(() => !document.querySelector("[data-live-unavailable]")?.hidden);
+    assert.equal(await page.locator("[data-live-fallback]").count(), 1, "the overlay offers the phone camera");
+    assert.equal(await tracksEnded(), true, "the small stream is released");
+    await page.locator("[data-live-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.match(await page.locator("#scan-status").textContent(), /מצלמת הטלפון/);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), cameraLabel.tap()]);
+    assert.ok(chooser, "after a failure the button opens the phone camera natively");
+    assert.equal(await page.locator(".scan-live").count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+    await page.close();
+    // 7. Fresh page: turning the phone to landscape keeps the frame, shutter and
+    // cancel on screen; a denied permission gives the same fallback as above.
+    const denied = await scannerPage(t, engine);
+    await denied.evaluate(() => window.openScanner());
+    await denied.evaluate(fakeCamera);
+    await denied.locator("label:has(#camera-file)").tap();
+    await denied.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    await denied.setViewportSize({ width: 844, height: 390 });
+    const landscapeLayout = () => denied.evaluate(() => {
+      const rect = el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; };
+      return { frame: rect(document.querySelector("[data-live-frame]")), shutter: rect(document.querySelector("[data-live-shutter]")), cancel: rect(document.querySelector("[data-live-cancel]")), viewport: [innerWidth, innerHeight] };
+    });
+    await denied.waitForFunction(() => innerWidth === 844 && document.querySelector("[data-live-frame]").getBoundingClientRect().height < 390);
+    const landscape = await landscapeLayout();
+    for (const [name, box] of Object.entries({ frame: landscape.frame, shutter: landscape.shutter, cancel: landscape.cancel }))
+      assert.ok(box[0] >= 0 && box[1] >= 0 && box[2] <= landscape.viewport[0] && box[3] <= landscape.viewport[1] && box[2] > box[0] && box[3] > box[1], `${name} on screen in landscape: ${JSON.stringify(landscape)}`);
+    assert.ok(Math.abs((landscape.frame[2] - landscape.frame[0]) / (landscape.frame[3] - landscape.frame[1]) - .75) < .03, `the portrait video keeps its proportions in landscape: ${JSON.stringify(landscape)}`);
+    await denied.screenshot({ path: `test-artifacts/live-camera-landscape-${engine.name()}.png` });
+    await denied.locator("[data-live-cancel]").tap();
+    await denied.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    await denied.setViewportSize(phoneOptions(engine).viewport);
+    await denied.evaluate(() => { window.cameraMode = "denied"; });
+    await denied.locator("label:has(#camera-file)").tap();
+    await denied.waitForFunction(() => !document.querySelector("[data-live-unavailable]")?.hidden);
+    await denied.locator("[data-live-cancel]").tap();
+    await denied.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    const [deniedChooser] = await Promise.all([denied.waitForEvent("filechooser"), denied.locator("label:has(#camera-file)").tap()]);
+    assert.ok(deniedChooser, "a denied permission hands the button to the phone camera");
+    assert.deepEqual(await denied.evaluate(() => window.scannerCspViolations), []);
+  });
 }
 
 for (const engine of [chromium, webkit]) {
