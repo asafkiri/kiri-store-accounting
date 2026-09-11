@@ -21,8 +21,15 @@ const phoneOptions = (engine) => ({
 async function scannerPage(t, engine) {
   const server = createBrowserCheckServer();
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => new Promise(resolve => server.close(resolve)));
-  const browser = await engine.launch(); t.after(() => browser.close());
+  let browser;
+  // Close the browser before its HTTP server. A failed UI check can leave an
+  // active connection, which otherwise hides the failure behind a stuck hook.
+  t.after(async () => {
+    try { await browser?.close(); }
+    finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  }, { timeout: 15000 });
+  console.log(`Starting ${t.name}`);
+  browser = await engine.launch();
   const page = await browser.newPage(phoneOptions(engine));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => document.querySelector("#result").textContent !== "Running…");
@@ -334,6 +341,7 @@ for (const engine of [chromium, webkit]) {
 
   test(`${engine.name()}: missed automatic boundaries can be aligned manually before a single perspective render`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(async () => {
       window.cropMessages = []; const NativeWorker = window.Worker;
       window.cropBlobs = new Map(); const createObjectURL = URL.createObjectURL.bind(URL);
@@ -372,7 +380,12 @@ for (const engine of [chromium, webkit]) {
     for (let i = 0; i < 4; i++) assert.ok(Math.hypot(selected[i].x - corners[i].x, selected[i].y - corners[i].y) < .01, "four independent corners follow the paper");
     assert.equal(await page.evaluate(() => window.cropMessages.filter(m => ["preview", "straighten"].includes(m.type)).length), 0);
     await page.locator("[data-crop-accept]").tap();
-    await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, initialUrl);
+    try {
+      await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, initialUrl, { timeout: 18000 });
+    } catch (error) {
+      const state = await page.evaluate(() => ({ status: document.querySelector("[data-crop-status]")?.textContent, accept: document.querySelector("[data-crop-accept]")?.outerHTML, messages: window.cropMessages.map(({ type, points, frame }) => ({ type, points, frame })) }));
+      throw Error(`${error.message}\n${JSON.stringify({ state, errors })}`);
+    }
     await assertWholeCropVisible(page);
     assert.equal(await page.locator("[data-crop-accept]").textContent(), "אשר", "show the result before saving it");
     assert.equal(await page.evaluate(() => window.cropMessages.filter(m => m.type === "straighten").length), 1);
