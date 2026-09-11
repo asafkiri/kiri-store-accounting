@@ -59,6 +59,9 @@ export function createBrowserCheckServer() {
     if (
       [
         "/image-upload.js",
+        "/drafts.js",
+        "/preview.js",
+        "/export.js",
         "/scan-worker.js",
         "/scan.js",
         "/forms.js",

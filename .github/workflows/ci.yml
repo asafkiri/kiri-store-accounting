@@ -16,15 +16,15 @@ jobs:
           repository: asafkiri/kiri-store-accounting-ai-scan
           ref: main
           path: api-rules-check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
       - run: |
           cmp firestore.rules api-rules-check/test/firestore.rules
           cmp storage.rules api-rules-check/test/storage.rules
           cmp src/supplier-name.js api-rules-check/src/supplier-name.js
           cmp src/credit.js api-rules-check/src/credit.js
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run build

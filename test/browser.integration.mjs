@@ -637,3 +637,50 @@ for (const engine of [chromium, webkit]) {
     },
   );
 }
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: native IndexedDB reopens after a committed save and PDF offers the full viewer`, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { Drafts } = await import("/drafts.js");
+      const { cashForm } = await import("/forms.js");
+      const { previewDocument } = await import("/preview.js");
+      document.body.innerHTML = '<div id="modal"></div><div id="toast"></div>';
+      const drafts = new Drafts("native-close-regression");
+      await drafts.save("preserved", { secret: "still-encrypted" });
+      drafts.db.close();
+      const preserved = await drafts.load("preserved");
+      let closed = false, merged, writes = 0;
+      const ctx = {
+        data: { dailyCash: [] }, drafts,
+        dialog: (_title, body) => { const el = document.querySelector("#modal"); el.innerHTML = body; return el; },
+        setModalBusy() {}, closeModal() { closed = true; }, render() {}, refresh() {},
+        mergeRecord(record) { merged = record; },
+        api: { save: async pending => { writes++; drafts.db.close(); return { record: { id: "cash-native", ...pending.body.data } }; } },
+      };
+      await cashForm(ctx);
+      const form = document.querySelector("form");
+      form.elements.cash.value = "123";
+      form.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      const deadline = Date.now() + 5000;
+      while (!closed && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+      const remaining = await drafts.load("cash");
+      const message = document.querySelector("#toast").textContent;
+      drafts.db.close();
+      const dialog = previewDocument(new Blob(["%PDF-1.7\nfixture"], { type: "application/pdf" }));
+      const link = dialog.querySelector("a");
+      const viewer = { frames: dialog.querySelectorAll("iframe").length, target: link.target, blob: link.href.startsWith("blob:"), fallback: dialog.textContent.includes("שמור או שתף PDF") };
+      dialog.close();
+      return { preserved, closed, remaining, message, writes, amount: merged?.cashAgorot, viewer };
+    });
+    assert.equal(result.preserved.secret, "still-encrypted");
+    assert.equal(result.closed, true);
+    assert.equal(result.writes, 1);
+    assert.equal(result.amount, 12300);
+    assert.equal(result.remaining, null);
+    assert.match(result.message, /נשמר בחנות/);
+    assert.deepEqual(result.viewer, { frames: 0, target: "_blank", blob: true, fallback: true });
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+  });
+}

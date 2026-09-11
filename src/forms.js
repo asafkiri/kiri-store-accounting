@@ -223,16 +223,24 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       if (!active()) return;
       const result = await ctx.api.save(draft.pending);
       if (!active()) return;
-      await ctx.drafts.remove(key);
-      if (key === "invoice" && draft.fields.scanJobId) {
-        const scan = await ctx.drafts.load("scan");
-        if (scan?.jobId === draft.fields.scanJobId)
-          await ctx.drafts.remove("scan");
+      // A confirmed server write must never turn into a failed save because
+      // local cleanup is unavailable. Keep the original pending identity on disk.
+      try {
+        await ctx.drafts.remove(key);
+        if (key === "invoice" && draft.fields.scanJobId) {
+          const scan = await ctx.drafts.load("scan");
+          if (scan?.jobId === draft.fields.scanJobId) await ctx.drafts.remove("scan");
+        }
+      } catch {
+        ctx.draftWarning = "השמירה בחנות הושלמה. לא ניתן לנקות כרגע את הטיוטה במכשיר.";
       }
+      if (!active()) return;
       for (const related of result.relatedRecords || [])
         ctx.mergeRecord(related.record, related.path);
       ctx.mergeRecord(result.record, draft.pending.path);
+      disposed = true;
       ctx.closeModal();
+      ctx.setModalBusy(false);
       ctx.render();
       toast(
         result.supplierAction === "created"
@@ -421,7 +429,7 @@ export async function invoiceForm(
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
     <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true, read: read("finalAgorot", true), uncertain: uncertain("finalAgorot") })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
-    <div class="notice warning wide" data-credit-notice hidden>הזן את סכום הזיכוי כמספר שלילי. לדוגמה: זיכוי של 30 ₪ נרשם כ־<bdi>-30</bdi>. גם לפני מע״מ ומע״מ, כשידועים, יהיו שליליים או אפס. המספרים שנקראו מהמסמך נשארים מוצגים לבדיקה.</div>
+    <div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך. המספרים המקוריים שנקראו נשארים מוצגים לבדיקה.</div>
     <div id="arithmetic-note" class="notice warning" hidden></div>
     ${f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : ""}
     <label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>${footer("שמור חשבונית")}</form>`,
@@ -441,9 +449,14 @@ export async function invoiceForm(
   const creditNotice = () => {
     const isCredit = form.elements.documentType.value === "credit";
     creditNoticeElement.hidden = !isCredit;
-    // Some mobile decimal keyboards omit minus. A credit must allow typing it.
-    for (const name of ["subtotal", "vat", "total", "final"])
-      form.elements[name].inputMode = isCredit ? "text" : "decimal";
+    for (const name of ["subtotal", "vat", "total", "final"]) {
+      const input = form.elements[name];
+      input.inputMode = "decimal";
+      if (isCredit && !draft.pending && input.value.trim()) {
+        try { input.value = moneyInput(Math.abs(parseMoney(input.value))); }
+        catch { /* Leave an incomplete entry for the user to finish. */ }
+      }
+    }
   };
   creditNotice();
   form.elements.documentType.addEventListener("input", creditNotice);
@@ -508,9 +521,13 @@ export async function invoiceForm(
         },
         draft.version,
       );
+      if (pending.body.data.documentType === "credit") {
+        for (const key of ["subtotalAgorot", "vatAgorot", "totalAgorot", "finalAgorot"])
+          if (pending.body.data[key] !== null) pending.body.data[key] = -Math.abs(pending.body.data[key]) || 0;
+      }
       if (creditSignIssues(pending.body.data).length)
         throw Error(
-          "הזן את סכום הזיכוי כמספר שלילי. גם לפני מע״מ ומע״מ, כשידועים, יהיו שליליים או אפס.",
+          "סכום הזיכוי והסכום הסופי חייבים להיות גדולים מאפס.",
         );
       return pending;
     },
@@ -549,7 +566,7 @@ export async function invoiceForm(
       if (values.deductions.some((d) => d.included === "unknown"))
         throw Error("בדוק קודם אם ההפחתות כלולות בסכום.");
       const calculated =
-        parseMoney(values.total) -
+        (values.documentType === "credit" ? -Math.abs(parseMoney(values.total)) : parseMoney(values.total)) -
         values.deductions
           .filter((d) => d.included === "no")
           .reduce((sum, d) => sum + parseMoney(d.amount), 0);
@@ -558,10 +575,10 @@ export async function invoiceForm(
         !confirm("לעדכן את הסכום הסופי ל־" + money(calculated) + "?")
       )
         return;
-      form.elements.final.value = moneyInput(calculated);
+      form.elements.final.value = moneyInput(values.documentType === "credit" ? Math.abs(calculated) : calculated);
       form.dispatchEvent(new Event("input", { bubbles: true }));
     } catch (err) {
-      toast(err.message, true);
+      toast(errorText(err), true);
     }
   };
   form.addEventListener("input", () => {

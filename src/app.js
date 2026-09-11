@@ -1,3 +1,4 @@
+import { previewDocument } from "./preview.js";
 import {
   initializeAuth,
   onAuthStateChanged,
@@ -68,22 +69,15 @@ ctx.closeModal = () => {
   ctx.modalBusy = false;
   ctx.updateDraftNames();
 };
-ctx.previewBlob = (blob) => {
-  const url = URL.createObjectURL(blob),
-    dialog = document.createElement("dialog");
-  dialog.className = "preview-dialog";
-  dialog.innerHTML = `<button class="secondary">סגור תצוגת מסמך</button>${blob.type === "application/pdf" ? `<iframe src="${url}" title="תצוגת המסמך" sandbox="allow-same-origin"></iframe>` : `<img src="${url}" alt="המסמך המצורף">`}`;
-  document.body.append(dialog);
-  $("button", dialog).onclick = () => dialog.close();
-  dialog.onclose = () => {
-    URL.revokeObjectURL(url);
-    dialog.remove();
-  };
-  dialog.showModal();
-};
+ctx.previewBlob = previewDocument;
 ctx.updateDraftNames = async () => {
-  if (ctx.drafts) {
-    ctx.draftNames = await ctx.drafts.names();
+  const drafts = ctx.drafts;
+  if (!drafts) return;
+  try {
+    const names = await drafts.names();
+    if (ctx.drafts === drafts) ctx.draftNames = names;
+  } catch {
+    if (ctx.drafts === drafts) ctx.draftWarning = "הנתונים בחנות זמינים, אך הטיוטות במכשיר אינן זמינות כרגע.";
   }
 };
 ctx.mergeRecord = (record, path) => {
@@ -126,9 +120,11 @@ ctx.refresh = async (force = false) => {
       }
       ctx.version = r.version;
     }
-    await settleDiscardedAttempts(ctx);
-    if (epoch !== ctx.epoch) return;
     ctx.lastRefresh = Date.now();
+    ctx.render(); // Render the successful server snapshot before local storage work.
+    try { await settleDiscardedAttempts(ctx); }
+    catch { ctx.draftWarning = "לא ניתן לקרוא כרגע את הטיוטות במכשיר. הנתונים מהחנות עודכנו."; }
+    if (epoch !== ctx.epoch) return;
     await ctx.updateDraftNames();
   } catch (err) {
     if (epoch !== ctx.epoch) return;
@@ -317,7 +313,11 @@ async function action(type, data = {}) {
       const old = ctx.limit;
       ctx.limit = Number.MAX_SAFE_INTEGER;
       ctx.render();
-      window.print();
+      try {
+        if (navigator.standalone) {
+          toast("להדפסה באייפון אפשר לפתוח את האתר ב־Safari ולבחור שתף ואז הדפס. לייצוא השתמש בכפתור הייצוא.");
+        } else window.print();
+      } catch { toast("לא ניתן לפתוח הדפסה כאן. פתח את האתר בדפדפן או השתמש בייצוא.", true); }
       ctx.limit = old;
       ctx.render();
       break;
@@ -558,6 +558,7 @@ async function startup() {
       ctx.lastRefresh = 0;
       ctx.loading = false;
       ctx.syncError = false;
+      ctx.draftWarning = "";
       ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
       ctx.closeModal();
       $("#modal").innerHTML = "";
@@ -583,7 +584,7 @@ async function startup() {
     });
   } catch (err) {
     $("#app").innerHTML =
-      `<main class="login-page"><div class="login-card"><h1>המערכת עדיין אינה מוכנה</h1><p role="alert">${e(errorText(err))}</p><button class="primary" id="retry-startup">נסה שוב</button></div></main>`;
+      `<main class="login-page"><div class="login-card"><h1>טעינת המערכת לא הושלמה</h1><p role="alert">${e(errorText(err))}</p><button class="primary" id="retry-startup">נסה שוב</button></div></main>`;
     const button = $("button");
     button.onclick = () => location.reload();
   }
@@ -630,4 +631,4 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
-startup();
+if (!window.ksaUnsupportedBrowser) startup();
