@@ -857,13 +857,16 @@ for (const engine of [chromium, webkit]) {
       smallPen.drawImage(paper, 300, -100, 700, 933);
     }, 66);
     if (!navigator.mediaDevices) Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
-    navigator.mediaDevices.getUserMedia = async constraints => {
+    const fakeGetUserMedia = async constraints => {
       window.lastConstraints = constraints;
       if (window.cameraMode === "denied") throw new DOMException("Permission denied", "NotAllowedError");
       const stream = (window.cameraMode === "small" ? small : scene).captureStream(15);
       window.liveStreams.push(stream);
       return stream;
     };
+    // A plain assignment is ignored by engines that expose getUserMedia as a prototype accessor.
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: fakeGetUserMedia, configurable: true, writable: true });
+    return navigator.mediaDevices.getUserMedia === fakeGetUserMedia;
   };
   test(`${engine.name()}: the live camera shows the polygon, locks only when still, hands the frame with a hint to the review, and falls back cleanly`, { timeout: 180000 }, async t => {
     const page = await scannerPage(t, engine);
@@ -875,7 +878,10 @@ for (const engine of [chromium, webkit]) {
     if (!support.captureStream) { t.skip("canvas.captureStream is not available in this engine"); return; }
     if (!support.supported) { t.skip("the test page is not a secure context for this engine, so the in-app camera never opens"); return; }
     await page.evaluate(() => window.openScanner());
-    await page.evaluate(fakeCamera);
+    const patched = await page.evaluate(fakeCamera);
+    t.diagnostic(`${engine.name()} fake getUserMedia installed: ${patched}`);
+    if (!patched && engine.name() === "webkit") { t.skip("getUserMedia cannot be replaced in this engine"); return; }
+    assert.equal(patched, true, "the fake camera replaces getUserMedia");
     const cameraLabel = page.locator("label:has(#camera-file)");
     const detectCount = () => page.evaluate(() => window.workerLog.filter(entry => entry.type === "detect").length);
     const tracksEnded = () => page.evaluate(() => window.liveStreams.every(stream => stream.getTracks().every(track => track.readyState === "ended")));
