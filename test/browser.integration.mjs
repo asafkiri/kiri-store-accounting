@@ -150,6 +150,38 @@ for (const engine of [chromium, webkit]) {
     console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);
   });
 
+  test(`${engine.name()}: approved photo survives manual entry and explicit invoice save without AI`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy);
+    await page.locator("#manual-from-scan").tap();
+    await page.waitForSelector("#invoice-form");
+    assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
+    assert.ok(await page.evaluate(() => JSON.stringify(window.scanRequests[0].body.files) === JSON.stringify(window.scanDrafts().find(([key]) => key === "scan")[1].files)));
+    assert.equal(await page.locator("[data-open-document]").count(), 1);
+    assert.equal(await page.locator("[name=review]").isChecked(), false);
+    assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
+    await page.locator("[name=supplierName]").fill("אסם");
+    await page.locator("[name=documentNumber]").fill("MANUAL-PHOTO-1");
+    await page.locator("[name=total]").fill("10");
+    await page.locator("[name=final]").fill("10");
+    await page.locator("[name=review]").check();
+    await page.locator("#invoice-form button[type=submit]").tap();
+    await page.waitForFunction(() => window.invoiceSaves.length === 1);
+    const saved = await page.evaluate(() => window.invoiceSaves[0].body.data);
+    assert.deepEqual(saved.attachmentIds, ["attachment-0"]);
+    assert.equal(saved.source, "manual");
+    assert.equal(saved.scanJobId, null);
+    assert.equal(saved.reviewConfirmed, true);
+    assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+  });
+
   test(`${engine.name()}: missing boundaries and worker failure keep the full-photo escape usable`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     await page.evaluate(() => window.openScanner());

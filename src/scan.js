@@ -267,6 +267,19 @@ export async function scanDialog(ctx, purpose = "invoice") {
   );
   let busy = false;
   const persist = () => ctx.drafts.save(key, draft);
+  const uploadDocuments = async () => {
+    // Both AI review and manual entry must retain the selected documents.
+    // Reuse persisted IDs when the upload succeeded before an interrupted step.
+    if (draft.files.length && !draft.attachmentIds.length) {
+      const result = await ctx.api.request("documents", {
+        method: "POST",
+        body: { files: draft.files },
+        timeout: 50_000,
+      });
+      draft.attachmentIds = result.documents.map(document => document.id);
+      await persist();
+    }
+  };
   const err = $("#scan-error", root),
     status = $("#scan-status", root);
   const showError = (error) => {
@@ -288,6 +301,9 @@ export async function scanDialog(ctx, purpose = "invoice") {
     $("#clear-scan", root).disabled = busy;
     $("#manual-from-scan", root).hidden = purpose !== "invoice";
     $("#manual-from-scan", root).disabled = busy;
+    $("#manual-from-scan", root).textContent = draft.files.length || draft.attachmentIds.length
+      ? "המשך ידנית עם המסמכים"
+      : "המשך בהקלדה ידנית";
     $("#file-previews", root).innerHTML = draft.files
       .map(
         (f, i) =>
@@ -383,15 +399,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
       "מעלה את המסמך וקורא את הפרטים. החשבונית תישמר רק אחרי בדיקה ואישור שלך.";
     paint();
     try {
-      if (!draft.attachmentIds.length) {
-        const r = await ctx.api.request("documents", {
-          method: "POST",
-          body: { files: draft.files },
-          timeout: 50_000,
-        });
-        draft.attachmentIds = r.documents.map((d) => d.id);
-        await persist();
-      }
+      await uploadDocuments();
       draft.jobId ||= crypto.randomUUID();
       draft.status = "running";
       await persist();
@@ -459,10 +467,25 @@ export async function scanDialog(ctx, purpose = "invoice") {
     paint();
   };
   $("#manual-from-scan", root).onclick = async () => {
+    if (busy || !root.isConnected) return;
+    busy = true;
+    ctx.setModalBusy(true);
+    err.hidden = true;
+    status.hidden = false;
+    status.textContent =
+      "מעלה את המסמכים להמשך ההקלדה. החשבונית תישמר רק אחרי האישור שלך.";
+    paint();
     try {
+      await uploadDocuments();
+      if (!root.isConnected) return;
       await invoiceForm(ctx, null, null, draft.attachmentIds);
     } catch (error) {
+      status.hidden = true;
       showError(error);
+    } finally {
+      busy = false;
+      ctx.setModalBusy(false);
+      if (root.isConnected) paint();
     }
   };
   $("#clear-scan", root).onclick = async () => {

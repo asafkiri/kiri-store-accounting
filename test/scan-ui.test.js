@@ -94,6 +94,119 @@ test("failed AI can continue with a manual invoice retaining already-uploaded fi
   assert.equal(cache.get("invoice").fields.source, "manual");
   assert.equal(cache.get("invoice").fields.scanJobId, null);
 });
+const selectedFiles = () => [
+  { name: "processed-page.jpg", mime: "image/jpeg", data: "AQID" },
+  { name: "second-page.pdf", mime: "application/pdf", data: "BAUG" },
+];
+const attachmentIds = ["a".repeat(64), "b".repeat(64)];
+test("manual continuation uploads every selected file once and links them only on reviewed save", async () => {
+  const files = selectedFiles();
+  const { ctx, cache, calls } = setup({ files, attachmentIds: [], status: "editing" });
+  let completeUpload;
+  const saved = [];
+  ctx.api.request = async (path, options) => {
+    calls.push({ path, options });
+    return new Promise(resolve => { completeUpload = resolve; });
+  };
+  ctx.api.save = async pending => {
+    saved.push(structuredClone(pending));
+    return { record: { id: pending.path.split("/")[1], ...pending.body.data } };
+  };
+  await scanDialog(ctx);
+  const button = document.getElementById("manual-from-scan");
+  const continuing = button.onclick();
+  await button.onclick(); // A second activation while the upload is pending.
+  assert.equal(button.disabled, true);
+  assert.equal(document.getElementById("run-scan").disabled, true);
+  assert.equal(document.getElementById("camera-file").disabled, true);
+  assert.equal(document.getElementById("invoice-form"), null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "documents");
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(calls[0].options.body.files, files);
+  completeUpload({ documents: attachmentIds.map(id => ({ id })) });
+  await continuing;
+  await tick();
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
+  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  assert.deepEqual([...document.querySelectorAll("[data-open-document]")].map(b => b.dataset.openDocument), attachmentIds);
+  assert.equal(document.querySelector("[name=review]").checked, false);
+  assert.equal(saved.length, 0);
+  const form = document.getElementById("invoice-form");
+  for (const [name, value] of Object.entries({ supplierId: "supplier-001", documentNumber: "MANUAL-1", total: "10", final: "10" })) {
+    form.elements[name].value = value;
+    form.elements[name].dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  form.elements.review.checked = true;
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].body.data.attachmentIds, attachmentIds);
+  assert.equal(saved[0].body.data.source, "manual");
+  assert.equal(saved[0].body.data.scanJobId, null);
+  assert.equal(saved[0].body.data.reviewConfirmed, true);
+  assert.deepEqual(calls.map(c => c.path), ["documents"], "no paid AI request");
+});
+test("failed manual upload preserves the photos and lets the user retry", async () => {
+  const files = selectedFiles();
+  const { ctx, cache, calls } = setup({ files, attachmentIds: [], status: "editing" });
+  ctx.api.request = async path => {
+    calls.push(path);
+    if (calls.length === 1) throw new ApiError("אין חיבור לרשת כרגע", "NETWORK", 0);
+    return { documents: attachmentIds.map(id => ({ id })) };
+  };
+  await scanDialog(ctx);
+  await document.getElementById("manual-from-scan").onclick();
+  assert.equal(document.getElementById("invoice-form"), null);
+  assert.equal(cache.has("invoice"), false);
+  assert.deepEqual(cache.get("scan").files, files);
+  assert.equal(document.getElementById("manual-from-scan").disabled, false);
+  assert.equal(document.getElementById("scan-error").hidden, false);
+  await document.getElementById("manual-from-scan").onclick();
+  await tick();
+  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  assert.deepEqual(calls, ["documents", "documents"]);
+});
+test("reopening after a failed manual form load reuses the uploaded documents", async () => {
+  const { ctx, cache, calls } = setup({ files: selectedFiles(), attachmentIds: [], status: "editing" });
+  ctx.api.request = async path => {
+    calls.push(path);
+    return { documents: attachmentIds.map(id => ({ id })) };
+  };
+  const load = ctx.drafts.load;
+  ctx.drafts.load = async key => {
+    if (key === "invoice") throw new DOMException("closed", "InvalidStateError");
+    return load(key);
+  };
+  await scanDialog(ctx);
+  await document.getElementById("manual-from-scan").onclick();
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
+  ctx.drafts.load = load;
+  await scanDialog(ctx);
+  await document.getElementById("manual-from-scan").onclick();
+  await tick();
+  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  assert.deepEqual(calls, ["documents"]);
+});
+test("manual entry without selected files does not upload an empty document batch", async () => {
+  const { ctx, calls } = setup({ files: [], attachmentIds: [], status: "editing" });
+  await scanDialog(ctx);
+  await document.getElementById("manual-from-scan").onclick();
+  assert.ok(document.getElementById("invoice-form"));
+  assert.deepEqual(calls, []);
+});
+test("an upload finishing after the scan view is removed does not reopen an invoice", async () => {
+  const { ctx, cache } = setup({ files: selectedFiles(), attachmentIds: [], status: "editing" });
+  let completeUpload;
+  ctx.api.request = async () => new Promise(resolve => { completeUpload = resolve; });
+  await scanDialog(ctx);
+  const continuing = document.getElementById("manual-from-scan").onclick();
+  document.getElementById("modal").replaceChildren();
+  completeUpload({ documents: attachmentIds.map(id => ({ id })) });
+  await continuing;
+  assert.equal(document.getElementById("invoice-form"), null);
+  assert.equal(cache.has("invoice"), false);
+});
 for (const existing of [false, true, "offline"]) {
   test(`scan lock recovery checks whether this job exists (${existing}) without another paid request`, async () => {
     const { ctx, cache, calls } = setup({
