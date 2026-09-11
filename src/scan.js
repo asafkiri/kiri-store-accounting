@@ -7,6 +7,7 @@ import {
   today,
 } from "./format.js";
 import { invoiceForm } from "./forms.js";
+import { hasDraftContent } from "./draft-activity.js";
 import { readFile, encodeFile, decodeImage, validateFile } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
@@ -363,7 +364,7 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
   });
 }
 
-export async function scanDialog(ctx, purpose = "invoice") {
+export async function scanDialog(ctx, purpose = "invoice", options = {}) {
   const key = purpose === "invoice" ? "scan" : "reportScan";
   let draft = (await ctx.drafts.load(key)) || {
     files: [],
@@ -372,12 +373,14 @@ export async function scanDialog(ctx, purpose = "invoice") {
     status: "editing",
     result: null,
   };
+  if (options.resume && purpose === "invoice" && draft.result?.status === "completed")
+    return invoiceForm(ctx, null, draft.result);
   const root = ctx.dialog(
     purpose === "invoice" ? "סריקת חשבונית" : "בדיקה מול רואה החשבון",
-    `<div class="scan-view"><p>${purpose === "invoice" ? "צלם את כל העמודים של אותה חשבונית, או בחר תמונות / PDF." : "הדוח משמש להשוואה בלבד. הוא אינו מוסיף או משנה חשבוניות."}</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 עמודים ו־12 מגה אחרי הקטנת התמונות. בכל תמונה אפשר להתאים את החיתוך או לשמור את הצילום המלא. PDF נשאר כפי שנבחר.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="run-scan">סרוק ובדוק פרטים</button><button class="secondary" id="check-scan" hidden>בדוק תוצאה של סריקה קודמת</button><button class="text-button" id="new-scan" hidden>התחל סריקה חדשה</button><button class="secondary" id="manual-from-scan">המשך בהקלדה ידנית</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
+    `<div class="scan-view"><p>${purpose === "invoice" ? "הוסף את העמודים של אותה חשבונית, ואז המשך לפענוח." : "הדוח משמש להשוואה בלבד. הוא אינו מוסיף או משנה חשבוניות."}</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 קבצים לאותה חשבונית. אפשר להגדיל כל צילום לפני שממשיכים.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="run-scan">סרוק ובדוק פרטים</button><button class="secondary" id="check-scan" hidden>בדוק תוצאה של סריקה קודמת</button><button class="text-button" id="new-scan" hidden>התחל סריקה חדשה</button><button class="text-button" id="manual-from-scan">המשך בהקלדה ידנית</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
   );
   let busy = false;
-  const persist = () => ctx.drafts.save(key, draft);
+  const persist = () => hasDraftContent(key, draft) ? ctx.drafts.save(key, draft) : ctx.drafts.remove(key);
   const uploadDocuments = async () => {
     // Both AI review and manual entry must retain the selected documents.
     // Reuse persisted IDs when the upload succeeded before an interrupted step.
@@ -410,6 +413,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
     $("#new-scan", root).hidden = !draft.jobId;
     $("#new-scan", root).disabled = busy;
     $("#clear-scan", root).disabled = busy;
+    $("#clear-scan", root).hidden = !hasDraftContent(key, draft);
     $("#manual-from-scan", root).hidden = purpose !== "invoice";
     $("#manual-from-scan", root).disabled = busy;
     $("#manual-from-scan", root).textContent = draft.files.length || draft.attachmentIds.length
@@ -452,6 +456,16 @@ export async function scanDialog(ctx, purpose = "invoice") {
     await persist();
     paint();
   };
+  const acceptFiles = async selected => {
+    if (selected.length + draft.files.length > 8)
+      throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
+    selected.forEach(validateFile);
+    for (const file of selected) {
+      const prepared = file.type === "application/pdf" ? await readFile(file) : await reviewPhoto(ctx, root, file);
+      if (!root.isConnected || !prepared) break;
+      await acceptPage(prepared);
+    }
+  };
   for (const input of root.querySelectorAll(".scan-view input[type=file]"))
     input.onchange = async () => {
       if (busy || draft.jobId) return;
@@ -460,19 +474,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
       paint();
       err.hidden = true;
       try {
-        const selected = [...input.files];
-        if (selected.length + draft.files.length > 8)
-          throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
-        selected.forEach(validateFile);
-        // Review and persist each accepted page before opening the next one.
-        // Only the chosen image is retained; cancelled/retaken photos are discarded.
-        for (const file of selected) {
-          const prepared = file.type === "application/pdf"
-            ? await readFile(file)
-            : await reviewPhoto(ctx, root, file);
-          if (!root.isConnected || !prepared) break;
-          await acceptPage(prepared);
-        }
+        await acceptFiles([...input.files]);
       } catch (error) {
         showError(error);
       } finally {
@@ -491,9 +493,11 @@ export async function scanDialog(ctx, purpose = "invoice") {
     ctx.setModalBusy(true);
     paint();
     err.hidden = true;
+    let result;
     try {
       if (draft.files.length >= 8) throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
-      let result = await liveCapture(ctx, root);
+      result = await liveCapture(ctx, root, { alternatives: purpose === "invoice" });
+      if (result?.files) await acceptFiles(result.files);
       while (root.isConnected && result?.file) {
         const prepared = await reviewPhoto(ctx, root, result.file, { worker: result.worker, hint: result.hint, onRetake: !result.unavailable });
         if (!root.isConnected) break;
@@ -512,6 +516,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
       ctx.setModalBusy(false);
       if (root.isConnected) paint();
     }
+    if (root.isConnected && result?.manual) $("#manual-from-scan", root).click();
   };
   cameraInput.closest("label").addEventListener("click", ev => {
     if (busy || draft.jobId || cameraInput.disabled || !liveCameraSupported() || isLiveCameraUnavailable()) return;
@@ -657,6 +662,7 @@ export async function scanDialog(ctx, purpose = "invoice") {
     status.textContent = "יש תוצאה מוכנה. לחץ על בדיקת תוצאה כדי לפתוח אותה.";
   }
   paint();
+  if (options.openCamera && purpose === "invoice" && !hasDraftContent(key, draft)) void captureLive();
 }
 async function showComparison(ctx, job) {
   const month = today().slice(0, 7),

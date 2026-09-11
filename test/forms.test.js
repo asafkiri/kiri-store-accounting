@@ -2,13 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import {
-  invoiceForm,
+  invoiceForm as openInvoiceForm,
   paymentForm,
   cashForm,
   supplierForm,
 } from "../src/forms.js";
 import { ApiError } from "../src/api.js";
 import { today, totals } from "../src/format.js";
+// These tests exercise the retained detailed editor; quick intake has its own
+// integration tests for sequential answers, summary approval and recovery.
+const invoiceForm = (ctx, record = null, scan = null, attachments = []) =>
+  openInvoiceForm(ctx, record, scan, attachments, { fullEditor: true });
 const tick = () => new Promise((r) => setTimeout(r, 20));
 function setup() {
   const dom = new JSDOM(
@@ -206,7 +210,7 @@ test("cash edits archive stale values, while explicit resume can recover an unsa
   });
   await cashForm(ctx, record);
   assert.equal(document.querySelector("[name=cash]").value, "200.00");
-  assert.equal(drafts.get("cash").version, 2);
+  assert.equal(drafts.has("cash"), false);
   assert.equal(drafts.get("saved-cash-" + date).fields.notes, "ישן");
   drafts.set("cash", {
     recordId: date,
@@ -292,6 +296,9 @@ for (const kind of ["invoice", "supplier"]) {
     await tick();
     delete drafts.get(kind).mode; // Upgrade safety for drafts from the previous version.
     await open(ctx);
+    assert.equal(drafts.has(kind), false, "merely opening Add does not create work");
+    fill("notes", "new record");
+    await tick();
     assert.notEqual(drafts.get(kind).recordId, record.id);
     assert.equal(drafts.get(kind).version, 0);
     assert.equal(drafts.get(kind).mode, "new");
@@ -328,7 +335,7 @@ test("reopening stale fields archives them and opens the current version without
   };
   ctx.data.invoices = [current];
   await invoiceForm(ctx, current);
-  assert.equal(drafts.get("invoice").version, 2);
+  assert.equal(drafts.has("invoice"), false);
   assert.equal(
     document.querySelector("[name=notes]").value,
     "newer saved note",
@@ -887,4 +894,45 @@ test("failure to persist cancellation keeps the immutable pending attempt and do
   assert.deepEqual(drafts.get("supplier").pending, original);
   assert.equal(document.querySelector("[name=name]").disabled, true);
   assert.equal(calls, 0);
+});
+
+test("deleting an unused supplier survives lost response and reuses the deletion identity", async () => {
+  const { ctx, drafts } = setup();
+  const record = { id: "supplier-unused", name: "ספק טעות", active: true, version: 3 };
+  ctx.data.suppliers.push(record);
+  const attempts = [];
+  ctx.api.save = async pending => {
+    attempts.push(structuredClone(pending));
+    if (attempts.length === 1) throw new ApiError("לא התקבלה תשובה", "NETWORK", 0);
+    return { record: { ...record, active: false, deletedAt: 123, version: 4 } };
+  };
+  await supplierForm(ctx, record);
+  document.querySelector("[data-remove-supplier]").click();
+  await tick();
+  assert.match(document.body.textContent, /למחוק את הספק/);
+  submit();
+  await tick();
+  assert.equal(attempts[0].method, "DELETE");
+  assert.equal(attempts[0].path, "suppliers/" + record.id);
+  assert.equal(attempts[0].body.expectedVersion, 3);
+  assert.equal(drafts.get("supplier").operation, "delete");
+  await supplierForm(ctx, record);
+  submit();
+  await tick();
+  assert.deepEqual(attempts[1], attempts[0]);
+  assert.equal(drafts.has("supplier"), false);
+});
+
+test("supplier removal keeps invoice history and manual invoice excludes delivery notes", async () => {
+  const { ctx, saved } = setup();
+  const supplier = { ...ctx.data.suppliers[0], version: 1 };
+  ctx.data.invoices.push({ supplierId: supplier.id, deletedAt: 123 });
+  await supplierForm(ctx, supplier);
+  document.querySelector("[data-remove-supplier]").click();
+  assert.match(document.querySelector(".delete-form").textContent, /החשבוניות והצילומים שלו יישארו בהיסטוריה/);
+  assert.equal(saved.length, 0);
+  await invoiceForm(ctx);
+  const options = [...document.querySelector('[name="documentType"]').options].map(o => o.value);
+  assert.deepEqual(options, ["", "invoice", "credit"]);
+  assert.equal(document.querySelector('[name="documentType"]').value, "invoice");
 });

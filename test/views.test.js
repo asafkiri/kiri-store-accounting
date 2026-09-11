@@ -81,3 +81,33 @@ test("invoice, supplier and monthly summaries subtract signed credits and flag l
     credit.totalAgorot = credit.finalAgorot = -3000;
   }
 });
+
+test("the invoice and photo archive group by month then supplier, and search reveals closed folders", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { documentsView } = await import("../src/views.js");
+  const ctx = { route: "invoices", filters: {}, limit: 80, draftNames: [], data: {
+    suppliers: [{ id: "s1", name: "ספק א", active: false }, { id: "s2", name: "ספק ב", active: true }],
+    invoices: [
+      { id: "i1", supplierId: "s1", invoiceDate: "2026-09-02", documentType: "invoice", documentNumber: "1", status: "unpaid", finalAgorot: 100, attachmentIds: ["photo-a", "photo-b"] },
+      { id: "i2", supplierId: "s2", invoiceDate: "2026-09-01", documentType: "invoice", documentNumber: "2", status: "paid", finalAgorot: 200, attachmentIds: [] },
+      { id: "i3", supplierId: "s1", invoiceDate: "2026-08-10", documentType: "invoice", documentNumber: "3", status: "paid", finalAgorot: 300, attachmentIds: ["photo-c"] },
+    ],
+  } };
+  const dom = new JSDOM(invoicesView(ctx));
+  const months = [...dom.window.document.querySelectorAll(".month-folder")];
+  assert.deepEqual(months.map(m => m.dataset.folder), ["invoices:2026-09", "invoices:2026-08"]);
+  assert.equal(months[0].querySelectorAll(".supplier-folder").length, 2);
+  assert.equal(months[0].querySelectorAll(".invoice-card").length, 2);
+  assert.equal(months[1].querySelectorAll(".invoice-card").length, 1);
+  dom.window.close();
+  const photos = new JSDOM(documentsView(ctx));
+  assert.equal(photos.window.document.querySelectorAll(".document-card").length, 2);
+  assert.deepEqual([...photos.window.document.querySelectorAll("[data-open-document]")].map(b => b.dataset.openDocument), ["photo-a", "photo-b", "photo-c"]);
+  photos.window.close();
+  ctx.filters.q = "ספק א";
+  ctx.folderState = { "invoices:2026-09": false, "invoices:2026-09:s1": false };
+  const searched = new JSDOM(invoicesView(ctx));
+  assert.equal(searched.window.document.querySelector('[data-folder="invoices:2026-09:s1"]').open, true);
+  assert.equal(searched.window.document.querySelectorAll(".invoice-card").length, 2);
+  searched.window.close();
+});

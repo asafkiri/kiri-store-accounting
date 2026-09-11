@@ -112,3 +112,10 @@ export function monthRange(month) {
     to: month + "-" + new Date(Date.UTC(y, m, 0)).getUTCDate(),
   };
 }
+
+export function monthLabel(value) {
+  if (!/^\d{4}-\d{2}$/.test(value || "")) return "ללא חודש";
+  return new Intl.DateTimeFormat("he-IL", { month: "long", year: "numeric", timeZone: "UTC" })
+    .format(new Date(value + "-01T12:00:00Z"));
+}
+

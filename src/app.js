@@ -8,6 +8,7 @@ import {
 } from "./auth.js";
 import { Api, pendingMutation } from "./api.js";
 import { Drafts } from "./drafts.js";
+import { actionableDraftNames } from "./draft-activity.js";
 import { $, icon, toast, errorText } from "./ui.js";
 import { settleDiscardedAttempts } from "./attempts.js";
 import {
@@ -18,10 +19,13 @@ import {
   methods,
   types,
   filterInvoices,
+  monthRange,
 } from "./format.js";
 import { shell } from "./views.js";
 import {
   supplierForm,
+  supplierRemovalForm,
+  preferencesForm,
   invoiceForm,
   paymentForm,
   cashForm,
@@ -31,9 +35,10 @@ import { scanDialog } from "./scan.js";
 import { invoiceCsv, cashCsv, download } from "./export.js";
 const ctx = {
   route: "invoices",
-  filters: { status: "unpaid" },
+  filters: {},
+  folderState: {},
   limit: 80,
-  data: { suppliers: [], invoices: [], dailyCash: [] },
+  data: { suppliers: [], invoices: [], dailyCash: [], settings: [] },
   version: 0,
   lastRefresh: 0,
   loading: false,
@@ -67,21 +72,21 @@ ctx.setModalBusy = (value) => {
 ctx.closeModal = () => {
   $("#modal").close();
   ctx.modalBusy = false;
-  ctx.updateDraftNames();
+  void ctx.updateDraftNames().then(() => ctx.render());
 };
 ctx.previewBlob = previewDocument;
 ctx.updateDraftNames = async () => {
   const drafts = ctx.drafts;
   if (!drafts) return;
   try {
-    const names = await drafts.names();
+    const names = await actionableDraftNames(drafts, ctx.data);
     if (ctx.drafts === drafts) ctx.draftNames = names;
   } catch {
     if (ctx.drafts === drafts) ctx.draftWarning = "הנתונים בחנות זמינים, אך הטיוטות במכשיר אינן זמינות כרגע.";
   }
 };
 ctx.mergeRecord = (record, path) => {
-  const collection = path.startsWith("suppliers")
+  const collection = path.startsWith("settings") ? "settings" : path.startsWith("suppliers")
     ? "suppliers"
     : path.startsWith("daily-cash")
       ? "dailyCash"
@@ -109,10 +114,10 @@ ctx.refresh = async (force = false) => {
     });
     if (epoch !== ctx.epoch) return;
     if (!r.unchanged) {
-      for (const collection of ["suppliers", "invoices", "dailyCash"]) {
-        if (r.full) ctx.data[collection] = r[collection];
+      for (const collection of ["suppliers", "invoices", "dailyCash", "settings"]) {
+        if (r.full) ctx.data[collection] = r[collection] || [];
         else
-          for (const item of r[collection])
+          for (const item of r[collection] || [])
             ctx.mergeRecord(
               item,
               collection === "dailyCash" ? "daily-cash" : collection,
@@ -134,7 +139,7 @@ ctx.refresh = async (force = false) => {
     if (el) el.textContent = "לא התקבל עדכון מהשרת";
     if (err.status === 403) {
       ctx.api = null;
-      ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
+      ctx.data = { suppliers: [], invoices: [], dailyCash: [], settings: [] };
       accessError(err);
     }
   } finally {
@@ -152,6 +157,7 @@ ctx.refresh = async (force = false) => {
 };
 ctx.reopen = async (key, id) => {
   const record = ctx.data.invoices.find((i) => i.id === id);
+  if (key === "preferences") return preferencesForm(ctx);
   if (key === "invoice") return invoiceForm(ctx, record);
   if (key === "supplier")
     return supplierForm(
@@ -170,8 +176,8 @@ function navigate(route) {
   ctx.route = route;
   ctx.limit = 80;
   ctx.filters =
-    route === "invoices"
-      ? { status: "unpaid" }
+    route === "suppliers"
+      ? { activeOnly: true }
       : ["cash", "reports"].includes(route)
         ? { month: today().slice(0, 7) }
         : {};
@@ -186,6 +192,8 @@ function bindShell() {
       navigate(nav.dataset.route);
       return;
     }
+    const documentButton = ev.target.closest("[data-open-document]");
+    if (documentButton) return openDocument(documentButton);
     const button = ev.target.closest("[data-action]");
     if (!button) return;
     try {
@@ -205,10 +213,15 @@ function bindShell() {
       ctx.limit = 80;
       ctx.render();
     };
+  for (const folder of root.querySelectorAll("[data-folder]"))
+    folder.ontoggle = () => {
+      if (folder.isConnected) ctx.folderState[folder.dataset.folder] = folder.open;
+    };
   const search = $("#invoice-search") || $("#supplier-search");
   if (search)
     search.oninput = () => {
       ctx.filters.q = search.value;
+      ctx.limit = 80;
       const pos = search.selectionStart;
       ctx.render();
       const next = $("#" + search.id);
@@ -228,11 +241,17 @@ async function action(type, data = {}) {
     case "invoice":
       return invoiceForm(ctx);
     case "scan":
-      return scanDialog(ctx);
+      return scanDialog(ctx, "invoice", { openCamera: true });
     case "report-scan":
       return scanDialog(ctx, "report");
+    case "vat-preferences":
+      return preferencesForm(ctx);
+    case "supplier-restore":
+      return supplierRemovalForm(ctx, ctx.data.suppliers.find(s => s.id === data.id), null, "restore");
     case "supplier":
       return supplierForm(ctx);
+    case "manage-suppliers":
+      return navigate("suppliers");
     case "supplier-edit":
       return supplierForm(
         ctx,
@@ -252,6 +271,8 @@ async function action(type, data = {}) {
       return paymentForm(ctx, record);
     case "detail":
       return detail(record);
+    case "documents":
+      return documentList(record);
     case "edit":
       return invoiceForm(ctx, record);
     case "refresh":
@@ -265,11 +286,33 @@ async function action(type, data = {}) {
       ctx.limit = 80;
       ctx.render();
       break;
-    case "clear-filters":
-      ctx.filters =
-        ctx.route === "invoices" ? { status: ctx.filters.status } : {};
+    case "open-unpaid":
+      ctx.filters = { status: "unpaid" };
+      ctx.limit = 80;
       ctx.render();
       break;
+    case "period-mode": {
+      if (data.value === "range") {
+        const range = monthRange(ctx.filters.month || today().slice(0, 7));
+        ctx.filters = { ...ctx.filters, month: "", ...range, periodMode: "range" };
+      } else {
+        ctx.filters = { ...ctx.filters, month: ctx.filters.from?.slice(0, 7) || today().slice(0, 7), from: "", to: "", periodMode: "month" };
+      }
+      ctx.render();
+      break;
+    }
+    case "clear-filters":
+      ctx.filters = ctx.route === "reports" ? { month: ctx.filters.month, from: ctx.filters.from, to: ctx.filters.to, periodMode: ctx.filters.periodMode } : {};
+      ctx.limit = 80;
+      ctx.render();
+      break;
+    case "report-supplier": {
+      const period = { ...ctx.filters };
+      navigate("invoices");
+      ctx.filters = { ...period, supplierId: data.id };
+      ctx.render();
+      break;
+    }
     case "supplier-invoices":
       navigate("invoices");
       ctx.filters.supplierId = data.id;
@@ -335,7 +378,7 @@ async function action(type, data = {}) {
     case "resume-draft": {
       const d = await ctx.drafts.load(data.key);
       if (data.key === "scan" || data.key === "reportScan")
-        return scanDialog(ctx, data.key === "scan" ? "invoice" : "report");
+        return scanDialog(ctx, data.key === "scan" ? "invoice" : "report", { resume: true });
       return ctx.reopen(data.key, d?.recordId);
     }
     case "check-cancelled": {
@@ -501,6 +544,11 @@ function detail(i) {
     }
   });
 }
+function documentList(i) {
+  const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
+  ctx.dialog("צילומי חשבונית " + i.documentNumber,
+    `<p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${(i.attachmentIds || []).map((id, index) => `<button class="secondary" data-open-document="${e(id)}">${icon("image")} פתח עמוד / קובץ ${index + 1}</button>`).join("")}</div>`);
+}
 function login() {
   codeSession?.clear();
   codeSession = null;
@@ -559,7 +607,7 @@ async function startup() {
       ctx.loading = false;
       ctx.syncError = false;
       ctx.draftWarning = "";
-      ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
+      ctx.data = { suppliers: [], invoices: [], dailyCash: [], settings: [] };
       ctx.closeModal();
       $("#modal").innerHTML = "";
       if (!user) {
@@ -592,26 +640,33 @@ async function startup() {
 $("#modal").addEventListener("cancel", (ev) => {
   if (ctx.modalBusy) ev.preventDefault();
 });
+$("#modal").addEventListener("close", () => {
+  if ($("#modal").open) return;
+  $("#modal").replaceChildren();
+  void ctx.updateDraftNames().then(() => ctx.render());
+});
 $("#modal").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-close-modal]") && !ctx.modalBusy)
     ctx.closeModal();
   const doc = ev.target.closest("[data-open-document]");
-  if (doc) {
+  if (doc) await openDocument(doc);
+});
+async function openDocument(doc) {
+  if (doc.disabled || !ctx.api) return;
+  const api = ctx.api;
     doc.disabled = true;
     try {
-      ctx.previewBlob(
-        await ctx.api.request("documents/" + doc.dataset.openDocument, {
+      const blob = await api.request("documents/" + doc.dataset.openDocument, {
           blob: true,
           timeout: 50_000,
-        }),
-      );
+        });
+      if (doc.isConnected && ctx.api === api) ctx.previewBlob(blob);
     } catch (err) {
       toast(errorText(err), true);
     } finally {
       doc.disabled = false;
     }
-  }
-});
+}
 window.addEventListener("online", () => ctx.refresh(false));
 window.addEventListener("offline", () => {
   const status = $("#connection-status");

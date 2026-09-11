@@ -54,7 +54,8 @@ export function liveCapture(ctx, root, options = {}) {
         <div class="live-overlay" data-live-unavailable hidden><p>${HINTS.unavailable}</p><label class="primary upload-label">צלם עם מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-fallback hidden></label></div>
         <pre class="live-debug" data-live-debug ${debug ? "" : "hidden"}></pre>
       </div>
-      <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>`;
+      <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>
+      ${options.alternatives ? '<div class="live-alternatives"><label class="text-button upload-label">בחר PDF / תמונה<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-live-gallery hidden></label><button type="button" class="text-button" data-live-manual>הקלד חשבונית ידנית</button></div>' : ""}`;
     if (scanView) scanView.hidden = true;
     const modal = root.closest("dialog"), previousScroll = modal?.scrollTop || 0;
     root.classList.add("crop-modal-content"); modal?.classList.add("crop-modal");
@@ -108,6 +109,9 @@ export function liveCapture(ctx, root, options = {}) {
       resolve(value);
     };
     const removalObserver = new MutationObserver(() => { if (!view.isConnected) finish({ cancelled: true }); });
+    const gallery = $("[data-live-gallery]", view), manual = $("[data-live-manual]", view);
+    if (gallery) gallery.onchange = () => { if (gallery.files.length) finish({ files: [...gallery.files] }); };
+    if (manual) manual.onclick = () => finish({ manual: true });
     removalObserver.observe(document.body, { childList: true, subtree: true });
     const fitFrame = () => {
       const width = stage.clientWidth, height = stage.clientHeight;
