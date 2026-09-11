@@ -46,12 +46,20 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: scanner geometry, perspective/20-degree/long fixtures and thin text preservation`, async t => {
     const page = await scannerPage(t, engine);
     const result = await page.evaluate(async () => {
-      const { orderCorners, homography, projectPoint, detectCorners, warpImage, enhanceImage, fullCorners } = await import("/scan-worker.js");
+      const { orderCorners, homography, projectPoint, detectCorners, warpImage, enhanceImage, fullCorners, mapCropCorners } = await import("/scan-worker.js");
       const expected = [{ x: 20, y: 30 }, { x: 450, y: 80 }, { x: 400, y: 700 }, { x: 10, y: 640 }];
       const ordered = orderCorners([expected[2], expected[0], expected[3], expected[1]]);
       const known = [.9, .12, 20, .03, 1.1, 18, .0002, .0003, 1];
       const base = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 850 }, { x: 0, y: 850 }];
       const transform = homography(base, base.map(p => projectPoint(known, p)));
+      const initialCrop = expected.map(p => ({ x: p.x / 500, y: p.y / 750 }));
+      const inset = [{ x: .07, y: .06 }, { x: .95, y: .03 }, { x: .96, y: .97 }, { x: .02, y: .94 }];
+      const firstCrop = mapCropCorners(inset, initialCrop), secondCrop = mapCropCorners(inset, firstCrop);
+      const initialTransform = homography(fullCorners(), initialCrop), insetTransform = homography(fullCorners(), inset);
+      const cropErrors = secondCrop.map((p, i) => {
+        const expected = projectPoint(initialTransform, projectPoint(insetTransform, inset[i]));
+        return Math.hypot(p.x - expected.x, p.y - expected.y) * 4000;
+      });
       const predictionErrors = [...base, { x: 200, y: 400 }, { x: 730, y: 210 }].map(p => {
         const a = projectPoint(known, p), b = projectPoint(transform, p); return Math.hypot(a.x - b.x, a.y - b.y);
       });
@@ -82,10 +90,11 @@ for (const engine of [chromium, webkit]) {
       const enhanced = enhanceImage(thin);
       const text = enhanced.data[(100 * 320 + 160) * 4], paper = enhanced.data[(100 * 320 + 150) * 4];
       const small = warpImage(new ImageData(200, 300), fullCorners());
-      return { expected, ordered, predictionErrors, detections, rotation: [warped.width, warped.height, darkRowMax - darkRowMin], thin: { before, text, paper }, small: [small.width, small.height] };
+      return { expected, ordered, predictionErrors, cropErrors, detections, rotation: [warped.width, warped.height, darkRowMax - darkRowMin], thin: { before, text, paper }, small: [small.width, small.height] };
     });
     assert.deepEqual(result.ordered, result.expected);
     assert.ok(result.predictionErrors.every(e => e < .5), JSON.stringify(result.predictionErrors));
+    assert.ok(result.cropErrors.every(e => e < .5), "repeated preview crops must compose back to the original within half a source pixel");
     for (const detection of result.detections) {
       if (["none", "circle"].includes(detection.mode)) assert.equal(detection.found, null, detection.mode);
       else { assert.ok(detection.found, detection.mode); assert.ok(detection.error <= .02, JSON.stringify(detection)); }
@@ -95,6 +104,109 @@ for (const engine of [chromium, webkit]) {
     assert.ok(result.thin.paper - result.thin.text >= 30, JSON.stringify(result.thin));
     assert.ok(result.thin.text > 0 && result.thin.text < 240, "thin gray printing must remain gray");
     assert.deepEqual(result.small, [200, 300], "no enlargement of a small original");
+  });
+
+  test(`${engine.name()}: shaded paper becomes neutral and faint single-pixel ink gains contrast without binarization`, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { enhanceImage } = await import("/scan-worker.js");
+      const { canvas, samples } = window.makeShadedPaper(), pen = canvas.getContext("2d");
+      const before = pen.getImageData(0, 0, canvas.width, canvas.height);
+      const start = performance.now();
+      const after = enhanceImage(new ImageData(new Uint8ClampedArray(before.data), before.width, before.height));
+      const elapsed = performance.now() - start;
+      const rgb = (image, x, y) => [...image.data.slice((y * image.width + x) * 4, (y * image.width + x) * 4 + 3)];
+      const gray = value => value.reduce((s, n) => s + n, 0) / 3;
+      pen.putImageData(after, 0, 0);
+      const measurements = samples.map(({ x, y, ratio }) => {
+        const paper = rgb(after, x + 4, y), ink = rgb(after, x, y);
+        return { ratio, paper, ink, before: gray(rgb(before, x + 4, y)) - gray(rgb(before, x, y)), after: gray(paper) - gray(ink) };
+      });
+      const tones = Array.from({ length: 48 }, (_, i) => Math.round(gray(rgb(after, 84 + i * 12, 960))));
+      const original = document.createElement("canvas"); original.width = canvas.width; original.height = canvas.height;
+      original.getContext("2d").putImageData(before, 0, 0);
+      const comparison = document.createElement("div"); comparison.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:24px;direction:rtl;font:22px sans-serif";
+      for (const [label, image] of [["לפני השיפור", original], ["אחרי השיפור", canvas]]) {
+        const figure = document.createElement("figure"), caption = document.createElement("figcaption");
+        figure.style.margin = "0"; caption.textContent = label; image.style.width = "100%";
+        figure.append(caption, image); comparison.append(figure);
+      }
+      document.body.replaceChildren(comparison);
+      return { measurements, tones, colour: rgb(after, 765, 990), elapsed };
+    });
+    await mkdir("test-artifacts", { recursive: true });
+    await page.setViewportSize({ width: 960, height: 760 });
+    await page.screenshot({ path: `test-artifacts/paper-enhancement-${engine.name()}.png`, fullPage: true });
+    for (const sample of result.measurements) {
+      assert.ok(Math.min(...sample.paper) >= 235, `paper should be light: ${JSON.stringify(sample)}`);
+      assert.ok(Math.max(...sample.paper) - Math.min(...sample.paper) <= 5, `neutral paper: ${JSON.stringify(sample)}`);
+      assert.ok(sample.after >= sample.before * 1.6, `faint ink must gain contrast: ${JSON.stringify(sample)}`);
+      assert.ok(Math.min(...sample.ink) > 0 && Math.max(...sample.ink) < 250, `gray strokes survive: ${JSON.stringify(sample)}`);
+    }
+    assert.ok(new Set(result.tones).size >= 40, "preserve many gray tones instead of thresholding/posterizing");
+    assert.ok(result.colour[2] - result.colour[0] >= 40, "coloured marks must retain their colour");
+    console.log(`${engine.name()}: shaded-paper correction ${Math.round(result.elapsed)}ms on the test machine; faint-stroke contrast preserved`);
+  });
+
+  test(`${engine.name()}: long processed receipt fills the screen, scrolls with reachable actions and resets to the full enhanced photo`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(async () => {
+      window.cropMessages = [];
+      const NativeWorker = window.Worker;
+      window.Worker = class extends NativeWorker {
+        postMessage(message, ...args) {
+          window.cropMessages.push({ type: message.type, points: message.points, basePoints: message.basePoints });
+          super.postMessage(message, ...args);
+        }
+      };
+      await window.openScanner();
+      const { file } = await window.makePhoto("long", 1500), transfer = new DataTransfer(); transfer.items.add(file);
+      const input = document.querySelector("#camera-file"); input.files = transfer.files;
+      window.pendingPhotoSelection = input.onchange();
+    });
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    const initial = await page.locator("[data-crop-result]").evaluate(img => ({ width: img.clientWidth, ratio: img.naturalWidth / img.naturalHeight, edge: Math.max(img.naturalWidth, img.naturalHeight) }));
+    assert.ok(initial.width >= page.viewportSize().width * .8 && initial.ratio < .3, JSON.stringify(initial));
+    assert.equal(initial.edge, 2500, "the large preview uses the final resolution");
+    const viewport = page.locator(".crop-source-area");
+    assert.ok(await viewport.evaluate(el => el.scrollHeight > el.clientHeight), "long pages scroll at a readable width");
+    await viewport.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    for (const action of ["accept", "original", "retake-button"]) {
+      const box = await page.locator(`[data-crop-${action}]`).boundingBox();
+      assert.ok(box.y >= 0 && box.y + box.height <= page.viewportSize().height, `action ${action} stays visible`);
+    }
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/scanner-long-${engine.name()}.png`, fullPage: true });
+    await page.locator("[data-crop-reset]").tap();
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled && document.querySelector("[data-crop-status]").textContent.includes("כל התמונה"));
+    const ratio = await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth / img.naturalHeight);
+    assert.ok(Math.abs(ratio - .5) < .001, "reset restores all source edges, including content outside the automatic crop");
+    assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
+    // Hash decoded pixels: approving must upload the same processed image shown.
+    const previewHash = await page.evaluate(() => {
+      window.pixelHash = image => {
+        const canvas = document.createElement("canvas"); canvas.width = image.naturalWidth || image.width; canvas.height = image.naturalHeight || image.height;
+        const pen = canvas.getContext("2d"); pen.drawImage(image, 0, 0);
+        const pixels = pen.getImageData(0, 0, canvas.width, canvas.height).data;
+        let hash = 2166136261;
+        for (let i = 0; i < pixels.length; i++) hash = Math.imul(hash ^ pixels[i], 16777619);
+        canvas.width = canvas.height = 1;
+        return hash >>> 0;
+      };
+      return window.pixelHash(document.querySelector("[data-crop-result]"));
+    });
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    const saved = await page.evaluate(async () => {
+      const file = window.scanDrafts()[0][1].files[0], img = new Image();
+      img.src = `data:${file.mime};base64,${file.data}`; await img.decode();
+      return { hash: window.pixelHash(img), process: window.cropMessages.find(m => m.type === "process") };
+    });
+    assert.equal(saved.hash, previewHash, "preview and upload must have identical decoded pixels");
+    assert.deepEqual(saved.process.points, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
+    assert.equal(await page.locator(".crop-modal, .crop-modal-content").count(), 0, "normal scan layout is restored");
+    assert.equal(await page.locator(".modal-heading").isVisible(), true);
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
   });
 
   test(`${engine.name()}: local camera crop, corner dragging, one upload and unchanged human Review gate`, { timeout: 60000 }, async t => {
@@ -109,7 +221,11 @@ for (const engine of [chromium, webkit]) {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal scrolling on a phone");
     assert.equal(await page.locator("[data-crop-corner]").count(), 4);
     const handle = page.locator('[data-crop-corner="0"]');
-    const before = await handle.evaluate(el => el.style.left);
+    assert.equal(await page.locator(".scan-crop img").count(), 1, "one processed image is the crop surface");
+    assert.equal(await page.locator("[data-crop-source]").count(), 0, "the unprocessed original is not displayed");
+    const surface = await page.locator("[data-crop-result]").boundingBox();
+    assert.ok(surface.width >= page.viewportSize().width * .8, "the document must fill the phone width");
+    const before = await page.locator("[data-crop-result]").getAttribute("src");
     const box = await handle.boundingBox(); assert.ok(box.width >= 48 && box.height >= 48);
     if (engine.name() === "chromium") {
       const session = await page.context().newCDPSession(page);
@@ -122,12 +238,13 @@ for (const engine of [chromium, webkit]) {
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
       await page.mouse.move(box.x + box.width / 2 + 8, box.y + box.height / 2 + 8, { steps: 4 }); await page.mouse.up();
     }
-    assert.notEqual(await handle.evaluate(el => el.style.left), before);
+    await page.waitForFunction(before => document.querySelector("[data-crop-result]").src !== before && !document.querySelector("[data-crop-accept]").disabled, before);
+    assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]], "handles follow the newly rectified image");
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     // A cancelled retake leaves the current selection intact.
-    const adjusted = await handle.evaluate(el => el.style.left);
+    const adjusted = await page.locator("[data-crop-result]").getAttribute("src");
     await page.evaluate(() => document.querySelector("[data-crop-retake]").onchange());
-    assert.equal(await handle.evaluate(el => el.style.left), adjusted);
+    assert.equal(await page.locator("[data-crop-result]").getAttribute("src"), adjusted);
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => window.scanDrafts().find(([k]) => k === "scan")?.[1].files.length === 1);
     const photo = await page.evaluate(async () => {
@@ -238,7 +355,7 @@ for (const engine of [chromium, webkit]) {
       }, fallback);
       await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
       await page.waitForFunction(() => !document.querySelector("[data-crop-zoom]").disabled);
-      const preview = await page.locator("[data-crop-source]").evaluate(img => [img.naturalWidth, img.naturalHeight]);
+      const preview = await page.locator("[data-crop-result]").evaluate(img => [img.naturalWidth, img.naturalHeight]);
       assert.ok(preview[1] > preview[0], "EXIF is applied before positioning corners");
       await page.locator("[data-crop-accept]").tap();
       await page.waitForFunction(() => !document.querySelector(".scan-crop"));

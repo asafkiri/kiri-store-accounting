@@ -1,5 +1,30 @@
 // Procedural fixtures; no customer documents or real accounts in the repository.
 export function installScannerFixtures() {
+  window.makeShadedPaper = () => {
+    const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 1280;
+    const pen = canvas.getContext("2d"), pixels = pen.createImageData(canvas.width, canvas.height), samples = [];
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      const light = 246 - 42 * x / canvas.width - 46 * Math.exp(-(((y / canvas.height - .58) / .14) ** 2));
+      pixels.data.set([light, light * .95, light * .89, 255], (y * canvas.width + x) * 4);
+    }
+    // Single-pixel printing at several exposure levels, including very pale ink.
+    for (const y of [240, 740, 1120]) for (const x of [120, 480, 840]) for (const ratio of [.84, .97]) {
+      const xx = x + (ratio > .9 ? 12 : 0);
+      for (let yy = y - 10; yy <= y + 10; yy++) for (let c = 0; c < 3; c++) pixels.data[(yy * canvas.width + xx) * 4 + c] *= ratio;
+      samples.push({ x: xx, y, ratio });
+    }
+    // Multiple gray values and a coloured mark must survive as continuous tones.
+    for (let level = 0; level < 48; level++) {
+      const value = 30 + level * 4;
+      for (let y = 950; y < 970; y++) for (let x = 80 + level * 12; x < 88 + level * 12; x++)
+        pixels.data.set([value, value, value, 255], (y * canvas.width + x) * 4);
+    }
+    pen.putImageData(pixels, 0, 0);
+    pen.fillStyle = "#204ca0"; pen.fillRect(720, 960, 90, 60);
+    pen.fillStyle = "#808080"; pen.font = "24px sans-serif";
+    pen.fillText("Invoice 3385.50   VAT 609.41   Total 3995.00", 90, 100);
+    return { canvas, samples };
+  };
   window.makeDocumentCanvas = (mode = "perspective", size = 1000, aspect = .85) => {
     const canvas = document.createElement("canvas");
     canvas.width = size; canvas.height = mode === "long" ? size * 2 : size * aspect;
@@ -49,7 +74,7 @@ export function installScannerFixtures() {
     const ctx = {
       data: { suppliers: [{ id: "supplier-osem", name: "אסם", active: true }], invoices: [], dailyCash: [] },
       drafts: { load: async key => structuredClone(cache.get(key)), save: async (key, value) => cache.set(key, structuredClone(value)), remove: async key => cache.delete(key) },
-      dialog: (_title, html) => { document.querySelector("#modal").innerHTML = `<div class="modal-content">${html}</div>`; return document.querySelector(".modal-content"); },
+      dialog: (title, html) => { document.querySelector("#modal").innerHTML = `<div class="modal-content"><header class="modal-heading"><h2>${title}</h2><button class="icon-button">סגור</button></header>${html}</div>`; return document.querySelector(".modal-content"); },
       setModalBusy(busy) { window.scanBusy = busy; }, closeModal() {}, render() {}, refresh() {}, mergeRecord() {}, previewBlob() {},
       api: {
         request: async (path, options) => {
