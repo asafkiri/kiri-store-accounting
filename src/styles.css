@@ -10,6 +10,7 @@
   --line: #dce3eb;
   --muted: #607086;
   --danger: #a83336;
+  --surface: #ffffff;
 }
 * {
   box-sizing: border-box;
@@ -384,7 +385,7 @@ main#main {
 }
 .filters .field {
   flex: 1;
-  min-width: 150px;
+  min-width: 0;
 }
 .filters .field span {
   font-size: 16px;
@@ -890,6 +891,135 @@ dialog.crop-modal {
   animation: crop-spin .8s linear infinite;
 }
 @keyframes crop-spin { to { transform: rotate(360deg); } }
+/* A scan-first workspace. Months and suppliers share the same folder language. */
+.invoice-entry { margin-bottom: 16px; }
+.scan-primary { width: 100%; min-height: 80px; justify-content: flex-start; padding: 16px 22px; border-radius: 16px; text-align: right; }
+.scan-primary > svg:first-child { width: 30px; height: 30px; }
+.scan-primary > svg:last-child { margin-inline-start: auto; }
+.scan-primary span { display: flex; flex-direction: column; gap: 2px; }
+.scan-primary strong { font-size: 1.22rem; }
+.scan-primary small { font-size: .9rem; font-weight: 400; color: #edf4ff; }
+.entry-secondary { display: flex; justify-content: space-between; gap: 12px; padding: 2px 5px 0; }
+.entry-secondary .text-button { min-height: 44px; font-size: .9rem; font-weight: 500; }
+.payable-summary { display: flex; align-items: center; gap: 14px; width: 100%; background: #e9f0fa; border: 1px solid #d0def0; border-radius: 12px; padding: 14px 16px; margin: 0 0 20px; text-align: right; }
+.payable-summary > span { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.payable-summary small { color: #48617e; font-size: .85rem; }
+.payable-summary > strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.browser-heading { margin: 0 0 4px; gap: 8px; }
+.browser-heading h2 { font-size: 1.07rem; }
+.browser-heading .text-button { font-size: .9rem; }
+.page-intro { color: var(--muted); margin: -8px 0 20px; }
+.back-link { margin: -10px 0 10px; font-size: .9rem; }
+.tabs { border: 0; padding: 4px; background: #e7edf5; border-radius: 12px; gap: 4px; margin-bottom: 14px; }
+.tabs button { flex: 1; border: 0; border-radius: 9px; min-height: 44px; padding: 8px 12px; }
+.tabs button.active { background: white; color: #174f97; box-shadow: 0 1px 4px #1a345018; }
+.filter-panel { background: transparent; border: 0; border-radius: 0; padding: 0; margin-bottom: 8px; }
+.filter-panel summary { display: flex; align-items: center; font-size: .88rem; min-height: 44px; }
+.filter-panel summary::after { content: "+"; margin-inline-start: 8px; font-size: 20px; }
+.filter-panel[open] summary::after { content: "−"; }
+.filters .field, .field input, .field select, .field textarea { min-width: 0; max-width: 100%; }
+.field input[type=date], .field input[type=month] { width: 100%; min-width: 0; -webkit-appearance: none; appearance: none; min-height: 48px; }
+.field input::-webkit-date-and-time-value { text-align: start; min-height: 1.5em; }
+.advanced-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 14px; background: white; border: 1px solid var(--line); border-radius: 12px; margin: 0 0 12px; }
+.advanced-filters > .date-range, .advanced-filters > .text-button { grid-column: 1 / -1; }
+.date-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; min-width: 0; }
+.period-picker { display: block; margin: 0 0 20px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.period-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.period-heading > strong { font-size: 1rem; }
+.period-heading .text-button { font-size: .85rem; min-height: 44px; font-weight: 500; }
+.period-picker > .field { max-width: 420px; }
+.period-picker > .field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.invoice-folders { display: grid; gap: 14px; }
+.month-folder { border: 1px solid #d4dfed; border-radius: 14px; background: #fff; overflow: hidden; }
+.month-folder > summary, .supplier-folder > summary { display: flex; align-items: center; gap: 12px; padding: 17px; cursor: pointer; min-height: 76px; list-style: none; }
+.month-folder summary::-webkit-details-marker { display: none; }
+.month-folder summary::marker { content: ""; }
+.folder-symbol { background: #edf3fc; color: #1a5bb0; border-radius: 12px; padding: 10px; display: flex; }
+.folder-title { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.folder-title strong { overflow-wrap: anywhere; line-height: 1.45; }
+.folder-title small { font-size: .85rem; color: var(--muted); }
+.folder-total { font-size: .94rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.month-folder > summary > svg:last-child, .supplier-folder > summary > svg:last-child { width: 18px; height: 18px; color: var(--muted); transition: transform .15s; }
+.month-folder[open] > summary > svg:last-child, .supplier-folder[open] > summary > svg:last-child { transform: rotate(-90deg); }
+.month-folder[open] > summary { border-bottom: 1px solid var(--line); background: #f8faff; }
+.month-content { padding: 0 14px; }
+.supplier-folder + .supplier-folder { border-top: 1px solid #e2e8f0; }
+.supplier-folder > summary { padding: 15px 0; }
+.supplier-folder .supplier-avatar { width: 38px; height: 38px; font-size: 1rem; border-radius: 10px; }
+.supplier-folder .folder-title strong { font-size: 1rem; }
+.supplier-content { padding-bottom: 16px; }
+.supplier-tools { display: flex; justify-content: flex-end; margin-top: -8px; }
+.supplier-tools .text-button { font-size: .85rem; min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
+.supplier-content > .secondary { margin-top: 12px; }
+.supplier-content .invoice-card { background: #fafbfd; border-radius: 10px; box-shadow: none; }
+.invoice-bottom { flex-wrap: wrap; }
+.invoice-bottom .attachment-shortcut { min-height: 44px; padding: 7px 0; font-size: .85rem; font-weight: 500; }
+.preview-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.document-card { border: 1px solid var(--line); background: #fafbfd; border-radius: 12px; padding: 14px; }
+.document-card-heading { display: flex; align-items: center; gap: 10px; }
+.document-card-heading > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.document-card-heading .badge { font-size: .85rem; }
+.document-pages { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
+.document-pages .secondary { min-height: 48px; flex: 1; }
+.document-card > .text-button { font-weight: 500; font-size: .88rem; }
+.report-overview { background: var(--navy); color: white; padding: 22px; border-radius: 16px; display: flex; flex-direction: column; gap: 3px; margin-bottom: 14px; }
+.report-overview > strong { font-size: 2rem; font-variant-numeric: tabular-nums; }
+.report-overview small { color: #d9e6f6; font-size: .88rem; }
+.report-section { margin-top: 24px; }
+.report-section > h2 { font-size: 1.12rem; margin-bottom: 12px; }
+.report-suppliers { background: white; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.report-supplier-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: right; padding: 16px; min-height: 72px; }
+.report-supplier-row + .report-supplier-row { border-top: 1px solid var(--line); }
+.report-supplier-row > span { display: flex; flex-direction: column; min-width: 0; }
+.report-supplier-row > span:first-child { flex: 1; overflow-wrap: anywhere; }
+.report-supplier-row small { color: var(--muted); font-size: .85rem; }
+.vat-summary { background: white; border: 1px solid var(--line); border-radius: 14px; padding: 6px 16px; margin: 0; }
+.vat-summary > div { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; }
+.vat-summary > div + div { border-top: 1px solid var(--line); }
+.vat-summary dd { margin: 0; font-weight: 700; }
+.accountant-tools { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
+.accountant-tools summary { cursor: pointer; min-height: 44px; color: #36506f; }
+.supplier-removal { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 12px; }
+.delete-form button[type=submit] { background: var(--danger); }
+@media (max-width: 680px) {
+  main#main { padding: 18px 16px 15px; }
+  .page-heading { margin-bottom: 16px; }
+  .page-heading h1 { font-size: 1.5rem; letter-spacing: normal; }
+  .scan-primary { padding: 14px 18px; min-height: 76px; }
+  .scan-primary strong { font-size: 1.2rem; }
+  .payable-summary { gap: 10px; padding: 12px; margin-bottom: 16px; }
+  .payable-summary > strong { font-size: 1.05rem; }
+  .browser-heading h2 { font-size: 1rem; }
+  .month-folder > summary, .supplier-folder > summary { gap: 8px; }
+  .month-folder > summary { padding: 14px 12px; flex-wrap: wrap; }
+  .folder-symbol { padding: 8px; }
+  .folder-title { flex-basis: 38%; }
+  .folder-total { font-size: .9rem; }
+  .month-content { padding: 0 12px; }
+  .supplier-folder > summary { flex-wrap: wrap; }
+  .supplier-folder .folder-total { font-size: .85rem; }
+  .invoice-main { flex-wrap: wrap; padding: 14px 12px 10px; }
+  .invoice-bottom { margin: 0 12px; gap: 6px; }
+  .supplier-name { font-size: 1rem; }
+  .invoice-note { max-width: 100%; }
+  .period-picker { padding: 12px; }
+  .period-heading { gap: 4px; }
+  .date-range { gap: 10px; }
+  .date-range input { font-size: 16px; padding: 10px 6px; }
+  .document-card-heading { flex-wrap: wrap; }
+  .document-card-heading > svg { display: none; }
+  .sidebar nav button { font-size: 14px; }
+  .report-supplier-row { padding: 14px 12px; font-size: .95rem; flex-wrap: wrap; }
+  .report-supplier-row > span:first-child { flex-basis: 35%; }
+}
+@media (max-width: 350px) {
+  .entry-secondary { gap: 4px; }
+  .entry-secondary .text-button { font-size: 14px; }
+  .folder-symbol { display: none; }
+  .folder-total { flex-basis: 100%; padding-inline-start: 0; }
+  .supplier-folder > summary > svg:last-child { margin-inline-start: auto; }
+  .advanced-filters { grid-template-columns: minmax(0, 1fr); }
+}
 @media (prefers-reduced-motion: reduce) {
   .scan-crop [aria-busy="true"]::before { animation: none; }
 }
@@ -1342,7 +1472,7 @@ dialog.crop-modal {
     gap: 12px;
   }
   .filters .field {
-    min-width: calc(50% - 12px);
+    min-width: 0;
   }
   .list-heading {
     font-size: 16px;
@@ -1530,6 +1660,12 @@ dialog.crop-modal {
   .invoice-bottom .pay-button,
   .toast,
   .main-actions,
+  .invoice-entry,
+  .payable-summary,
+  .tabs,
+  .supplier-tools,
+  .attachment-shortcut,
+  .report-export,
   .search {
     display: none !important;
   }

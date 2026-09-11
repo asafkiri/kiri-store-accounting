@@ -5,6 +5,7 @@ import { mkdir, readdir, readFile as readTestFile } from "node:fs/promises";
 import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
 import { installScannerFixtures } from "./scanner-fixtures.mjs";
+import { workspaceFixture } from "./workspace-fixture.mjs";
 
 // Exercise narrow Android/Chromium and iPhone/WebKit layouts with touch enabled.
 // These are browser emulations, not a claim of testing physical phones.
@@ -1486,5 +1487,89 @@ for (const engine of [chromium, webkit]) {
     assert.match(result.message, /נשמר בחנות/);
     assert.deepEqual(result.viewer, { frames: 0, target: "_blank", blob: true, fallback: true });
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: scan-first workspace, month/supplier photos, supplier deletion and date layout`, { timeout: 60000 }, async t => {
+    const { server, requests, month, previous } = workspaceFixture();
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.locator(".scan-primary").waitFor();
+    assert.equal(await page.locator('nav [data-route="suppliers"]').count(), 0);
+    const scan = await page.locator(".scan-primary").boundingBox();
+    const manual = await page.locator('[data-action="invoice"]').boundingBox();
+    assert.ok(scan.width > manual.width * 2 && scan.height > manual.height);
+    assert.ok(scan.y < 200, "primary scanning is immediately available");
+    const monthFolders = page.locator(".month-folder");
+    assert.equal(await monthFolders.count(), 2);
+    assert.equal(await monthFolders.first().getAttribute("data-folder"), "invoices:" + month);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/workspace-${engine.name()}.png`, fullPage: true });
+    await page.locator(".scan-primary").click();
+    await page.locator("#run-scan").waitFor();
+    assert.ok(await page.locator(".capture-actions").isVisible());
+    await page.locator("[data-close-modal]").click();
+    await page.locator('.sidebar [data-route="documents"]').click();
+    const current = page.locator(`[data-folder="photos:${month}"]`);
+    const supplier = current.locator(`[data-folder="photos:${month}:supplier-tnuva"]`);
+    await supplier.locator(":scope > summary").click();
+    assert.equal(await supplier.locator("[data-open-document]").count(), 2);
+    await supplier.locator("[data-open-document]").first().click();
+    await page.locator(".preview-dialog img").waitFor();
+    assert.equal(requests.filter(r => r.path.startsWith("/api/v1/documents/")).length, 1);
+    assert.ok(await page.locator("[data-preview-download]").isVisible());
+    await page.locator("[data-preview-close]").click();
+    await page.screenshot({ path: `test-artifacts/photos-${engine.name()}.png`, fullPage: true });
+    await page.locator('.sidebar [data-route="cash"]').click();
+    assert.equal(await page.locator('[name="month"]').inputValue(), month);
+    assert.equal(await page.locator('[name="from"]').count(), 0);
+    await page.locator('[data-action="period-mode"]').click();
+    const from = page.locator('[name="from"]'), to = page.locator('[name="to"]');
+    assert.equal(await page.locator('[name="month"]').count(), 0);
+    for (const width of [320, 360, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const a = await from.boundingBox(), b = await to.boundingBox();
+      assert.ok(Math.abs(a.y - b.y) < 2, "from and to share one row");
+      assert.ok(b.x + b.width <= a.x + 1, "date fields never overlap in RTL");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "no horizontal overflow");
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await from.fill(previous + "-01");
+    await to.fill(previous + "-28");
+    assert.equal(await page.locator(".cash-row").count(), 1);
+    await page.screenshot({ path: `test-artifacts/cash-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-action="period-mode"]').click();
+    assert.equal(await page.locator('[name="month"]').inputValue(), previous);
+    await page.locator('.sidebar [data-route="reports"]').click();
+    assert.equal(await page.locator(".report-supplier-row").count(), 2);
+    assert.match(await page.locator(".report-overview").innerText(), /1,714/);
+    await page.screenshot({ path: `test-artifacts/summary-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-action="report-supplier"][data-id="supplier-tnuva"]').click();
+    assert.equal(await page.locator(".invoice-card").count(), 1);
+    await page.locator('.sidebar [data-route="invoices"]').click();
+    await page.locator('[data-action="manage-suppliers"]').click();
+    await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').click();
+    await page.locator("[data-remove-supplier]").click();
+    await page.locator('.delete-form [type="submit"]').click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    assert.equal(await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').count(), 0);
+    await page.reload();
+    await page.locator('[data-action="manage-suppliers"]').click();
+    assert.equal(await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').count(), 0);
+    await page.locator('[data-action="supplier-edit"][data-id="supplier-tnuva"]').click();
+    await page.locator("[data-remove-supplier]").click();
+    assert.match(await page.locator("[data-form-error]").innerText(), /היסטוריית חשבוניות/);
+    assert.equal(requests.filter(r => r.method === "DELETE").length, 1);
+    assert.deepEqual(errors, []);
   });
 }

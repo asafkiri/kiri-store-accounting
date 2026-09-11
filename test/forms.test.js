@@ -888,3 +888,44 @@ test("failure to persist cancellation keeps the immutable pending attempt and do
   assert.equal(document.querySelector("[name=name]").disabled, true);
   assert.equal(calls, 0);
 });
+
+test("deleting an unused supplier survives lost response and reuses the deletion identity", async () => {
+  const { ctx, drafts } = setup();
+  const record = { id: "supplier-unused", name: "ספק טעות", active: true, version: 3 };
+  ctx.data.suppliers.push(record);
+  const attempts = [];
+  ctx.api.save = async pending => {
+    attempts.push(structuredClone(pending));
+    if (attempts.length === 1) throw new ApiError("לא התקבלה תשובה", "NETWORK", 0);
+    return { record: { ...record, active: false, deletedAt: 123, version: 4 } };
+  };
+  await supplierForm(ctx, record);
+  document.querySelector("[data-remove-supplier]").click();
+  await tick();
+  assert.match(document.body.textContent, /למחוק את הספק/);
+  submit();
+  await tick();
+  assert.equal(attempts[0].method, "DELETE");
+  assert.equal(attempts[0].path, "suppliers/" + record.id);
+  assert.equal(attempts[0].body.expectedVersion, 3);
+  assert.equal(drafts.get("supplier").operation, "delete");
+  await supplierForm(ctx, record);
+  submit();
+  await tick();
+  assert.deepEqual(attempts[1], attempts[0]);
+  assert.equal(drafts.has("supplier"), false);
+});
+
+test("supplier removal protects even deleted invoice history and manual invoice excludes delivery notes", async () => {
+  const { ctx, saved } = setup();
+  const supplier = { ...ctx.data.suppliers[0], version: 1 };
+  ctx.data.invoices.push({ supplierId: supplier.id, deletedAt: 123 });
+  await supplierForm(ctx, supplier);
+  document.querySelector("[data-remove-supplier]").click();
+  assert.match(document.querySelector("[data-form-error]").textContent, /היסטוריית חשבוניות/);
+  assert.equal(saved.length, 0);
+  await invoiceForm(ctx);
+  const options = [...document.querySelector('[name="documentType"]').options].map(o => o.value);
+  assert.deepEqual(options, ["", "invoice", "credit"]);
+  assert.equal(document.querySelector('[name="documentType"]').value, "invoice");
+});
