@@ -9,3 +9,4 @@ firebase-debug.log
 .sites-runtime/
 .DS_Store
 test-artifacts/
+gha-creds-*.json
