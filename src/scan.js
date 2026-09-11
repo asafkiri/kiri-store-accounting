@@ -72,21 +72,25 @@ export function reviewPhoto(ctx, root, firstFile) {
     const scanView = $(".scan-view", root), editor = document.createElement("section");
     editor.className = "scan-crop";
     editor.setAttribute("aria-label", "אישור צילום התעודה");
-    editor.innerHTML = `<div class="crop-heading"><h3>בדוק שכל התעודה בפנים</h3><button type="button" class="text-button" data-crop-cancel>בטל</button></div>
-      <p class="small" data-crop-status role="status" aria-live="polite" aria-busy="true">מזהה את גבולות התעודה…</p>
-      <div class="crop-images"><div><p class="small">גרור את הפינות עד לקצוות הנייר</p><div class="crop-source-area"><div class="crop-source">
-      <img data-crop-source alt="צילום מקורי עם גבולות התעודה" draggable="false">
+    editor.innerHTML = `<div class="crop-heading"><h3>בדיקת צילום התעודה</h3><button type="button" class="text-button" data-crop-cancel>בטל</button></div>
+      <p class="small" data-crop-status role="status" aria-live="polite" aria-busy="true">משפר את התאורה ומיישר את התעודה…</p>
+      <div class="crop-toolbar"><button type="button" class="text-button" data-crop-reset disabled>איפוס חיתוך</button><button type="button" class="text-button" data-crop-zoom disabled>הגדל</button></div>
+      <div class="crop-source-area"><div class="crop-source" hidden>
+      <img data-crop-result alt="תעודה משופרת — גרור את הפינות להתאמת החיתוך" draggable="false">
       <svg class="crop-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path fill="rgba(0,0,0,.42)" fill-rule="evenodd"></path><polygon fill="none" stroke="#7dd3fc" stroke-width="2" vector-effect="non-scaling-stroke"></polygon></svg>
-      ${["שמאלית עליונה", "ימנית עליונה", "ימנית תחתונה", "שמאלית תחתונה"].map((label, i) => `<button type="button" class="crop-handle" data-crop-corner="${i}" aria-label="פינה ${label}" disabled><span></span></button>`).join("")}</div></div></div>
-      <div class="crop-result"><p class="small">תצוגה מקדימה לאחר היישור</p><button type="button" class="crop-result-button" data-crop-zoom aria-label="הגדל תצוגה מקדימה" disabled><img data-crop-result alt="תצוגה מיושרת של התעודה" hidden></button></div></div>
+      ${["שמאלית עליונה", "ימנית עליונה", "ימנית תחתונה", "שמאלית תחתונה"].map((label, i) => `<button type="button" class="crop-handle" data-crop-corner="${i}" aria-label="פינה ${label}" disabled><span></span></button>`).join("")}</div></div>
       <div class="crop-actions"><button type="button" class="primary" data-crop-accept disabled>אשר</button><button type="button" class="secondary" data-crop-retake-button>צלם שוב</button><button type="button" class="secondary" data-crop-original>ללא חיתוך</button><input data-crop-retake type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></div>`;
     if (scanView) scanView.hidden = true;
+    const modal = root.closest("dialog"), previousScroll = modal?.scrollTop || 0;
+    root.classList.add("crop-modal-content"); modal?.classList.add("crop-modal");
     root.append(editor);
-    const status = $("[data-crop-status]", editor), source = $("[data-crop-source]", editor), resultImage = $("[data-crop-result]", editor);
+    if (modal) modal.scrollTop = 0;
+    const status = $("[data-crop-status]", editor), resultImage = $("[data-crop-result]", editor);
     const stage = $(".crop-source", editor), accept = $("[data-crop-accept]", editor), originalButton = $("[data-crop-original]", editor);
+    const reset = $("[data-crop-reset]", editor), zoom = $("[data-crop-zoom]", editor), viewport = $(".crop-source-area", editor);
     const handles = [...editor.querySelectorAll("[data-crop-corner]")], retake = $("[data-crop-retake]", editor);
-    let file = firstFile, worker, fallbackImage, sourceUrl, resultUrl, previewBlob;
-    let points, generation = 0, revision = 0, disposed = false, ready = false, saving = false, dragging = null;
+    let file = firstFile, worker, resultUrl, previewBlob, basePoints;
+    let points, generation = 0, revision = 0, disposed = false, ready = false, saving = false, rendering = false, dragging = null;
     const allCorners = () => [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
     const redraw = () => {
       const coords = points.map(p => `${p.x * 100},${p.y * 100}`).join(" ");
@@ -94,56 +98,76 @@ export function reviewPhoto(ctx, root, firstFile) {
       $("path", stage).setAttribute("d", `M0,0 H100 V100 H0 Z M${coords.replaceAll(" ", " L")} Z`);
       handles.forEach((handle, i) => { handle.style.left = points[i].x * 100 + "%"; handle.style.top = points[i].y * 100 + "%"; });
     };
-    const layout = () => {
-      if (!source.naturalWidth) return;
-      const available = $(".crop-source-area", editor).clientWidth - 48;
-      const height = Math.min(360, window.innerHeight * .32);
-      stage.style.width = Math.max(1, Math.min(available, height * source.naturalWidth / source.naturalHeight)) + "px";
+    const controls = () => {
+      const disabled = !ready || saving || rendering;
+      accept.disabled = reset.disabled = zoom.disabled = disabled;
+      handles.forEach(handle => handle.disabled = disabled);
     };
-    source.onload = layout;
-    const observer = new ResizeObserver(layout);
-    observer.observe($(".crop-source-area", editor));
     const release = () => {
       worker?.stop(); worker = null;
-      fallbackImage?.close?.(); fallbackImage = null;
-      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
       if (resultUrl) URL.revokeObjectURL(resultUrl);
-      sourceUrl = resultUrl = null; previewBlob = null;
+      resultUrl = null; previewBlob = null;
+      resultImage.removeAttribute("src");
     };
     const finish = value => {
       if (disposed) return;
       disposed = true; generation++; revision++;
-      observer.disconnect(); removalObserver.disconnect(); release(); editor.remove();
+      removalObserver.disconnect(); release(); editor.remove();
+      root.classList.remove("crop-modal-content");
+      if (!modal?.querySelector(".scan-crop")) modal?.classList.remove("crop-modal");
       if (scanView) scanView.hidden = false;
+      if (modal?.contains(root)) modal.scrollTop = previousScroll;
       resolve(value);
     };
     // Logout or another view can detach the modal while decoding is in flight.
     const removalObserver = new MutationObserver(() => { if (!editor.isConnected) finish(null); });
     removalObserver.observe(document.body, { childList: true, subtree: true });
-    const showPreview = async () => {
+    const display = async (response, session, current) => {
+      const blob = await resultBlob(response);
+      if (disposed || session !== generation || current !== revision) return false;
+      const oldUrl = resultUrl;
+      previewBlob = blob; resultUrl = URL.createObjectURL(blob); resultImage.src = resultUrl;
+      if (oldUrl) URL.revokeObjectURL(oldUrl);
+      await resultImage.decode();
+      if (disposed || session !== generation || current !== revision) return false;
+      basePoints = response.corners; points = allCorners(); redraw(); stage.hidden = false;
+      return true;
+    };
+    const showPreview = async (resetCrop = false) => {
+      if (!ready || disposed || saving || rendering) return;
       const current = ++revision, session = generation;
-      if (!ready || disposed || saving) return;
+      rendering = true; controls();
+      status.textContent = "מעדכן את החיתוך בתמונה המשופרת…";
+      status.setAttribute("aria-busy", "true");
       try {
-        const result = await worker.request("preview", { points });
-        const blob = await resultBlob(result);
-        if (disposed || session !== generation || current !== revision) return;
-        if (resultUrl) URL.revokeObjectURL(resultUrl);
-        previewBlob = blob; resultUrl = URL.createObjectURL(blob); resultImage.src = resultUrl;
-        resultImage.hidden = false; $("[data-crop-zoom]", editor).disabled = false;
+        const response = await worker.request("preview", {
+          points: resetCrop ? allCorners() : points,
+          basePoints: resetCrop ? allCorners() : basePoints,
+        });
+        if (!await display(response, session, current)) return;
+        if (resetCrop) viewport.scrollTop = 0;
+        status.textContent = resetCrop
+          ? "כל התמונה מוצגת עם השיפור. גרור את הפינות סביב התעודה."
+          : "החיתוך עודכן. בדוק שכל הטקסט בפנים, גם בתחתית התעודה.";
       } catch {
-        if (!disposed && session === generation && current === revision)
-          status.textContent = "לא ניתן להציג את היישור כרגע. אפשר לנסות לאשר או להמשיך ללא חיתוך.";
+        if (!disposed && session === generation && current === revision) {
+          // Never approve a crop which the user could not see successfully.
+          ready = false;
+          status.textContent = "לא ניתן לעדכן את החיתוך. אפשר לצלם שוב או להמשיך ללא חיתוך.";
+        }
+      } finally {
+        if (!disposed && session === generation && current === revision) {
+          rendering = false; controls(); status.setAttribute("aria-busy", "false");
+        }
       }
     };
     const load = async nextFile => {
       const current = ++generation; revision++; release();
-      file = nextFile; points = allCorners(); ready = false; saving = false;
-      accept.disabled = true; originalButton.disabled = false;
-      handles.forEach(h => h.disabled = true); redraw();
-      resultImage.hidden = true; $("[data-crop-zoom]", editor).disabled = true;
-      status.textContent = "מזהה את גבולות התעודה…";
+      file = nextFile; points = allCorners(); basePoints = allCorners(); ready = false; saving = false; rendering = false; dragging = null;
+      originalButton.disabled = false; controls(); redraw();
+      stage.hidden = true; viewport.scrollTop = 0;
+      status.textContent = "משפר את התאורה ומיישר את התעודה…";
       status.setAttribute("aria-busy", "true");
-      sourceUrl = URL.createObjectURL(file); source.src = sourceUrl;
       try {
         worker = imageWorker();
         let response = await worker.request("init", { file });
@@ -151,20 +175,19 @@ export function reviewPhoto(ctx, root, firstFile) {
         if (response.needsPixels) {
           const decoded = await decodeImage(file);
           if (disposed || current !== generation) { decoded.close?.(); return; }
-          fallbackImage = decoded;
-          response = await worker.request("initPixels", { image: await pixelsFromImage(decoded, 1000) });
+          let pixels;
+          try { pixels = await pixelsFromImage(decoded); }
+          finally { decoded.close?.(); }
+          if (disposed || current !== generation) return;
+          response = await worker.request("initPixels", { image: pixels });
         }
         if (disposed || current !== generation) return;
-        const blob = await resultBlob(response);
-        if (disposed || current !== generation) return;
-        URL.revokeObjectURL(sourceUrl); sourceUrl = URL.createObjectURL(blob); source.src = sourceUrl;
-        points = response.corners || allCorners(); ready = true; accept.disabled = false;
+        if (!await display(response, current, revision)) return;
+        ready = true; controls();
         status.setAttribute("aria-busy", "false");
-        handles.forEach(h => h.disabled = false); redraw();
-        status.textContent = response.corners
-          ? "בדוק שהחיתוך כולל את כל הטקסט, גם בראש התעודה ובתחתיתה."
+        status.textContent = response.detected
+          ? "גרור את הפינות לחיתוך. גלול כדי לבדוק גם את תחתית התעודה."
           : "לא זוהו גבולות. אפשר לגרור את הפינות או להמשיך ללא חיתוך.";
-        void showPreview();
       } catch {
         if (!disposed && current === generation) {
           status.textContent = "העיבוד אינו זמין לצילום הזה. אפשר לצלם שוב או להמשיך ללא חיתוך.";
@@ -185,7 +208,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     handles.forEach((handle, index) => {
       handle.onpointerdown = ev => {
-        if (!ready || saving || dragging) return;
+        if (!ready || saving || rendering || dragging) return;
         ev.preventDefault(); dragging = { index, id: ev.pointerId }; handle.setPointerCapture(ev.pointerId);
       };
       handle.onpointermove = ev => {
@@ -195,11 +218,13 @@ export function reviewPhoto(ctx, root, firstFile) {
       };
       handle.onpointerup = handle.onpointercancel = handle.onlostpointercapture = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
-        dragging = null; void showPreview();
+        dragging = null;
+        if (ev.type !== "pointerup") { points = allCorners(); redraw(); return; }
+        if (points.some((p, i) => p.x !== allCorners()[i].x || p.y !== allCorners()[i].y)) void showPreview();
       };
       handle.onkeydown = ev => {
         const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
-        if (!delta || !ready || saving) return;
+        if (!delta || !ready || saving || rendering) return;
         ev.preventDefault();
         const step = ev.shiftKey ? .02 : .005;
         move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step);
@@ -208,7 +233,8 @@ export function reviewPhoto(ctx, root, firstFile) {
     });
     $("[data-crop-cancel]", editor).onclick = () => finish(null);
     $("[data-crop-retake-button]", editor).onclick = () => retake.click();
-    $("[data-crop-zoom]", editor).onclick = () => { if (previewBlob) ctx.previewBlob(previewBlob); };
+    zoom.onclick = () => { if (previewBlob) ctx.previewBlob(previewBlob); };
+    reset.onclick = () => void showPreview(true);
     retake.onchange = () => {
       const nextFile = retake.files[0]; retake.value = "";
       if (!nextFile) return; // Cancelling the camera preserves the current photo.
@@ -218,9 +244,8 @@ export function reviewPhoto(ctx, root, firstFile) {
     const save = async original => {
       // Original remains actionable during processing: terminate the worker first.
       if (disposed || (saving && !original)) return;
-      if (!original && (!ready || dragging)) return;
-      saving = true; accept.disabled = true;
-      handles.forEach(h => h.disabled = true);
+      if (!original && (!ready || dragging || rendering)) return;
+      saving = true; controls();
       const current = ++generation; revision++;
       status.textContent = original ? "מכין את הצילום המלא…" : "מיישר ושומר את הצילום…";
       status.setAttribute("aria-busy", "true");
@@ -229,17 +254,13 @@ export function reviewPhoto(ctx, root, firstFile) {
         let value;
         if (original) value = await readFile(file);
         else {
-          const response = await worker.request("process", {
-            points,
-            ...(fallbackImage ? { image: await pixelsFromImage(fallbackImage) } : {}),
-          });
+          const response = await worker.request("process", { points: basePoints });
           value = await encodeFile(await resultBlob(response), file.name.replace(/\.[^.]+$/, "") + ".jpg");
         }
         if (!disposed && current === generation) finish(value);
       } catch {
         if (!disposed && current === generation) {
-          saving = false; accept.disabled = !ready; originalButton.disabled = false;
-          handles.forEach(h => h.disabled = !ready);
+          saving = false; controls(); originalButton.disabled = false;
           status.textContent = "לא ניתן להכין את הצילום. אפשר לנסות ללא חיתוך או לצלם שוב.";
           status.setAttribute("aria-busy", "false");
         }
@@ -248,7 +269,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     accept.onclick = () => void save(false);
     originalButton.onclick = () => void save(true);
     void load(file);
-    $("[data-crop-cancel]", editor).focus();
+    $("[data-crop-cancel]", editor).focus({ preventScroll: true });
   });
 }
 

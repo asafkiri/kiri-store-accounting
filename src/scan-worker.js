@@ -1,4 +1,4 @@
-// Local document geometry and gentle photographic correction. No network or OCR.
+// Local document geometry and continuous-tone photographic correction. No network or OCR.
 // Export the numerical functions so the real browser suite can exercise fixtures.
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const cross = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -173,6 +173,18 @@ export function projectPoint(h, p) {
   const z = h[6] * p.x + h[7] * p.y + 1;
   return { x: (h[0] * p.x + h[1] * p.y + h[2]) / z, y: (h[3] * p.x + h[4] * p.y + h[5]) / z };
 }
+// Handles live on the already rectified preview. Compose their coordinates back
+// into the untouched source, so repeated edits never resample an earlier JPEG.
+export function mapCropCorners(points, basePoints = fullCorners()) {
+  if (!validCorners(points) || !validCorners(basePoints)) throw Error("Invalid corners");
+  const transform = homography(fullCorners(), basePoints);
+  const mapped = points.map(p => {
+    const q = projectPoint(transform, p);
+    return { x: clamp(q.x, 0, 1), y: clamp(q.y, 0, 1) };
+  });
+  if (!validCorners(mapped)) throw Error("Crop too small");
+  return mapped;
+}
 export function warpImage(image, points, maxEdge = 2500) {
   if (!validCorners(points)) throw Error("Invalid corners");
   const q = points.map(p => ({ x: p.x * (image.width - 1), y: p.y * (image.height - 1) }));
@@ -200,47 +212,78 @@ export function warpImage(image, points, maxEdge = 2500) {
 }
 export function enhanceImage(image) {
   const { width: w, height: h, data } = image;
-  // A small grid of bright paper samples estimates illumination, then a broad
-  // blur smooths it. Text is not used as the background or thresholded away.
+  // Estimate paper colour from the upper-middle part of each cell's histogram.
+  // Unlike a maximum, these samples resist isolated glare. A broad, smooth RGB
+  // field removes both lighting gradients and the warm/blue cast of the paper.
+  // The histogram only estimates illumination; it never classifies output ink.
   const gw = Math.max(2, Math.round(w / Math.max(w, h) * 64)), gh = Math.max(2, Math.round(h / Math.max(w, h) * 64));
-  let background = new Float32Array(gw * gh);
-  const means = [0, 0, 0]; let count = 0;
-  const histogram = new Uint32Array(256);
-  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+  const cells = gw * gh, counts = new Uint32Array(cells), histogram = new Uint32Array(cells * 64);
+  const stride = Math.max(w, h) < 800 ? 1 : 2;
+  for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) {
     const i = (y * w + x) * 4, lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
     const cell = Math.min(gh - 1, Math.floor(y * gh / h)) * gw + Math.min(gw - 1, Math.floor(x * gw / w));
-    background[cell] = Math.max(background[cell], lum); histogram[Math.round(lum)]++;
-    if (lum > 160) { for (let c = 0; c < 3; c++) means[c] += data[i + c]; count++; }
+    histogram[cell * 64 + (lum >> 2)]++; counts[cell]++;
   }
-  for (let pass = 0; pass < 5; pass++) background = gaussian3(background, gw, gh);
-  const mean = (means[0] + means[1] + means[2]) / 3;
-  const balance = means.map(v => count && v ? clamp(mean / v, .96, 1.04) : 1);
-  const samples = histogram.reduce((s, n) => s + n, 0);
-  let low = 0, high = 255, sum = 0;
-  for (let i = 0; i < 256; i++) { sum += histogram[i]; if (sum >= samples * .01) { low = i; break; } }
-  sum = 0;
-  for (let i = 255; i >= 0; i--) { sum += histogram[i]; if (sum >= samples * .01) { high = i; break; } }
-  const contrast = high - low > 80 ? Math.min(1.06, 255 / (high - low)) : 1;
+  const low = new Uint8Array(cells), high = new Uint8Array(cells);
+  for (let cell = 0; cell < cells; cell++) {
+    let sum = 0, lower = false;
+    for (let bin = 0; bin < 64; bin++) {
+      sum += histogram[cell * 64 + bin];
+      if (!lower && sum >= counts[cell] * .7) { low[cell] = bin * 4; lower = true; }
+      if (sum >= counts[cell] * .9) { high[cell] = bin * 4 + 3; break; }
+    }
+  }
+  let background = Array.from({ length: 3 }, () => new Float32Array(cells));
+  counts.fill(0);
+  for (let y = 0; y < h; y += stride) for (let x = 0; x < w; x += stride) {
+    const i = (y * w + x) * 4, lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
+    const cell = Math.min(gh - 1, Math.floor(y * gh / h)) * gw + Math.min(gw - 1, Math.floor(x * gw / w));
+    const maximum = Math.max(data[i], data[i + 1], data[i + 2]), minimum = Math.min(data[i], data[i + 1], data[i + 2]);
+    if (lum < low[cell] || lum > high[cell] || maximum - minimum > maximum * .3) continue;
+    for (let c = 0; c < 3; c++) background[c][cell] += data[i + c];
+    counts[cell]++;
+  }
+  for (let c = 0; c < 3; c++) {
+    for (let cell = 0; cell < cells; cell++)
+      background[c][cell] = counts[cell] ? background[c][cell] / counts[cell] : high[cell];
+    for (let pass = 0; pass < 2; pass++) background[c] = gaussian3(background[c], gw, gh);
+  }
+  // Expand the distance of ink from its local paper instead of brightening ink
+  // along with the background. This monotone curve has a soft highlight shoulder
+  // and a linear dark toe: gray strokes stay gray, with no threshold or posterize.
+  const tone = new Float32Array(6145), paper = 248, contrast = 2.2;
+  for (let i = 0; i < tone.length; i++) {
+    const ratio = i / 2048;
+    tone[i] = ratio <= 1 ? paper * ratio / (contrast - (contrast - 1) * ratio)
+      : paper + 7 * (1 - Math.exp(-(ratio - 1) * paper * contrast / 7));
+  }
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const gx = x * (gw - 1) / Math.max(1, w - 1), gy = y * (gh - 1) / Math.max(1, h - 1), ix = Math.floor(gx), iy = Math.floor(gy), dx = gx - ix, dy = gy - iy;
-    const a = background[iy * gw + ix], b = background[iy * gw + Math.min(ix + 1, gw - 1)], c = background[Math.min(iy + 1, gh - 1) * gw + ix], d = background[Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1)];
-    const bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
-    const gain = clamp(248 / Math.max(1, bg), .97, 1.18), i = (y * w + x) * 4;
+    const i = (y * w + x) * 4;
     for (let channel = 0; channel < 3; channel++) {
-      let value = (data[i + channel] - 128) * contrast + 128;
-      value *= gain * balance[channel];
-      // Smooth highlight roll-off retains differences in pale, thin printing.
-      data[i + channel] = value > 248 ? 248 + 7 * (1 - Math.exp(-(value - 248) / 7)) : value;
+      const grid = background[channel];
+      const a = grid[iy * gw + ix], b = grid[iy * gw + Math.min(ix + 1, gw - 1)], c = grid[Math.min(iy + 1, gh - 1) * gw + ix], d = grid[Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1)];
+      const bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
+      // Dark surroundings and solid logos are not treated as white paper.
+      const index = clamp(data[i + channel] * 2048 / Math.max(110, bg), 0, tone.length - 1);
+      const lower = Math.floor(index), fraction = index - lower;
+      data[i + channel] = tone[lower] * (1 - fraction) + tone[Math.min(lower + 1, tone.length - 1)] * fraction;
     }
+    // Remove a residual cast only from bright, nearly neutral paper. Luminance
+    // is preserved, so this cannot erase pale gray strokes or turn a blue stamp gray.
+    const lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
+    const spread = Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]);
+    const neutral = clamp((lum - 180) / 60, 0, .75) * clamp(1 - spread / 40, 0, 1);
+    for (let channel = 0; channel < 3; channel++) data[i + channel] += (lum - data[i + channel]) * neutral;
   }
   const gray = grayImage(image), blurred = gaussian3(gray, w, h);
   for (let i = 0; i < gray.length; i++) {
-    const detail = clamp((gray[i] - blurred[i]) * .25, -8, 8);
+    const detail = clamp((gray[i] - blurred[i]) * .4, -10, 10);
     for (let c = 0; c < 3; c++) data[i * 4 + c] += detail;
   }
   return image;
 }
-let original, thumbnail;
+let original, sourcePixels, prepared, preparedKey, preparedBlob;
 function bitmapPixels(bitmap, maxEdge = Infinity) {
   const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
   const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
@@ -261,25 +304,41 @@ async function output(image, retain = false) {
     return { blob: await canvas.convertToBlob({ type: "image/jpeg", quality: .88 }) };
   } finally { canvas.width = canvas.height = 1; }
 }
-async function handle({ type, file, image, points }) {
+async function prepare(points) {
+  const key = JSON.stringify(points);
+  if (key !== preparedKey) {
+    prepared = enhanceImage(warpImage(sourcePixels, points));
+    preparedKey = key; preparedBlob = null;
+  }
+  // The displayed preview and accepted upload use the very same 2500px result.
+  // In the canvas fallback, retain the pixels when transferring to the UI.
+  const result = preparedBlob ? { blob: preparedBlob } : await output(prepared, true);
+  if (result.blob && key === preparedKey) preparedBlob = result.blob;
+  return { corners: points, ...result };
+}
+async function handle({ type, file, image, points, basePoints }) {
+  let thumbnail;
   if (type === "init") {
     if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function") return { needsPixels: true };
-    original?.close();
+    original?.close(); sourcePixels = prepared = preparedKey = preparedBlob = null;
     try {
       original = await createImageBitmap(file, { imageOrientation: "from-image" });
       if (!original.width || original.width * original.height > 80_000_000) throw Error("Image too large");
       thumbnail = bitmapPixels(original, 1000);
+      sourcePixels = bitmapPixels(original);
     } catch {
       original?.close(); original = null;
       return { needsPixels: true };
     }
-  } else if (type === "initPixels") thumbnail = image;
-  else if (type === "preview") return output(enhanceImage(warpImage(thumbnail, points, 1000)));
-  else if (type === "process") {
-    const pixels = image || bitmapPixels(original);
-    return output(enhanceImage(warpImage(pixels, points)));
-  } else throw Error("Unknown image operation");
-  return { corners: detectCorners(thumbnail), ...(await output(thumbnail, true)) };
+    original.close(); original = null;
+  } else if (type === "initPixels") {
+    sourcePixels = image; prepared = preparedKey = preparedBlob = null;
+    thumbnail = warpImage(sourcePixels, fullCorners(), 1000);
+  } else if (type === "preview") return prepare(mapCropCorners(points, basePoints));
+  else if (type === "process") return prepare(points);
+  else throw Error("Unknown image operation");
+  const corners = detectCorners(thumbnail);
+  return { detected: Boolean(corners), ...(await prepare(corners || fullCorners())) };
 }
 if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
   self.onmessage = async ({ data }) => {
