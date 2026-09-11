@@ -4,24 +4,23 @@
 // object and lift the pure helpers out (see the export at the bottom); in a browser it is window.
 export function installScannerFixtures(window = globalThis.window) {
   // Corner error of a detection against ground truth, both normalised 0..1 in TL/TR/BR/BL order:
-  // `max` is the largest corner distance as a percentage of the long edge; `maxInward` is, over the
-  // found corners strictly inside the truth quad, the largest distance to the truth outline (same
-  // units), so a crop that trims the document is visible even when `max` is small.
+  // `max` is the largest corner distance as a percentage of the long edge; `maxInward` is the largest
+  // signed distance of a found corner inside the lines of its two adjacent truth sides (same units),
+  // so a side that cuts into the document is visible even when the corner also sits outside the
+  // other side, and even when `max` is small.
   window.cornerDeviation = (found, truth, width, height) => {
     if (!found) return { max: Infinity, maxInward: Infinity };
     const long = Math.max(width, height), toPixels = p => ({ x: p.x * (width - 1), y: p.y * (height - 1) });
     const quad = truth.map(toPixels), cross = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     const orientation = Math.sign(cross(quad[0], quad[1], quad[2]));
-    const edgeDistance = (p, a, b) => {
-      const dx = b.x - a.x, dy = b.y - a.y, t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
-      return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
-    };
     let max = 0, maxInward = 0;
     found.forEach((point, i) => {
       const p = toPixels(point);
       max = Math.max(max, Math.hypot(p.x - quad[i].x, p.y - quad[i].y) / long * 100);
-      if (quad.every((a, j) => cross(a, quad[(j + 1) % 4], p) * orientation > 0))
-        maxInward = Math.max(maxInward, Math.min(...quad.map((a, j) => edgeDistance(p, a, quad[(j + 1) % 4]))) / long * 100);
+      for (const j of [i, (i + 3) % 4]) {
+        const a = quad[j], b = quad[(j + 1) % 4];
+        maxInward = Math.max(maxInward, cross(a, b, p) * orientation / Math.hypot(b.x - a.x, b.y - a.y) / long * 100);
+      }
     });
     return { max, maxInward };
   };
@@ -34,6 +33,7 @@ export function installScannerFixtures(window = globalThis.window) {
     "wood-grain": { background: "wood", paper: [245, 243, 238], corners: SAMPLE_QUAD },
     "white-table-soft-shadow": { background: "white", edgeShadow: true, paper: [245, 244, 240], corners: SAMPLE_QUAD },
     "cut-off": { background: "dark", paper: WHITE, corners: [{ x: .15, y: .08 }, { x: 1.12, y: .05 }, { x: 1.10, y: .93 }, { x: .13, y: .90 }] },
+    "tight-frame": { background: "dark", paper: WHITE, corners: [{ x: .025, y: .025 }, { x: .975, y: .025 }, { x: .975, y: .975 }, { x: .025, y: .975 }] },
     "long-1-5": { background: "dark", paper: WHITE, corners: [{ x: .38, y: .05 }, { x: .62, y: .05 }, { x: .63, y: .95 }, { x: .37, y: .95 }] },
     "a4-angle": { background: "beige", paper: [246, 246, 243], a4: true },
     "shadow-across": { background: "dark", paper: WHITE, crossBand: true, corners: SAMPLE_QUAD },
