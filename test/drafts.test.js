@@ -61,3 +61,25 @@ test("closed and browser-forced IndexedDB connections reopen once and keep the s
   assert.deepEqual(await a.names(), []);
   a.db.close();
 });
+
+
+test("closure during asynchronous encryption reopens without losing the write", async t => {
+  const { forceCloseDatabase } = await import("fake-indexeddb");
+  const drafts = new Drafts("close-during-encryption");
+  await drafts.open();
+  const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+  let interrupted = false;
+  t.mock.method(crypto.subtle, "encrypt", async (...args) => {
+    const bytes = await encrypt(...args);
+    if (!interrupted) {
+      interrupted = true;
+      forceCloseDatabase(drafts.db);
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    return bytes;
+  });
+  await drafts.save("cash", { cash: "456" });
+  assert.equal((await drafts.load("cash")).cash, "456");
+  assert.equal(interrupted, true);
+  drafts.db.close();
+});

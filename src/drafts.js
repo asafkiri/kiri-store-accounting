@@ -53,7 +53,11 @@ export class Drafts {
   }
   async withConnection(work) {
     for (let attempt = 0; ; attempt++) {
-      try { await this.open(); return await work(); }
+      try {
+        await this.open();
+        if (!this.db) throw new DOMException("Connection closed", "InvalidStateError");
+        return await work();
+      }
       catch (error) {
         if (attempt === 1 || !(error?.name === "InvalidStateError" || (error?.name === "AbortError" && !this.db))) throw error;
         // Explicit db.close() does not dispatch close. Retry that case as well.
@@ -70,10 +74,11 @@ export class Drafts {
   save(name, value) {
     const snapshot = structuredClone(value);
     return this.enqueue(async () => {
+      const db = this.db, key = this.key;
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, this.key,
+      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key,
         new TextEncoder().encode(JSON.stringify(snapshot)));
-      const tx = this.db.transaction("drafts", "readwrite"), finished = done(tx);
+      const tx = db.transaction("drafts", "readwrite"), finished = done(tx);
       tx.objectStore("drafts").put({ iv, encrypted }, this.uid + ":" + name);
       await finished;
     });
