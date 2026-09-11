@@ -363,6 +363,13 @@ for (const engine of [chromium, webkit]) {
     const initialBytes = await page.evaluate(async () => [...new Uint8Array(await window.cropBlobs.get(document.querySelector("[data-crop-result]").src).arrayBuffer())]);
     await page.locator("[data-crop-straighten]").tap();
     await assertWholeCropVisible(page);
+    await page.evaluate(() => {
+      window.cropTouchEvents = [];
+      for (const type of ["pointerdown", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture", "touchstart", "touchend", "mousedown", "mouseup", "click"]) document.addEventListener(type, event => {
+        const point = event.changedTouches?.[0] || event;
+        window.cropTouchEvents.push({ type, target: event.target.outerHTML?.slice(0, 180), id: event.pointerId, x: point.clientX, y: point.clientY, disabled: document.querySelector("[data-crop-accept]")?.disabled });
+      }, true);
+    });
     const corners = await page.evaluate(() => window.manualCorners), box = await page.locator(".crop-source").boundingBox();
     const session = engine.name() === "chromium" ? await page.context().newCDPSession(page) : null;
     for (let index = 0; index < 4; index++) {
@@ -381,6 +388,7 @@ for (const engine of [chromium, webkit]) {
     const selected = await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => ({ x: parseFloat(h.style.left) / 100, y: parseFloat(h.style.top) / 100 })));
     for (let i = 0; i < 4; i++) assert.ok(Math.hypot(selected[i].x - corners[i].x, selected[i].y - corners[i].y) < .01, "four independent corners follow the paper");
     assert.equal(await page.evaluate(() => window.cropMessages.filter(m => ["preview", "straighten"].includes(m.type)).length), 0);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.evaluate(() => {
       const button = document.querySelector("[data-crop-accept]"), handler = button.onclick;
       window.applyClicks = 0; button.onclick = event => { window.applyClicks++; return handler(event); };
@@ -394,7 +402,9 @@ for (const engine of [chromium, webkit]) {
     try {
       await page.waitForFunction(url => document.querySelector("[data-crop-result]").src !== url && !document.querySelector("[data-crop-accept]").disabled, initialUrl, { timeout: 18000 });
     } catch (error) {
-      const state = await page.evaluate(() => ({ status: document.querySelector("[data-crop-status]")?.textContent, accept: document.querySelector("[data-crop-accept]")?.outerHTML, clicks: window.applyClicks, viewport: { scale: visualViewport.scale, x: visualViewport.offsetLeft, y: visualViewport.offsetTop }, messages: window.cropMessages.map(({ type, points, frame }) => ({ type, points, frame })) }));
+      await mkdir("test-artifacts", { recursive: true });
+      await page.screenshot({ path: `test-artifacts/manual-failure-${engine.name()}.png`, fullPage: true });
+      const state = await page.evaluate(() => ({ status: document.querySelector("[data-crop-status]")?.textContent, accept: document.querySelector("[data-crop-accept]")?.outerHTML, clicks: window.applyClicks, events: window.cropTouchEvents, viewport: { scale: visualViewport.scale, x: visualViewport.offsetLeft, y: visualViewport.offsetTop }, messages: window.cropMessages.map(({ type, points, frame }) => ({ type, points, frame })) }));
       throw Error(`${error.message}\n${JSON.stringify({ state, errors })}`);
     }
     await session?.detach();
