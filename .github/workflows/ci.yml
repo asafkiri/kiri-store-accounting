@@ -30,7 +30,14 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chromium webkit
+      - name: Install browsers with bounded package-download waits
+        run: |
+          sudo tee /etc/apt/apt.conf.d/80-ksa-network-timeouts >/dev/null <<'APT'
+          Acquire::Retries "2";
+          Acquire::http::Timeout "20";
+          Acquire::https::Timeout "20";
+          APT
+          npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
       - name: Save the tested Hosting build
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
