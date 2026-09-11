@@ -1,3 +1,4 @@
+import { creditSignIssues } from "./credit.js";
 export const money = (value) =>
   value === null || value === undefined
     ? "לא הוזן"
@@ -91,8 +92,11 @@ export function filterInvoices(items, f, suppliers) {
     );
 }
 export function totals(items) {
-  const sum = (k) => items.reduce((n, r) => n + (r[k] ?? 0), 0);
+  const invalidCredits = items.filter((i) => creditSignIssues(i).length).length;
+  const sum = (k) =>
+    invalidCredits ? null : items.reduce((n, r) => n + (r[k] ?? 0), 0);
   return {
+    invalidCredits,
     subtotal: sum("subtotalAgorot"),
     vat: sum("vatAgorot"),
     total: sum("totalAgorot"),

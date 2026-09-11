@@ -20,6 +20,7 @@ jobs:
           cmp firestore.rules api-rules-check/test/firestore.rules
           cmp storage.rules api-rules-check/test/storage.rules
           cmp src/supplier-name.js api-rules-check/src/supplier-name.js
+          cmp src/credit.js api-rules-check/src/credit.js
       - uses: actions/setup-node@v4
         with:
           node-version: 22
