@@ -466,7 +466,8 @@ function detectQuad(image, stats = null) {
         const lo = Math.PI / 4, hi = 3 * Math.PI / 4, a0 = cornerAngle(q3, q0, q1), a1 = cornerAngle(q0, q1, q2), a2 = cornerAngle(q1, q2, q3), a3 = cornerAngle(q2, q3, q0);
         if (a0 < lo || a0 > hi || a1 < lo || a1 > hi || a2 < lo || a2 > hi || a3 < lo || a3 > hi) continue;
         const aspect = Math.max(l0 + l2, l1 + l3) / Math.min(l0 + l2, l1 + l3);
-        if (aspect > 12) continue;
+        // Long thermal receipts reach 1:12 on paper and more under keystone.
+        if (aspect > 16) continue;
         const q = [q0, q1, q2, q3], sides = [lines[a], lines[b], lines[c], lines[d]], signs = [s0, s1, s2, s3];
         let minSupport = 1, paperL = 0;
         const dLs = [], dSs = [];

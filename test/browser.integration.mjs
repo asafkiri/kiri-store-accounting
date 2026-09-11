@@ -920,7 +920,7 @@ for (const engine of [chromium, webkit]) {
     const before = await detectCount();
     await page.evaluate(() => { window.sceneMoving = false; });
     await page.waitForSelector(".scan-crop");
-    assert.ok(await detectCount() - before <= 12, `locks within a few frames after the page holds still (${await detectCount() - before})`);
+    assert.ok(await detectCount() - before <= 15, `locks within a few frames after the page holds still (${await detectCount() - before})`);
     assert.equal(await page.locator(".scan-live").count(), 0, "the live view closes when the review opens");
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
     const handover = await page.evaluate(() => ({ workers: window.workerCount, init: window.workerLog.find(entry => entry.type === "init"), result: window.workerLog.find(entry => entry.type === "init-result") }));

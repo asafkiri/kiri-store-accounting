@@ -61,6 +61,10 @@ export function liveCapture(ctx, root, options = {}) {
     let worker = options.worker || null, stream = null, tracks = [], disposed = false, running = false, capturing = false;
     let inFlight = false, lastDetect = 0, frameSize = null, smoothed = null, missed = 0, shown = 0, window_ = [], wakeLock = null;
     let idleTimer = null, borderSince = 0, noneSince = 0, resolvedOnce = false, unavailableShown = false, frameLoop = null, openTimer = null;
+    // start() is re-entrant only through its guards: `starting` blocks a second
+    // tap while the camera opens, and release() bumps `openSession` so an
+    // in-flight start() abandons a stream that was paused or disposed meanwhile.
+    let starting = false, openSession = 0;
     const timings = [];
     const setStatus = text => { if (status.textContent !== text) status.textContent = text; };
     // SVG elements have no `hidden` property; the attribute drives the CSS.
@@ -68,7 +72,7 @@ export function liveCapture(ctx, root, options = {}) {
     const stopFrameLoop = () => { if (frameLoop && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameLoop); else if (frameLoop) cancelAnimationFrame(frameLoop); frameLoop = null; };
     const stopTracks = () => { for (const track of tracks) { try { track.stop(); } catch { /* already ended */ } } tracks = []; stream = null; video.srcObject = null; };
     const release = () => {
-      running = false; stopFrameLoop(); stopTracks();
+      running = false; openSession++; stopFrameLoop(); stopTracks();
       clearTimeout(idleTimer); clearTimeout(openTimer); idleTimer = openTimer = null;
       small.width = small.height = 0;
       wakeLock?.release?.().catch(() => {}); wakeLock = null;
@@ -216,47 +220,67 @@ export function liveCapture(ctx, root, options = {}) {
       }
     };
     const start = async () => {
-      if (disposed || running) return;
+      if (disposed || running || starting) return;
+      starting = true;
+      const session = ++openSession, current = () => !disposed && session === openSession;
       paused.hidden = true; unavailable.hidden = true; frozen.hidden = true; showPolygon(false); shutter.disabled = true;
       setStatus(HINTS.opening);
       stopTracks(); resetTracking(); frameSize = null; capturing = false;
       let media;
       try {
         media = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 24, max: 30 } } });
-      } catch { if (!disposed) showUnavailable(); return; }
-      if (disposed) { for (const track of media.getTracks()) track.stop(); return; }
+      } catch { starting = false; if (current()) showUnavailable(); return; }
+      // Backgrounded, paused or disposed while the permission prompt was up.
+      if (!current() || document.hidden) { for (const track of media.getTracks()) track.stop(); starting = false; if (current()) showPaused(); return; }
       stream = media; tracks = media.getVideoTracks();
       video.srcObject = media;
-      const ready = new Promise(done => { const settle = () => done(true); video.addEventListener("loadedmetadata", settle, { once: true }); openTimer = setTimeout(() => done(false), OPEN_TIMEOUT); });
-      try { await video.play(); } catch { /* Low Power Mode or a missing gesture: the paused overlay asks for a tap */ }
-      const opened = await ready;
-      clearTimeout(openTimer); openTimer = null;
-      if (disposed) return;
-      if (!opened || !video.videoWidth) { if (video.paused && tracks.length && tracks[0].readyState === "live") showPaused(); else showUnavailable(); return; }
-      if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) {
-        try { await tracks[0].applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 } }); } catch { /* keep the stream as it is */ }
-        await new Promise(done => setTimeout(done, 300));
-        if (disposed) return;
-        if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) { showUnavailable(); return; }
-      }
-      try { await tracks[0].applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch { /* not every camera exposes focus */ }
-      if (video.paused) { try { await video.play(); } catch { showPaused(); return; } }
-      for (const track of tracks) {
-        track.addEventListener("ended", () => { if (!disposed && running) showPaused(); });
-        track.addEventListener("mute", () => { setTimeout(() => { if (!disposed && running && track.muted) showPaused(); }, 1000); });
-      }
-      try { wakeLock = await navigator.wakeLock?.request?.("screen"); } catch { wakeLock = null; }
-      if (!worker) worker = imageWorker();
-      running = true; shutter.disabled = false; fitFrame(); setStatus(HINTS.none);
-      idleTimer = setTimeout(() => { if (!disposed && running && !capturing) showPaused(); }, IDLE_TIMEOUT);
-      scheduleFrames();
+      try {
+        const ready = new Promise(done => { const settle = () => done(true); video.addEventListener("loadedmetadata", settle, { once: true }); openTimer = setTimeout(() => done(false), OPEN_TIMEOUT); });
+        try { await video.play(); } catch { /* Low Power Mode or a missing gesture: the paused overlay asks for a tap */ }
+        const opened = await ready;
+        clearTimeout(openTimer); openTimer = null;
+        if (!current()) return;
+        if (!opened || !video.videoWidth) { if (video.paused && tracks.length && tracks[0].readyState === "live") showPaused(); else showUnavailable(); return; }
+        if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) {
+          // Wait for the track to renegotiate (the video reports the new size
+          // with "resize") rather than a fixed delay a slow phone could miss.
+          const resized = new Promise(done => { const timer = setTimeout(() => { video.removeEventListener("resize", grow); done(); }, 1500); const grow = () => { clearTimeout(timer); done(); }; video.addEventListener("resize", grow, { once: true }); });
+          try { await tracks[0].applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 } }); } catch { /* keep the stream as it is */ }
+          await resized;
+          if (!current()) return;
+          if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) { showUnavailable(); return; }
+        }
+        try { await tracks[0].applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch { /* not every camera exposes focus */ }
+        if (!current()) return;
+        if (video.paused) { try { await video.play(); } catch { if (current()) showPaused(); return; } }
+        if (!current()) return;
+        for (const track of tracks) {
+          track.addEventListener("ended", () => { if (!disposed && running) showPaused(); });
+          track.addEventListener("mute", () => { setTimeout(() => { if (!disposed && running && track.muted) showPaused(); }, 1000); });
+        }
+        try { wakeLock = await navigator.wakeLock?.request?.("screen"); } catch { wakeLock = null; }
+        if (!current()) { wakeLock?.release?.().catch(() => {}); wakeLock = null; return; }
+        if (!worker) worker = imageWorker();
+        running = true; shutter.disabled = false; fitFrame(); setStatus(HINTS.none);
+        idleTimer = setTimeout(() => { if (!disposed && running && !capturing) showPaused(); }, IDLE_TIMEOUT);
+        scheduleFrames();
+      } catch {
+        // Nothing after acquisition may leave the camera running.
+        if (current()) showUnavailable();
+      } finally { starting = false; }
     };
+    // The tracks are released as soon as the app leaves the foreground, even
+    // while the camera is still opening.
+    const pauseIfActive = () => { if (!disposed && (running || starting || stream)) showPaused(); };
     const onVisibility = () => {
       if (disposed) return;
-      if (document.hidden) { if (running) showPaused(); return; }
+      if (document.hidden) { pauseIfActive(); return; }
       if (!paused.hidden && !unavailableShown) void start();
     };
-    const onHide = () => { if (!disposed && running) showPaused(); };
+    const onHide = pauseIfActive;
+    // Playback stopping mid-session (Low Power Mode, another app taking the
+    // camera) would otherwise freeze the frame loop until the idle timeout.
+    video.addEventListener("pause", () => { if (!disposed && running && !capturing) showPaused(); });
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onHide);
     $("[data-live-cancel]", view).onclick = () => finish({ cancelled: true, unavailable: unavailableShown });
