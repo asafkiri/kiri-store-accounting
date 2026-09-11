@@ -8,6 +8,7 @@ import {
   supplierForm,
 } from "../src/forms.js";
 import { ApiError } from "../src/api.js";
+import { today, totals } from "../src/format.js";
 const tick = () => new Promise((r) => setTimeout(r, 20));
 function setup() {
   const dom = new JSDOM(
@@ -159,6 +160,73 @@ test("daily cash form records two independent amounts", async () => {
   await tick();
   assert.equal(saved[0].body.data.cashAgorot, 12345);
   assert.equal(saved[0].body.data.ravKavAgorot, 5678);
+});
+
+for (const version of [0, 2]) {
+  test(`a previous day's cash draft (version ${version}) cannot replace today's closing`, async () => {
+    const { ctx, drafts, saved } = setup();
+    const oldDate = "2026-09-09";
+    assert.notEqual(today(), oldDate);
+    const old = {
+      recordId: oldDate,
+      version,
+      fields: { date: oldDate, cash: "999", ravKav: "88", notes: "לא לאבד" },
+    };
+    drafts.set("cash", old);
+    await cashForm(ctx);
+    assert.equal(document.querySelector("[name=date]").value, today());
+    assert.equal(document.querySelector("[name=date]").readOnly, false);
+    assert.equal(document.querySelector("[name=cash]").value, "");
+    assert.equal(document.querySelector("[name=ravKav]").value, "");
+    assert.equal(drafts.get("saved-cash-" + oldDate).fields.notes, "לא לאבד");
+    fill("cash", "120");
+    fill("ravKav", "30");
+    submit();
+    await tick();
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].path, "daily-cash/" + today());
+    assert.equal(saved[0].body.expectedVersion, 0);
+  });
+}
+test("cash edits archive stale values, while explicit resume can recover an unsaved past date", async () => {
+  const { ctx, drafts } = setup();
+  const date = "2026-09-09";
+  const record = {
+    id: date,
+    date,
+    version: 2,
+    cashAgorot: 20000,
+    ravKavAgorot: 1500,
+    notes: "עדכני",
+  };
+  drafts.set("cash", {
+    recordId: date,
+    version: 1,
+    fields: { date, cash: "90", ravKav: "5", notes: "ישן" },
+  });
+  await cashForm(ctx, record);
+  assert.equal(document.querySelector("[name=cash]").value, "200.00");
+  assert.equal(drafts.get("cash").version, 2);
+  assert.equal(drafts.get("saved-cash-" + date).fields.notes, "ישן");
+  drafts.set("cash", {
+    recordId: date,
+    version: 0,
+    fields: { date, cash: "45.00", ravKav: "6.00", notes: "השלמה" },
+  });
+  await cashForm(ctx, null, date);
+  assert.equal(document.querySelector("[name=date]").value, date);
+  assert.equal(document.querySelector("[name=cash]").value, "45.00");
+});
+test("changing the date of an unsaved cash draft updates its identity before reopening daily close", async () => {
+  const { ctx, drafts } = setup();
+  await cashForm(ctx);
+  fill("date", "2026-09-09");
+  fill("cash", "45");
+  await tick();
+  assert.equal(drafts.get("cash").recordId, "2026-09-09");
+  await cashForm(ctx);
+  assert.equal(document.querySelector("[name=date]").value, today());
+  assert.equal(document.querySelector("[name=cash]").value, "");
 });
 
 test("version conflict recovery survives reload and does not silently overwrite the draft", async () => {
@@ -617,4 +685,190 @@ test("concurrent supplier conflict preserves invoice fields and offers explicit 
   assert.equal(saved[1].body.data.newSupplier, undefined);
   assert.equal(saved[1].body.data.notes, "לא לאבד");
   assert.notEqual(saved[0].body.mutationId, saved[1].body.mutationId);
+});
+
+test("credit review explains negative amounts and never silently changes printed positive amounts", async () => {
+  const { ctx, saved } = setup();
+  const scan = supplierScan("ספק בדיקה");
+  scan.result.documentType = "credit";
+  await invoiceForm(ctx, null, scan);
+  assert.match(
+    document.querySelector("[data-credit-notice]").textContent,
+    /הזן את סכום הזיכוי כמספר שלילי/,
+  );
+  assert.equal(document.querySelector("[name=total]").value, "12.00");
+  assert.equal(document.querySelector("[name=total]").inputMode, "text");
+  fill("documentType", "invoice");
+  assert.equal(document.querySelector("[name=total]").inputMode, "decimal");
+  fill("documentType", "credit");
+  assert.equal(document.querySelector("[name=total]").value, "12.00");
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved.length, 0);
+  assert.match(
+    document.querySelector("[data-form-error]").textContent,
+    /זיכוי.*שלילי/,
+  );
+  fill("total", "-30");
+  fill("final", "-30");
+  submit();
+  await tick();
+  assert.equal(saved[0].body.data.finalAgorot, -3000);
+  assert.equal(
+    totals([
+      { ...existingInvoice(), totalAgorot: 10000, finalAgorot: 10000 },
+      { ...saved[0].body.data },
+    ]).final,
+    7000,
+  );
+});
+test("persistent server failure can be cancelled, edited and saved with a new identity after the server fence", async () => {
+  const { ctx, drafts } = setup();
+  const writes = [],
+    cancelled = [];
+  ctx.api.save = async (p) => {
+    writes.push(structuredClone(p));
+    if (writes.length === 1) throw new ApiError("תקלה בשרת", "INTERNAL", 503);
+    return { record: { id: "saved-supplier", ...p.body.data } };
+  };
+  ctx.api.request = async (path, options) => {
+    cancelled.push({ path, options });
+    return { status: "cancelled" };
+  };
+  await supplierForm(ctx);
+  fill("name", "ספק לפני תקלה");
+  fill("notes", "הערה שנשמרת");
+  submit();
+  await tick();
+  const button = document.querySelector("[data-cancel-attempt]");
+  assert.ok(button && !button.hidden && !button.disabled);
+  button.click();
+  await tick();
+  assert.equal(document.querySelector("[name=name]").disabled, false);
+  assert.equal(document.querySelector("[name=notes]").value, "הערה שנשמרת");
+  assert.equal(drafts.get("supplier").pending, null);
+  assert.equal(
+    cancelled[0].path,
+    "mutations/" + writes[0].body.mutationId + "/cancel",
+  );
+  assert.equal(cancelled[0].options.body.entity, writes[0].path);
+  fill("name", "ספק אחרי תקלה");
+  submit();
+  await tick();
+  assert.equal(writes.length, 2);
+  assert.notEqual(writes[0].body.mutationId, writes[1].body.mutationId);
+  assert.equal(writes[1].body.data.name, "ספק אחרי תקלה");
+});
+test("offline cancellation unlocks editing across reload but prevents another write until the old attempt is fenced", async () => {
+  const { ctx, drafts } = setup();
+  let writes = 0;
+  ctx.api.save = async () => {
+    writes++;
+    throw new ApiError("ניתוק", "NETWORK", 0);
+  };
+  ctx.api.request = async () => {
+    throw new ApiError("ניתוק", "NETWORK", 0);
+  };
+  await supplierForm(ctx);
+  fill("name", "עריכה גם בניתוק");
+  submit();
+  await tick();
+  const original = structuredClone(drafts.get("supplier").pending);
+  document.querySelector("[data-cancel-attempt]").click();
+  await tick();
+  assert.equal(document.querySelector("[name=name]").disabled, false);
+  fill("notes", "עוד פרטים");
+  await tick();
+  await supplierForm(ctx);
+  assert.equal(document.querySelector("[name=notes]").value, "עוד פרטים");
+  assert.equal(document.querySelector("[name=name]").disabled, false);
+  submit();
+  await tick();
+  assert.equal(writes, 1);
+  assert.equal(
+    drafts.get("supplier").cancelPending.mutationId,
+    original.body.mutationId,
+  );
+  drafts.set("cash", { fields: { notes: "טיוטה אחרת" } });
+  document.querySelector("[data-discard-draft]").click();
+  await tick();
+  assert.equal(drafts.has("supplier"), false);
+  assert.deepEqual(drafts.get("cancelled-" + original.body.mutationId), {
+    mutationId: original.body.mutationId,
+    entity: original.path,
+  });
+  assert.equal(drafts.get("cash").fields.notes, "טיוטה אחרת");
+});
+test("a committed attempt preserves subsequent edits and requires opening the actual saved record before another save", async () => {
+  const { ctx, drafts } = setup();
+  let finishCancel,
+    writes = 0;
+  ctx.api.save = async () => {
+    writes++;
+    throw new ApiError("ניתוק", "NETWORK", 0);
+  };
+  ctx.api.request = async () =>
+    new Promise((resolve) => {
+      finishCancel = resolve;
+    });
+  await cashForm(ctx);
+  fill("cash", "10");
+  submit();
+  await tick();
+  const oldDate = drafts.get("cash").recordId;
+  document.querySelector("[data-cancel-attempt]").click();
+  await tick();
+  fill("date", "2026-09-08");
+  fill("cash", "25");
+  finishCancel({
+    status: "committed",
+    path: "daily-cash/" + oldDate,
+    record: {
+      id: oldDate,
+      date: oldDate,
+      version: 1,
+      cashAgorot: 1000,
+      ravKavAgorot: null,
+      notes: "",
+    },
+    relatedRecords: [],
+  });
+  await tick();
+  assert.equal(document.querySelector("[name=cash]").value, "25");
+  assert.equal(drafts.get("cash").conflictPath, "daily-cash/" + oldDate);
+  assert.equal(drafts.get("cash").conflict, true);
+  assert.match(
+    document.querySelector("[data-form-error]").textContent,
+    /כבר הושלמה/,
+  );
+  submit();
+  await tick();
+  assert.equal(writes, 1);
+});
+test("failure to persist cancellation keeps the immutable pending attempt and does not call the server", async () => {
+  const { ctx, drafts } = setup();
+  let calls = 0;
+  ctx.api.save = async () => {
+    throw new ApiError("ניתוק", "NETWORK", 0);
+  };
+  ctx.api.request = async () => {
+    calls++;
+    return { status: "cancelled" };
+  };
+  await supplierForm(ctx);
+  fill("name", "טיוטה בטוחה");
+  submit();
+  await tick();
+  const original = structuredClone(drafts.get("supplier").pending);
+  const saveDraft = ctx.drafts.save;
+  ctx.drafts.save = async (key, value) => {
+    if (value.cancelPending) throw Error("QuotaExceededError");
+    return saveDraft(key, value);
+  };
+  document.querySelector("[data-cancel-attempt]").click();
+  await tick();
+  assert.deepEqual(drafts.get("supplier").pending, original);
+  assert.equal(document.querySelector("[name=name]").disabled, true);
+  assert.equal(calls, 0);
 });

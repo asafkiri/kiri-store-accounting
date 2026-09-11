@@ -10,11 +10,23 @@ import {
 } from "./format.js";
 import { pendingMutation } from "./api.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
+import { creditSignIssues } from "./credit.js";
+import {
+  cancellationFor,
+  cancelAttempt,
+  mergeAttemptResult,
+} from "./attempts.js";
 
 function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   const status = $("[data-draft-status]", form),
     submit = $("[type=submit]", form),
     error = $("[data-form-error]", form);
+  const cancelButton = $("[data-cancel-attempt]", form),
+    recovery = $("[data-cancellation-status]", form);
+  const api = ctx.api;
+  let disposed = false,
+    cancellationPromise = null;
+  const active = () => !disposed && form.isConnected && ctx.api === api;
   const persist = async (critical = false) => {
     try {
       await ctx.drafts.save(key, draft);
@@ -43,15 +55,25 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   });
   const lock = () => {
     for (const el of form.querySelectorAll("input,select,textarea,button"))
-      if (el !== submit && !el.hasAttribute("data-safe-action"))
+      if (
+        el !== submit &&
+        el !== cancelButton &&
+        !el.hasAttribute("data-safe-action")
+      )
         el.disabled = Boolean(draft.pending);
     submit.textContent = draft.pending
       ? "נסה להשלים את השמירה"
       : submit.dataset.label;
+    cancelButton.hidden = !draft.pending;
+    cancelButton.disabled = submit.disabled;
+    recovery.hidden = !draft.cancelPending;
+    recovery.textContent =
+      "אפשר לערוך או למחוק את הטיוטה. לפני שמירה חדשה נבדוק אם הניסיון הקודם כבר נשמר.";
   };
   const showConflict = () => {
     error.hidden = false;
     error.textContent =
+      draft.conflictMessage ||
       "הרשומה עודכנה מאז. הטיוטה שלך נשמרה; טען את הגרסה העדכנית לפני המשך עריכה.";
     const button = document.createElement("button");
     button.type = "button";
@@ -69,7 +91,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
             : key === "cash"
               ? "daily-cash"
               : "invoices";
-        const path = collection + "/" + draft.recordId;
+        const path = draft.conflictPath || collection + "/" + draft.recordId;
         const current = await ctx.api.request(path);
         if (current.deletedAt)
           throw Error(
@@ -79,7 +101,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         await ctx.drafts.remove(key);
         ctx.mergeRecord(current, path);
         ctx.closeModal();
-        await ctx.reopen(key, draft.recordId);
+        await ctx.reopen(key, current.id);
       } catch (err) {
         toast(errorText(err), true);
         button.disabled = false;
@@ -87,17 +109,96 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
     };
     error.append(document.createElement("br"), button);
   };
+  const resolveCancellation = () => {
+    if (!draft.cancelPending) return Promise.resolve(null);
+    if (cancellationPromise) return cancellationPromise;
+    const attempt = draft.cancelPending;
+    cancellationPromise = (async () => {
+      const result = await cancelAttempt(ctx, attempt);
+      if (!active()) return result;
+      draft.cancelPending = null;
+      if (result.status === "committed") {
+        mergeAttemptResult(ctx, result);
+        draft.conflict = true;
+        draft.conflictPath = result.path;
+        draft.conflictMessage =
+          "השמירה הקודמת כבר הושלמה בחנות. העריכות שלך נשארו בטיוטה; טען את הרשומה שנשמרה לפני שמירה נוספת.";
+      }
+      await persist(true);
+      lock();
+      if (draft.conflict) showConflict();
+      return result;
+    })().finally(() => {
+      cancellationPromise = null;
+    });
+    return cancellationPromise;
+  };
   submit.dataset.label = submit.textContent;
   lock();
   persist();
   if (draft.conflict) showConflict();
+  cancelButton.onclick = async () => {
+    if (!draft.pending || submit.disabled) return;
+    submit.disabled = true;
+    cancelButton.disabled = true;
+    const pending = draft.pending;
+    draft.cancelPending = cancellationFor(pending);
+    draft.pending = null;
+    try {
+      // Persist the unresolved identity before allowing fields to change.
+      await persist(true);
+    } catch (err) {
+      draft.pending = pending;
+      delete draft.cancelPending;
+      error.hidden = false;
+      error.textContent = errorText(err);
+      submit.disabled = false;
+      lock();
+      return;
+    }
+    error.hidden = true;
+    submit.disabled = false;
+    lock();
+    try {
+      await resolveCancellation();
+    } catch (err) {
+      if (active()) {
+        error.hidden = false;
+        error.textContent = errorText(err);
+      }
+    }
+  };
   const discard = form.querySelector("[data-discard-draft]");
   if (discard)
     discard.onclick = async () => {
-      if (!draft.pending && confirm("למחוק את הטיוטה מהמכשיר?")) {
+      if (
+        draft.pending ||
+        submit.disabled ||
+        !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו.")
+      )
+        return;
+      disposed = true;
+      submit.disabled = true;
+      discard.disabled = true;
+      try {
+        if (draft.cancelPending)
+          await ctx.drafts.save(
+            "cancelled-" + draft.cancelPending.mutationId,
+            draft.cancelPending,
+          );
         await ctx.drafts.remove(key);
         ctx.closeModal();
         ctx.render();
+        if (draft.cancelPending) {
+          toast("הטיוטה נמחקה. אפשר לבדוק את השמירה הקודמת בהגדרות.");
+          ctx.refresh(false);
+        }
+      } catch (err) {
+        disposed = false;
+        submit.disabled = false;
+        error.hidden = false;
+        error.textContent = errorText(err);
+        lock();
       }
     };
   form.addEventListener("submit", async (ev) => {
@@ -107,6 +208,10 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
     submit.disabled = true;
     ctx.setModalBusy(true);
     try {
+      if (draft.cancelPending) await resolveCancellation();
+      if (!active()) return;
+      if (draft.cancelPending)
+        throw Error("יש לבדוק את השמירה הקודמת לפני שמירה חדשה.");
       if (draft.conflict)
         throw Error("יש לטעון את הגרסה העדכנית לפני שמירה נוספת.");
       if (!draft.pending) {
@@ -115,7 +220,9 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         await persist(true);
       }
       lock();
+      if (!active()) return;
       const result = await ctx.api.save(draft.pending);
+      if (!active()) return;
       await ctx.drafts.remove(key);
       if (key === "invoice" && draft.fields.scanJobId) {
         const scan = await ctx.drafts.load("scan");
@@ -134,6 +241,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       );
       ctx.refresh(false);
     } catch (err) {
+      if (!active()) return;
       error.hidden = false;
       error.textContent = errorText(err);
       if (err.status && err.status < 500 && ![408, 429].includes(err.status)) {
@@ -149,13 +257,14 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       lock();
     } finally {
       submit.disabled = false;
-      ctx.setModalBusy(false);
+      if (active()) ctx.setModalBusy(false);
+      lock();
     }
   });
   return { persist, lock };
 }
 const footer = (label) =>
-  `<div class="form-error" role="alert" data-form-error hidden></div><footer class="form-footer"><small data-draft-status>שומר טיוטה…</small><button class="primary" type="submit">${e(label)}</button><button class="text-button danger" type="button" data-discard-draft>מחק טיוטה</button></footer>`;
+  `<div class="form-error" role="alert" data-form-error hidden></div><footer class="form-footer"><small data-draft-status>שומר טיוטה…</small><p class="notice" role="status" data-cancellation-status hidden></p><button class="primary" type="submit">${e(label)}</button><button class="secondary" type="button" data-cancel-attempt hidden>בטל את הניסיון</button><button class="text-button danger" type="button" data-discard-draft>מחק טיוטה</button></footer>`;
 const textArea = (name, value, label) =>
   `<label class="field wide"><span>${e(label)}</span><textarea name="${name}" rows="2" maxlength="4000">${e(value)}</textarea></label>`;
 
@@ -169,7 +278,11 @@ async function matchingDraft(ctx, key, old, record, compatible = true) {
   // Legacy drafts have no mode. A nonzero version belongs to an existing record.
   const mode = old.mode || (old.version === 0 ? "new" : "edit");
   const matches = record ? old.recordId === record.id : mode === "new";
-  const stale = record && old.version !== record.version && !old.pending;
+  const stale =
+    record &&
+    old.version !== record.version &&
+    !old.pending &&
+    !old.cancelPending;
   if (compatible && matches && !stale) return { ...old, mode };
   await retainDraft(ctx, key, old);
   return null;
@@ -179,7 +292,8 @@ const staleNotice = (old, record, draft) =>
   record &&
   old.recordId === record.id &&
   old.version !== record.version &&
-  !draft.pending
+  !draft.pending &&
+  !draft.cancelPending
     ? '<div class="notice warning">הרשומה עודכנה מאז. מוצגת הגרסה העדכנית; הטיוטה הקודמת נשמרה לעיון בהגדרות וגיבוי.</div>'
     : "";
 
@@ -307,6 +421,7 @@ export async function invoiceForm(
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
     <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true, read: read("finalAgorot", true), uncertain: uncertain("finalAgorot") })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
+    <div class="notice warning wide" data-credit-notice hidden>הזן את סכום הזיכוי כמספר שלילי. לדוגמה: זיכוי של 30 ₪ נרשם כ־<bdi>-30</bdi>. גם לפני מע״מ ומע״מ, כשידועים, יהיו שליליים או אפס. המספרים שנקראו מהמסמך נשארים מוצגים לבדיקה.</div>
     <div id="arithmetic-note" class="notice warning" hidden></div>
     ${f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : ""}
     <label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>${footer("שמור חשבונית")}</form>`,
@@ -321,6 +436,18 @@ export async function invoiceForm(
       .join("");
   };
   renderDeductions();
+  const creditNoticeElement = $("[data-credit-notice]", form);
+  form.elements.documentType.closest(".field").after(creditNoticeElement);
+  const creditNotice = () => {
+    const isCredit = form.elements.documentType.value === "credit";
+    creditNoticeElement.hidden = !isCredit;
+    // Some mobile decimal keyboards omit minus. A credit must allow typing it.
+    for (const name of ["subtotal", "vat", "total", "final"])
+      form.elements[name].inputMode = isCredit ? "text" : "decimal";
+  };
+  creditNotice();
+  form.elements.documentType.addEventListener("input", creditNotice);
+  form.elements.documentType.addEventListener("change", creditNotice);
   const collect = () => {
     const values = formObject(form);
     return {
@@ -347,7 +474,7 @@ export async function invoiceForm(
         throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
       if (!values.supplierId || draft.supplierConflict)
         throw Error("יש לבחור ספק או לאשר פתיחת ספק חדש לפני השמירה.");
-      return pendingMutation(
+      const pending = pendingMutation(
         "invoices/" + draft.recordId,
         {
           supplierId: values.supplierId,
@@ -381,6 +508,11 @@ export async function invoiceForm(
         },
         draft.version,
       );
+      if (creditSignIssues(pending.body.data).length)
+        throw Error(
+          "הזן את סכום הזיכוי כמספר שלילי. גם לפני מע״מ ומע״מ, כשידועים, יהיו שליליים או אפס.",
+        );
+      return pending;
     },
     {
       onError: async (err) => {
@@ -510,31 +642,31 @@ export async function paymentForm(ctx, record) {
       ),
   );
 }
-export async function cashForm(ctx, record = null) {
+export async function cashForm(ctx, record = null, resumeDate = null) {
   const key = "cash",
     old = await ctx.drafts.load(key);
-  if (old && record && old.recordId !== record.id)
-    await ctx.drafts.save("saved-cash-" + old.recordId, {
-      ...old,
-      kind: "cash",
-    });
-  let draft =
-    old && (!record || old.recordId === record.id)
-      ? old
-      : {
-          recordId: record?.id || today(),
-          version: record?.version || 0,
-          fields: {
-            date: record?.date || today(),
-            cash: moneyInput(record?.cashAgorot),
-            ravKav: moneyInput(record?.ravKavAgorot),
-            notes: record?.notes || "",
-          },
-        };
+  const targetDate = record?.id || resumeDate || today();
+  const draft = (await matchingDraft(
+    ctx,
+    key,
+    old,
+    record,
+    old?.recordId === targetDate,
+  )) || {
+    mode: record ? "edit" : "new",
+    recordId: targetDate,
+    version: record?.version || 0,
+    fields: {
+      date: targetDate,
+      cash: moneyInput(record?.cashAgorot),
+      ravKav: moneyInput(record?.ravKavAgorot),
+      notes: record?.notes || "",
+    },
+  };
   const f = draft.fields;
   const root = ctx.dialog(
     "רישום סגירה יומית",
-    `<form><p class="muted">שני סכומים נפרדים. הקופה אינה כוללת רב־קו.</p><div class="form-grid">${field("תאריך", "date", f.date, { type: "date", required: true, wide: true })}${field("קופה", "cash", f.cash, { wide: true })}${field("רב־קו", "ravKav", f.ravKav, { wide: true })}${textArea("notes", f.notes, "הערה (רשות)")}</div>${footer("שמור סגירה יומית")}</form>`,
+    `${staleNotice(old, record, draft)}<form><p class="muted">שני סכומים נפרדים. הקופה אינה כוללת רב־קו.</p><div class="form-grid">${field("תאריך", "date", f.date, { type: "date", required: true, wide: true })}${field("קופה", "cash", f.cash, { wide: true })}${field("רב־קו", "ravKav", f.ravKav, { wide: true })}${textArea("notes", f.notes, "הערה (רשות)")}</div>${footer("שמור סגירה יומית")}</form>`,
   );
   const form = $("form", root);
   if (draft.version) form.elements.date.readOnly = true;
@@ -543,10 +675,17 @@ export async function cashForm(ctx, record = null) {
     form,
     key,
     draft,
-    () => formObject(form),
+    () => {
+      const values = formObject(form);
+      if (!draft.version && !draft.pending && values.date)
+        draft.recordId = values.date;
+      return values;
+    },
     (values) => {
       const existing = ctx.data.dailyCash.find((r) => r.id === values.date);
-      if (existing && existing.id !== draft.recordId)
+      if (draft.version && values.date !== draft.recordId)
+        throw Error("לרישום בתאריך אחר יש לפתוח סגירה יומית חדשה.");
+      if (existing && (!draft.version || existing.id !== draft.recordId))
         throw Error("כבר קיימת סגירה בתאריך הזה. יש לפתוח אותה לעריכה.");
       draft.recordId = values.date;
       return pendingMutation(

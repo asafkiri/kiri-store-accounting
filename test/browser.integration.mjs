@@ -4,16 +4,147 @@ import assert from "node:assert/strict";
 import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
 
+// Exercise narrow Android/Chromium and iPhone/WebKit layouts with touch enabled.
+// These are browser emulations, not a claim of testing physical phones.
+const phoneOptions = (engine) => ({
+  viewport:
+    engine.name() === "chromium"
+      ? { width: 360, height: 800 }
+      : { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+  deviceScaleFactor: 3,
+});
+
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: today's cash starts clean and a failed save can be cancelled, edited and discarded offline`, async (t) => {
+    const server = createBrowserCheckServer();
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const browser = await engine.launch();
+    t.after(() => browser.close());
+    const page = await browser.newPage(phoneOptions(engine));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.waitForFunction(
+      () => document.querySelector("#result").textContent !== "Running…",
+    );
+    await page.evaluate(async () => {
+      const { cashForm } = await import("/forms.js");
+      const { today } = await import("/format.js");
+      document.body.innerHTML = '<div id="modal"></div><div id="toast"></div>';
+      const drafts = new Map([
+        [
+          "cash",
+          {
+            mode: "edit",
+            recordId: "2000-01-01",
+            version: 2,
+            fields: {
+              date: "2000-01-01",
+              cash: "900",
+              ravKav: "800",
+              notes: "",
+            },
+          },
+        ],
+        ["invoice", { fields: { notes: "another draft" } }],
+      ]);
+      window.cashRequests = [];
+      const ctx = {
+        data: { dailyCash: [], suppliers: [], invoices: [] },
+        drafts: {
+          load: async (key) => structuredClone(drafts.get(key)),
+          save: async (key, value) => drafts.set(key, structuredClone(value)),
+          remove: async (key) => drafts.delete(key),
+        },
+        dialog: (_title, html) => {
+          document.querySelector("#modal").innerHTML = html;
+          return document.querySelector("#modal");
+        },
+        setModalBusy() {},
+        closeModal() {},
+        render() {},
+        refresh() {},
+        mergeRecord() {},
+        api: {
+          save: async (pending) => {
+            window.cashRequests.push(structuredClone(pending));
+            throw Object.assign(Error("השרת אינו זמין"), { status: 503 });
+          },
+          request: async () => {
+            throw Error("אין חיבור לרשת");
+          },
+        },
+      };
+      window.cashToday = today();
+      window.cashDrafts = () => [...drafts.entries()];
+      window.reopenCash = () => cashForm(ctx);
+      await window.reopenCash();
+    });
+    const date = page.locator("[name=date]"),
+      cash = page.locator("[name=cash]");
+    assert.equal(
+      await date.inputValue(),
+      await page.evaluate(() => window.cashToday),
+    );
+    assert.equal(await date.evaluate((el) => el.readOnly), false);
+    assert.equal(await cash.inputValue(), "");
+    assert.equal(
+      await page.evaluate(() => matchMedia("(pointer: coarse)").matches),
+      true,
+    );
+    await cash.fill("120.45");
+    await page.locator("[type=submit]").tap();
+    await page.waitForFunction(
+      () =>
+        !document.querySelector("[type=submit]").disabled &&
+        !document.querySelector("[data-cancel-attempt]").hidden,
+    );
+    assert.equal(await cash.isDisabled(), true);
+    await page.locator("[data-cancel-attempt]").tap();
+    await page.waitForFunction(
+      () => !document.querySelector("[name=cash]").disabled,
+    );
+    await cash.fill("140.50");
+    await page.evaluate(() => window.reopenCash());
+    assert.equal(await cash.inputValue(), "140.50");
+    assert.equal(await cash.isDisabled(), false);
+    await page.locator("[type=submit]").tap();
+    await page.waitForFunction(
+      () =>
+        !document.querySelector("[type=submit]").disabled &&
+        document
+          .querySelector("[data-form-error]")
+          .textContent.includes("אין חיבור"),
+    );
+    assert.equal(await page.evaluate(() => window.cashRequests.length), 1);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("[data-discard-draft]").tap();
+    await page.waitForFunction(
+      () => !window.cashDrafts().some(([key]) => key === "cash"),
+    );
+    const result = await page.evaluate(() => ({
+      rows: window.cashDrafts(),
+      requests: window.cashRequests,
+      today: window.cashToday,
+    }));
+    assert.equal(result.requests[0].path, "daily-cash/" + result.today);
+    assert.equal(result.requests[0].body.data.cashAgorot, 12045);
+    const rows = new Map(result.rows);
+    assert.equal(rows.get("saved-cash-2000-01-01").fields.cash, "900");
+    assert.equal(rows.get("invoice").fields.notes, "another draft");
+    const receipt = result.rows.find(([key]) =>
+      key.startsWith("cancelled-"),
+    )[1];
+    assert.deepEqual(Object.keys(receipt).sort(), ["entity", "mutationId"]);
+  });
   test(`${engine.name()}: mobile supplier review confirms creation, similar names and reactivation before saving`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     t.after(() => new Promise((resolve) => server.close(resolve)));
     const browser = await engine.launch();
     t.after(() => browser.close());
-    const page = await browser.newPage({
-      viewport: { width: 390, height: 844 },
-    });
+    const page = await browser.newPage(phoneOptions(engine));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
       () => document.querySelector("#result").textContent !== "Running…",
@@ -110,10 +241,10 @@ for (const engine of [chromium, webkit]) {
     const create = page.locator("[data-supplier-action=create]");
     const box = await create.boundingBox();
     assert.ok(box.height >= 48 && box.width >= 240);
-    await create.click();
+    await create.tap();
     assert.equal(await page.evaluate(() => window.supplierRequests.length), 0);
     await page.locator("[name=review]").check();
-    await page.locator("[type=submit]").click();
+    await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 1);
     assert.match(
       await page.locator("#toast").innerText(),
@@ -125,14 +256,14 @@ for (const engine of [chromium, webkit]) {
       await page.locator("[data-supplier-action=create]").count(),
       0,
     );
-    await page.locator("[data-supplier-action=confirm]").click();
+    await page.locator("[data-supplier-action=confirm]").tap();
     await page.locator("[name=review]").check();
-    await page.locator("[type=submit]").click();
+    await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 2);
     await page.evaluate(() => window.openSupplierReview("ספק לא פעיל"));
-    await page.locator("[data-supplier-action=reactivate]").click();
+    await page.locator("[data-supplier-action=reactivate]").tap();
     await page.locator("[name=review]").check();
-    await page.locator("[type=submit]").click();
+    await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 3);
     const requests = await page.evaluate(() => window.supplierRequests);
     assert.equal(requests[0].body.data.newSupplier.name, "ספק מהצילום");
@@ -140,7 +271,10 @@ for (const engine of [chromium, webkit]) {
     assert.equal(requests[1].body.data.newSupplier, undefined);
     assert.equal(requests[2].body.data.reactivateSupplier.expectedVersion, 2);
     assert.ok(
-      await page.evaluate(() => document.documentElement.scrollWidth <= 390),
+      await page.evaluate(
+        (width) => document.documentElement.scrollWidth <= width,
+        page.viewportSize().width,
+      ),
     );
   });
   test(`${engine.name()}: reproduce the old receiver failure and verify the fixed API`, async (t) => {
@@ -170,9 +304,7 @@ for (const engine of [chromium, webkit]) {
       t.after(() => new Promise((resolve) => server.close(resolve)));
       const browser = await engine.launch();
       t.after(() => browser.close());
-      const page = await browser.newPage({
-        viewport: { width: 390, height: 844 },
-      });
+      const page = await browser.newPage(phoneOptions(engine));
       await page.goto(`http://127.0.0.1:${server.address().port}`);
       await page.waitForFunction(
         () => document.querySelector("#result").textContent !== "Running…",
@@ -268,7 +400,7 @@ for (const engine of [chromium, webkit]) {
       assert.equal(result.pdfText, "%PDF-1.7\nfixture unchanged");
       assert.equal(result.pdfMime, "application/pdf");
       await page.setContent(
-        '<link rel="stylesheet" href="/styles.css"><details class="filter-panel"><summary>סינון</summary></details><label class="field"><small>מע״מ לא ידוע נשאר ריק</small></label>',
+        '<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/styles.css"><details class="filter-panel"><summary>סינון</summary></details><label class="field"><small>מע״מ לא ידוע נשאר ריק</small></label>',
       );
       await page.locator(".field small").waitFor();
       const layout = await page.evaluate(() => ({

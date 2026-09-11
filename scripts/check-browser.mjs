@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const page = `<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browser API regression check</title>
 <h1>Native browser fetch check</h1>
 <p>This local fixture uses a fictional token and an isolated test endpoint.</p>
@@ -54,6 +55,8 @@ export function createBrowserCheckServer() {
         "/forms.js",
         "/supplier-picker.js",
         "/supplier-name.js",
+        "/credit.js",
+        "/attempts.js",
         "/ui.js",
         "/format.js",
         "/api.js",

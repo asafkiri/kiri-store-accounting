@@ -8,6 +8,7 @@ import {
 import { Api, pendingMutation } from "./api.js";
 import { Drafts } from "./drafts.js";
 import { $, icon, toast, errorText } from "./ui.js";
+import { settleDiscardedAttempts } from "./attempts.js";
 import {
   escapeHtml as e,
   money,
@@ -125,6 +126,8 @@ ctx.refresh = async (force = false) => {
       }
       ctx.version = r.version;
     }
+    await settleDiscardedAttempts(ctx);
+    if (epoch !== ctx.epoch) return;
     ctx.lastRefresh = Date.now();
     await ctx.updateDraftNames();
   } catch (err) {
@@ -163,6 +166,7 @@ ctx.reopen = async (key, id) => {
     return cashForm(
       ctx,
       ctx.data.dailyCash.find((s) => s.id === id),
+      id,
     );
   if (key === "payment" && record) return paymentForm(ctx, record);
 };
@@ -334,6 +338,17 @@ async function action(type, data = {}) {
         return scanDialog(ctx, data.key === "scan" ? "invoice" : "report");
       return ctx.reopen(data.key, d?.recordId);
     }
+    case "check-cancelled": {
+      const results = await settleDiscardedAttempts(ctx, data.key);
+      await ctx.updateDraftNames();
+      ctx.render();
+      toast(
+        results.includes("committed")
+          ? "השמירה הקודמת כבר הושלמה בחנות. הנתונים עודכנו בתצוגה."
+          : "ניסיון השמירה בוטל.",
+      );
+      return;
+    }
     case "saved-draft": {
       const d = await ctx.drafts.load(data.key);
       const collection =
@@ -343,7 +358,12 @@ async function action(type, data = {}) {
             ? "dailyCash"
             : "invoices";
       const current = ctx.data[collection].find((r) => r.id === d.recordId);
-      if (current && current.version !== d.version && !d.pending) {
+      if (
+        current &&
+        current.version !== d.version &&
+        !d.pending &&
+        !d.cancelPending
+      ) {
         ctx.dialog(
           "טיוטה קודמת לעיון",
           '<p class="notice">הרשומה עודכנה מאז. אלה הפרטים מהטיוטה הקודמת; לעריכה פתח את הרשומה העדכנית.</p>' +
