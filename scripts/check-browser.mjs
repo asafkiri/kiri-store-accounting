@@ -48,6 +48,14 @@ export function createBrowserCheckServer() {
       res.setHeader("Content-Type", "text/javascript");
       return res.end(await readFile(new URL("../src/api.js", import.meta.url)));
     }
+    if (/^\/assets\/scan-worker-[\w-]+\.js$/.test(req.url)) {
+      res.setHeader("Content-Type", "text/javascript");
+      return res.end(await readFile(new URL("../dist" + req.url, import.meta.url)));
+    }
+    if (req.url === "/scan-worker-no-offscreen.js") {
+      res.setHeader("Content-Type", "text/javascript");
+      return res.end("self.OffscreenCanvas = undefined;\n" + await readFile(new URL("../src/scan-worker.js", import.meta.url)));
+    }
     if (
       [
         "/image-upload.js",

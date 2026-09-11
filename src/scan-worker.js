@@ -38,19 +38,25 @@ function hull(points) {
   }
   return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
-// Convex contour simplification by smallest lost triangle; curved contours are
-// rejected by the retained-area check below, rather than forced into a crop.
+// Maximum-area quadrilateral of the convex hull. For each diagonal, the two
+// largest triangles can be chosen independently (O(n^3), on the small hull).
+// Removing tiny triangles greedily can shave the ends off a narrow receipt.
+// Curved contours still fail the retained-area/edge-support checks below.
 function quadrilateral(contour) {
-  const q = contour.slice();
-  while (q.length > 4) {
-    let least = Infinity, remove = 0;
-    for (let i = 0; i < q.length; i++) {
-      const area = Math.abs(cross(q[(i + q.length - 1) % q.length], q[i], q[(i + 1) % q.length]));
-      if (area < least) { least = area; remove = i; }
+  let best = [], largest = 0;
+  for (let a = 0; a < contour.length - 3; a++) for (let c = a + 2; c < contour.length - 1; c++) {
+    let b = a + 1, d = c + 1, first = 0, second = 0;
+    for (let i = a + 1; i < c; i++) {
+      const area = cross(contour[a], contour[i], contour[c]);
+      if (area > first) { first = area; b = i; }
     }
-    q.splice(remove, 1);
+    for (let i = c + 1; i < contour.length; i++) {
+      const area = cross(contour[a], contour[c], contour[i]);
+      if (area > second) { second = area; d = i; }
+    }
+    if (first + second > largest) { largest = first + second; best = [contour[a], contour[b], contour[c], contour[d]]; }
   }
-  return q;
+  return best;
 }
 function grayImage(image) {
   const out = new Float32Array(image.width * image.height);
@@ -245,8 +251,10 @@ function bitmapPixels(bitmap, maxEdge = Infinity) {
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   } finally { canvas.width = canvas.height = 1; }
 }
-async function output(image) {
-  if (typeof OffscreenCanvas === "undefined") return { image };
+async function output(image, retain = false) {
+  if (typeof OffscreenCanvas === "undefined") return {
+    image: retain ? new ImageData(new Uint8ClampedArray(image.data), image.width, image.height) : image,
+  };
   const canvas = new OffscreenCanvas(image.width, image.height);
   try {
     canvas.getContext("2d").putImageData(image, 0, 0);
@@ -271,7 +279,7 @@ async function handle({ type, file, image, points }) {
     const pixels = image || bitmapPixels(original);
     return output(enhanceImage(warpImage(pixels, points)));
   } else throw Error("Unknown image operation");
-  return { corners: detectCorners(thumbnail), ...(await output(thumbnail)) };
+  return { corners: detectCorners(thumbnail), ...(await output(thumbnail, true)) };
 }
 if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope) {
   self.onmessage = async ({ data }) => {

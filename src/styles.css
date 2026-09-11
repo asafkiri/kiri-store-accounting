@@ -869,6 +869,22 @@ dialog::backdrop {
 .scan-crop {
   min-width: 0;
 }
+.scan-crop [aria-busy="true"]::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 8px;
+  vertical-align: middle;
+  border: 2px solid #d5e0ed;
+  border-top-color: #1264a3;
+  border-radius: 50%;
+  animation: crop-spin .8s linear infinite;
+}
+@keyframes crop-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .scan-crop [aria-busy="true"]::before { animation: none; }
+}
 .crop-heading {
   display: flex;
   align-items: center;

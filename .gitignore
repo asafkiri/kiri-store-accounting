@@ -8,3 +8,4 @@ firebase-debug.log
 *.log
 .sites-runtime/
 .DS_Store
+test-artifacts/

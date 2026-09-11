@@ -1,8 +1,8 @@
 // Procedural fixtures; no customer documents or real accounts in the repository.
 export function installScannerFixtures() {
-  window.makeDocumentCanvas = (mode = "perspective", size = 1000) => {
+  window.makeDocumentCanvas = (mode = "perspective", size = 1000, aspect = .85) => {
     const canvas = document.createElement("canvas");
-    canvas.width = size; canvas.height = mode === "long" ? size * 2 : size * .85;
+    canvas.width = size; canvas.height = mode === "long" ? size * 2 : size * aspect;
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#303847"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     let corners = [{ x: .18, y: .10 }, { x: .88, y: .18 }, { x: .80, y: .92 }, { x: .12, y: .84 }];
@@ -34,7 +34,7 @@ export function installScannerFixtures() {
     return { canvas, corners };
   };
   window.makePhoto = async (mode = "perspective", size = 4032) => {
-    const { canvas, corners } = window.makeDocumentCanvas(mode, size);
+    const { canvas, corners } = window.makeDocumentCanvas(mode, size, .75);
     const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .94));
     canvas.width = canvas.height = 1;
     return { file: new File([blob], `fixture-${mode}.jpg`, { type: "image/jpeg" }), corners };

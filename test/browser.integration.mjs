@@ -1,6 +1,7 @@
 // Runs in CI with native Chromium and WebKit, independently of Node's fetch.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, readdir, readFile as readTestFile } from "node:fs/promises";
 import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
 import { installScannerFixtures } from "./scanner-fixtures.mjs";
@@ -25,6 +26,18 @@ async function scannerPage(t, engine) {
   const page = await browser.newPage(phoneOptions(engine));
   await page.goto(`http://127.0.0.1:${server.address().port}`);
   await page.waitForFunction(() => document.querySelector("#result").textContent !== "Running…");
+  const workerName = (await readdir(new URL("../dist/assets", import.meta.url))).find(name => /^scan-worker-.*\.js$/.test(name));
+  assert.ok(workerName, "Run npm run build before browser tests");
+  const hosting = JSON.parse(await readTestFile(new URL("../firebase.json", import.meta.url), "utf8"));
+  const csp = hosting.hosting.headers[0].headers.find(h => h.key === "Content-Security-Policy").value;
+  await page.evaluate(({ workerName, csp }) => {
+    window.SCAN_WORKER_URL = "/assets/" + workerName;
+    window.scannerCspViolations = [];
+    document.addEventListener("securitypolicyviolation", event => window.scannerCspViolations.push(event.violatedDirective));
+    const meta = document.createElement("meta"); meta.httpEquiv = "Content-Security-Policy";
+    // frame-ancestors is an HTTP-only directive, irrelevant to this test page.
+    meta.content = csp.replace(/; frame-ancestors [^;]+/, ""); document.head.append(meta);
+  }, { workerName, csp });
   await page.evaluate(installScannerFixtures);
   return page;
 }
@@ -91,6 +104,9 @@ for (const engine of [chromium, webkit]) {
     await page.evaluate(() => window.chooseScanPhoto());
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
     await page.waitForFunction(() => !document.querySelector("[data-crop-zoom]").disabled);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/scanner-${engine.name()}.png`, fullPage: true });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal scrolling on a phone");
     assert.equal(await page.locator("[data-crop-corner]").count(), 4);
     const handle = page.locator('[data-crop-corner="0"]');
     const before = await handle.evaluate(el => el.style.left);
@@ -130,6 +146,7 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
     assert.equal(await page.locator("[name=final]").inputValue(), "3995.00");
     assert.deepEqual(errors, []);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
     console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);
   });
 
@@ -146,15 +163,62 @@ for (const engine of [chromium, webkit]) {
       return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[0]);
     });
     assert.equal(equal, true, "without crop must match the existing full-photo preparation exactly");
+    await page.evaluate(() => {
+      const NativeWorker = window.Worker;
+      window.Worker = class extends NativeWorker {
+        postMessage(message, ...args) { if (message.type !== "process") super.postMessage(message, ...args); }
+      };
+    });
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("מיישר ושומר"));
+    await page.locator("[data-crop-original]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
     await page.evaluate(() => { window.Worker = class { constructor() { throw Error("Worker unavailable"); } }; });
     await page.evaluate(() => window.chooseScanPhoto());
     await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד אינו זמין"));
     assert.equal(await page.locator("[data-crop-original]").isEnabled(), true);
     await page.locator("[data-crop-original]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 3);
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     assert.equal(await page.locator("#run-scan").isEnabled(), true);
+  });
+
+  test(`${engine.name()}: EXIF orientation and canvas fallback preserve resolution and strip metadata`, { timeout: 60000 }, async t => {
+    for (const fallback of [false, true]) {
+      const page = await scannerPage(t, engine);
+      await page.evaluate(() => window.openScanner());
+      await page.evaluate(async fallback => {
+        if (fallback) window.SCAN_WORKER_URL = "/scan-worker-no-offscreen.js";
+        const canvas = document.createElement("canvas"); canvas.width = 3000; canvas.height = 2000;
+        const pen = canvas.getContext("2d"); pen.fillStyle = "white"; pen.fillRect(0, 0, 3000, 2000);
+        pen.fillStyle = "#222"; pen.fillRect(100, 100, 200, 200);
+        const jpeg = new Uint8Array(await (await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .94))).arrayBuffer());
+        // A minimal EXIF APP1 segment: orientation 6 (90 degrees clockwise).
+        const exif = new Uint8Array([255,225,0,34,69,120,105,102,0,0,73,73,42,0,8,0,0,0,1,0,18,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0]);
+        const photo = new File([jpeg.slice(0, 2), exif, jpeg.slice(2)], "rotated.jpg", { type: "image/jpeg" });
+        const transfer = new DataTransfer(); transfer.items.add(photo);
+        const input = document.querySelector("#camera-file"); input.files = transfer.files;
+        window.pendingPhotoSelection = input.onchange();
+      }, fallback);
+      await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+      await page.waitForFunction(() => !document.querySelector("[data-crop-zoom]").disabled);
+      const preview = await page.locator("[data-crop-source]").evaluate(img => [img.naturalWidth, img.naturalHeight]);
+      assert.ok(preview[1] > preview[0], "EXIF is applied before positioning corners");
+      await page.locator("[data-crop-accept]").tap();
+      await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+      const dimensions = await page.evaluate(async () => {
+        const file = window.scanDrafts()[0][1].files[0];
+        const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))], { type: file.mime }));
+        const out = [bitmap.width, bitmap.height, atob(file.data).includes("Exif\0\0")]; bitmap.close(); return out;
+      });
+      assert.deepEqual(dimensions, [1666, 2500, false], `fallback=${fallback}`);
+      assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+      await page.close();
+    }
   });
 }
 

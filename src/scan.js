@@ -73,13 +73,13 @@ export function reviewPhoto(ctx, root, firstFile) {
     editor.className = "scan-crop";
     editor.setAttribute("aria-label", "אישור צילום התעודה");
     editor.innerHTML = `<div class="crop-heading"><h3>בדוק שכל התעודה בפנים</h3><button type="button" class="text-button" data-crop-cancel>בטל</button></div>
-      <p class="small" data-crop-status role="status" aria-live="polite">מזהה את גבולות התעודה…</p>
+      <p class="small" data-crop-status role="status" aria-live="polite" aria-busy="true">מזהה את גבולות התעודה…</p>
       <div class="crop-images"><div><p class="small">גרור את הפינות עד לקצוות הנייר</p><div class="crop-source-area"><div class="crop-source">
       <img data-crop-source alt="צילום מקורי עם גבולות התעודה" draggable="false">
       <svg class="crop-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path fill="rgba(0,0,0,.42)" fill-rule="evenodd"></path><polygon fill="none" stroke="#7dd3fc" stroke-width="2" vector-effect="non-scaling-stroke"></polygon></svg>
       ${["שמאלית עליונה", "ימנית עליונה", "ימנית תחתונה", "שמאלית תחתונה"].map((label, i) => `<button type="button" class="crop-handle" data-crop-corner="${i}" aria-label="פינה ${label}" disabled><span></span></button>`).join("")}</div></div></div>
       <div class="crop-result"><p class="small">תצוגה מקדימה לאחר היישור</p><button type="button" class="crop-result-button" data-crop-zoom aria-label="הגדל תצוגה מקדימה" disabled><img data-crop-result alt="תצוגה מיושרת של התעודה" hidden></button></div></div>
-      <div class="crop-actions"><button type="button" class="primary" data-crop-accept disabled>אשר</button><label class="secondary upload-label">צלם שוב<input data-crop-retake type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><button type="button" class="secondary" data-crop-original>ללא חיתוך</button></div>`;
+      <div class="crop-actions"><button type="button" class="primary" data-crop-accept disabled>אשר</button><button type="button" class="secondary" data-crop-retake-button>צלם שוב</button><button type="button" class="secondary" data-crop-original>ללא חיתוך</button><input data-crop-retake type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></div>`;
     if (scanView) scanView.hidden = true;
     root.append(editor);
     const status = $("[data-crop-status]", editor), source = $("[data-crop-source]", editor), resultImage = $("[data-crop-result]", editor);
@@ -142,6 +142,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       handles.forEach(h => h.disabled = true); redraw();
       resultImage.hidden = true; $("[data-crop-zoom]", editor).disabled = true;
       status.textContent = "מזהה את גבולות התעודה…";
+      status.setAttribute("aria-busy", "true");
       sourceUrl = URL.createObjectURL(file); source.src = sourceUrl;
       try {
         worker = imageWorker();
@@ -158,6 +159,7 @@ export function reviewPhoto(ctx, root, firstFile) {
         if (disposed || current !== generation) return;
         URL.revokeObjectURL(sourceUrl); sourceUrl = URL.createObjectURL(blob); source.src = sourceUrl;
         points = response.corners || allCorners(); ready = true; accept.disabled = false;
+        status.setAttribute("aria-busy", "false");
         handles.forEach(h => h.disabled = false); redraw();
         status.textContent = response.corners
           ? "בדוק שהחיתוך כולל את כל הטקסט, גם בראש התעודה ובתחתיתה."
@@ -166,6 +168,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       } catch {
         if (!disposed && current === generation) {
           status.textContent = "העיבוד אינו זמין לצילום הזה. אפשר לצלם שוב או להמשיך ללא חיתוך.";
+          status.setAttribute("aria-busy", "false");
           accept.disabled = true;
         }
       }
@@ -204,6 +207,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       };
     });
     $("[data-crop-cancel]", editor).onclick = () => finish(null);
+    $("[data-crop-retake-button]", editor).onclick = () => retake.click();
     $("[data-crop-zoom]", editor).onclick = () => { if (previewBlob) ctx.previewBlob(previewBlob); };
     retake.onchange = () => {
       const nextFile = retake.files[0]; retake.value = "";
@@ -219,6 +223,7 @@ export function reviewPhoto(ctx, root, firstFile) {
       handles.forEach(h => h.disabled = true);
       const current = ++generation; revision++;
       status.textContent = original ? "מכין את הצילום המלא…" : "מיישר ושומר את הצילום…";
+      status.setAttribute("aria-busy", "true");
       if (original) { originalButton.disabled = true; worker?.stop(); }
       try {
         let value;
@@ -236,6 +241,7 @@ export function reviewPhoto(ctx, root, firstFile) {
           saving = false; accept.disabled = !ready; originalButton.disabled = false;
           handles.forEach(h => h.disabled = !ready);
           status.textContent = "לא ניתן להכין את הצילום. אפשר לנסות ללא חיתוך או לצלם שוב.";
+          status.setAttribute("aria-busy", "false");
         }
       }
     };
