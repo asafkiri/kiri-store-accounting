@@ -1,7 +1,7 @@
 const MAX_SOURCE_BYTES = 40 * 1024 * 1024;
 const MAX_PIXELS = 80_000_000;
 const MAX_EDGE = 2500;
-function encode(file, name = file.name) {
+export function encodeFile(file, name = file.name) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () =>
@@ -15,7 +15,7 @@ function encode(file, name = file.name) {
     reader.readAsDataURL(file);
   });
 }
-async function decode(file) {
+export async function decodeImage(file) {
   if (typeof createImageBitmap === "function") {
     try {
       return await createImageBitmap(file, { imageOrientation: "from-image" });
@@ -37,7 +37,7 @@ async function decode(file) {
     URL.revokeObjectURL(url);
   }
 }
-export async function readFile(file) {
+export function validateFile(file) {
   if (
     !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(
       file.type,
@@ -46,11 +46,14 @@ export async function readFile(file) {
     throw Error("בחר תמונה בפורמט JPG, PNG או WebP, או קובץ PDF.");
   if (!file.size || file.size > MAX_SOURCE_BYTES)
     throw Error("הקובץ ריק או גדול מדי. בחר קובץ עד 40 מגה.");
-  if (file.type === "application/pdf") return encode(file);
+}
+export async function readFile(file) {
+  validateFile(file);
+  if (file.type === "application/pdf") return encodeFile(file);
   let image;
   const canvas = document.createElement("canvas");
   try {
-    image = await decode(file);
+    image = await decodeImage(file);
     const width = image.naturalWidth || image.width,
       height = image.naturalHeight || image.height;
     if (!width || !height || width * height > MAX_PIXELS)
@@ -70,7 +73,7 @@ export async function readFile(file) {
       canvas.toBlob(resolve, "image/jpeg", 0.88),
     );
     if (!blob) throw Error("הכנת התמונה נכשלה. בחר את הצילום שוב.");
-    return await encode(blob, file.name.replace(/\.[^.]+$/, "") + ".jpg");
+    return await encodeFile(blob, file.name.replace(/\.[^.]+$/, "") + ".jpg");
   } finally {
     image?.close?.();
     canvas.width = canvas.height = 1;
