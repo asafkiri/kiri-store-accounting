@@ -124,9 +124,8 @@ export function reviewPhoto(ctx, root, firstFile) {
       const busy = disabled || Boolean(dragging);
       accept.disabled = zoom.disabled = straighten.disabled = busy;
       undo.disabled = busy || (!straightening && !history.length);
-      const acceptLabel = straightening ? "הצג יישור" : "אשר", straightenLabel = straightening ? "בטל יישור" : "יישור פינות";
-      if (accept.textContent !== acceptLabel) accept.textContent = acceptLabel;
-      if (straighten.textContent !== straightenLabel) straighten.textContent = straightenLabel;
+      accept.textContent = straightening ? "הצג יישור" : "אשר";
+      straighten.textContent = straightening ? "בטל יישור" : "יישור פינות";
       straighten.setAttribute("aria-pressed", String(straightening));
       handles.forEach(handle => handle.disabled = disabled);
     };
@@ -255,10 +254,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     handles.forEach((handle, index) => {
       handle.onpointerdown = ev => {
         if (!ready || saving || rendering || dragging) return;
-        // touch-action:none owns touch dragging; retain native touch activation
-        // for the next button. Only suppress mouse selection here.
-        if (ev.pointerType !== "touch") ev.preventDefault();
-        dragging = { index, id: ev.pointerId, points: points.map(p => ({ ...p })) }; handle.setPointerCapture(ev.pointerId); controls();
+        ev.preventDefault(); dragging = { index, id: ev.pointerId, points: points.map(p => ({ ...p })) }; handle.setPointerCapture(ev.pointerId); controls();
       };
       handle.onpointermove = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
