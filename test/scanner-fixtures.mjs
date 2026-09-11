@@ -8,8 +8,8 @@ export function installScannerFixtures() {
       pixels.data.set([light, light * .95, light * .89, 255], (y * canvas.width + x) * 4);
     }
     // Single-pixel printing at several exposure levels, including very pale ink.
-    for (const y of [240, 740, 1120]) for (const x of [120, 480, 840]) for (const ratio of [.84, .97]) {
-      const xx = x + (ratio > .9 ? 12 : 0);
+    for (const y of [240, 740, 1120]) for (const x of [120, 480, 840]) for (const [index, ratio] of [.84, .97, .99].entries()) {
+      const xx = x + index * 12;
       for (let yy = y - 10; yy <= y + 10; yy++) for (let c = 0; c < 3; c++) pixels.data[(yy * canvas.width + xx) * 4 + c] *= ratio;
       samples.push({ x: xx, y, ratio });
     }
