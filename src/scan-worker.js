@@ -315,7 +315,24 @@ export function enhanceImage(image) {
       known[neighbour] = 1; queue[tail++] = neighbour;
     }
   }
-  for (let c = 0; c < 3; c++) background[c] = gaussian3(background[c], gw, gh);
+  const rawBackground = background;
+  background = rawBackground.map(channel => gaussian3(channel, gw, gh));
+  let edgeCells = new Float32Array(cells);
+  const backgroundLight = new Float32Array(cells);
+  for (let i = 0; i < cells; i++) backgroundLight[i] = rawBackground[0][i] * .299 + rawBackground[1][i] * .587 + rawBackground[2][i] * .114;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+    let low = 255, high = 0;
+    for (let yy = Math.max(0, y - 2); yy <= Math.min(gh - 1, y + 2); yy++) for (let xx = Math.max(0, x - 2); xx <= Math.min(gw - 1, x + 2); xx++) {
+      const value = backgroundLight[yy * gw + xx]; low = Math.min(low, value); high = Math.max(high, value);
+    }
+    edgeCells[y * gw + x] = high - low > Math.max(12, high * .18) ? 1 : 0;
+  }
+  edgeCells = gaussian3(edgeCells, gw, gh);
+  // Reuse this luminance buffer for sharpening after colour correction. Near a
+  // hard shadow, it guides interpolation toward the paper on the SAME side of
+  // the edge, instead of averaging sunlit paper into shadow (a dark fringe).
+  const gray = grayImage(image);
+  const weights = new Float32Array(16), neighbours = new Int32Array(16);
   // Expand the distance of ink from its local paper instead of brightening ink
   // along with the background. This monotone curve has a soft highlight shoulder
   // and a linear dark toe: gray strokes stay gray, with no threshold or posterize.
@@ -331,14 +348,37 @@ export function enhanceImage(image) {
     // Samples describe cell centres, not the outer edges of the whole photo.
     const gx = clamp((x + .5) * gw / w - .5, 0, gw - 1), gy = clamp((y + .5) * gh / h - .5, 0, gh - 1);
     const ix = Math.floor(gx), iy = Math.floor(gy), dx = gx - ix, dy = gy - iy;
+    const ia = iy * gw + ix, ib = iy * gw + Math.min(ix + 1, gw - 1);
+    const ic = Math.min(iy + 1, gh - 1) * gw + ix, id = Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1);
+    const edgeMix = (edgeCells[ia] * (1 - dx) + edgeCells[ib] * dx) * (1 - dy) + (edgeCells[ic] * (1 - dx) + edgeCells[id] * dx) * dy;
     const i = (y * w + x) * 4;
     const originalSum = data[i] + data[i + 1] + data[i + 2];
     let castDifference = 0;
     for (let c = 0; c < 3; c++) castDifference = Math.max(castDifference, Math.abs(data[i + c] / Math.max(1, originalSum) - paperColour[c]));
+    let count = 0, weightSum = 0;
+    if (edgeMix > .001) {
+      let guide = 0;
+      for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+        guide += gray[clamp(y + oy * 2, 0, h - 1) * w + clamp(x + ox * 2, 0, w - 1)] * (ox ? 1 : 2) * (oy ? 1 : 2) / 16;
+      }
+      for (let yy = Math.max(0, iy - 1); yy <= Math.min(gh - 1, iy + 2); yy++) for (let xx = Math.max(0, ix - 1); xx <= Math.min(gw - 1, ix + 2); xx++) {
+        const n = yy * gw + xx, difference = (backgroundLight[n] - guide) / Math.max(12, guide * .08);
+        // A compact, continuous kernel reaches zero when a sample enters or
+        // leaves the neighbourhood. Changing grid cells must not make seams.
+        const spatial = Math.max(0, 1 - ((xx - gx) / 2) ** 2) ** 2 * Math.max(0, 1 - ((yy - gy) / 2) ** 2) ** 2;
+        const weight = spatial / (1 + difference ** 4);
+        neighbours[count] = n; weights[count++] = weight; weightSum += weight;
+      }
+    }
     for (let channel = 0; channel < 3; channel++) {
       const grid = background[channel];
-      const a = grid[iy * gw + ix], b = grid[iy * gw + Math.min(ix + 1, gw - 1)], c = grid[Math.min(iy + 1, gh - 1) * gw + ix], d = grid[Math.min(iy + 1, gh - 1) * gw + Math.min(ix + 1, gw - 1)];
-      const bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
+      const a = grid[ia], b = grid[ib], c = grid[ic], d = grid[id];
+      let bg = (a * (1 - dx) + b * dx) * (1 - dy) + (c * (1 - dx) + d * dx) * dy;
+      if (weightSum) {
+        let guided = 0;
+        for (let n = 0; n < count; n++) guided += rawBackground[channel][neighbours[n]] * weights[n] / weightSum;
+        bg += (guided - bg) * edgeMix;
+      }
       // Dark surroundings and solid logos are not treated as white paper.
       const index = clamp(data[i + channel] * 2048 / Math.max(8, paperLevel * .15, bg), 0, tone.length - 1);
       const lower = Math.floor(index), fraction = index - lower;
@@ -352,7 +392,8 @@ export function enhanceImage(image) {
       clamp((.08 - castDifference) / .03, 0, 1));
     for (let channel = 0; channel < 3; channel++) data[i + channel] += (lum - data[i + channel]) * neutral;
   }
-  const gray = grayImage(image), blurred = gaussian3(gray, w, h);
+  for (let i = 0; i < gray.length; i++) gray[i] = data[i * 4] * .299 + data[i * 4 + 1] * .587 + data[i * 4 + 2] * .114;
+  const blurred = gaussian3(gray, w, h);
   for (let i = 0; i < gray.length; i++) {
     const detail = clamp((gray[i] - blurred[i]) * .4, -10, 10);
     for (let c = 0; c < 3; c++) data[i * 4 + c] += detail;

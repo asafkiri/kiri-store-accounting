@@ -121,8 +121,9 @@ export function reviewPhoto(ctx, root, firstFile) {
     };
     const controls = () => {
       const disabled = !ready || saving || rendering;
-      accept.disabled = zoom.disabled = straighten.disabled = disabled;
-      undo.disabled = disabled || (!straightening && !history.length);
+      const busy = disabled || Boolean(dragging);
+      accept.disabled = zoom.disabled = straighten.disabled = busy;
+      undo.disabled = busy || (!straightening && !history.length);
       accept.textContent = straightening ? "הצג יישור" : "אשר";
       straighten.textContent = straightening ? "בטל יישור" : "יישור פינות";
       straighten.setAttribute("aria-pressed", String(straightening));
@@ -253,7 +254,7 @@ export function reviewPhoto(ctx, root, firstFile) {
     handles.forEach((handle, index) => {
       handle.onpointerdown = ev => {
         if (!ready || saving || rendering || dragging) return;
-        ev.preventDefault(); dragging = { index, id: ev.pointerId, points: points.map(p => ({ ...p })) }; handle.setPointerCapture(ev.pointerId);
+        ev.preventDefault(); dragging = { index, id: ev.pointerId, points: points.map(p => ({ ...p })) }; handle.setPointerCapture(ev.pointerId); controls();
       };
       handle.onpointermove = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
@@ -263,13 +264,14 @@ export function reviewPhoto(ctx, root, firstFile) {
       handle.onpointerup = handle.onpointercancel = handle.onlostpointercapture = ev => {
         if (!dragging || dragging.id !== ev.pointerId) return;
         const previous = dragging.points; dragging = null;
+        controls();
         if (ev.type !== "pointerup") { points = previous; redraw(); return; }
         if (straightening) return;
         if (points.some((p, i) => p.x !== allCorners()[i].x || p.y !== allCorners()[i].y)) void showPreview();
       };
       handle.onkeydown = ev => {
         const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
-        if (!delta || !ready || saving || rendering) return;
+        if (!delta || !ready || saving || rendering || dragging) return;
         ev.preventDefault();
         const step = ev.shiftKey ? .02 : .005;
         if (move(index, points[index].x + delta[0] * step, points[index].y + delta[1] * step) && !straightening) void showPreview();

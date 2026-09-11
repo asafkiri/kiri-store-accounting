@@ -281,7 +281,9 @@ for (const engine of [chromium, webkit]) {
         const original = document.createElement("canvas"); original.width = canvas.width; original.height = canvas.height;
         original.getContext("2d").putImageData(before, 0, 0); pen.putImageData(after, 0, 0);
         for (const image of [original, canvas]) { image.style.width = "100%"; comparison.append(image); }
-        results.push({ kind, measurements, elapsed });
+        const boundary = [];
+        if (kind !== "dim") for (const y of [660, 680, 690, 695, 705, 710, 720]) for (const x of [20, 380, 920]) boundary.push(rgb(after, x, y));
+        results.push({ kind, measurements, boundary, elapsed });
       }
       const black = new ImageData(160, 160); black.data.fill(5);
       const untouched = new Uint8ClampedArray(black.data); enhanceImage(black);
@@ -297,6 +299,7 @@ for (const engine of [chromium, webkit]) {
         assert.ok(sample.after >= sample.before * 1.6 && sample.after >= 2, `preserve faint strokes: ${label}`);
         assert.ok(sample.dotContrast >= 2, `preserve decimal points: ${label}`);
       }
+      assert.ok(result.boundary.every(rgb => Math.min(...rgb) >= 230), `no broad dark band at a shadow boundary: ${JSON.stringify(result.boundary)}`);
       console.log(`${engine.name()}: ${result.kind} paper correction ${Math.round(result.elapsed)}ms on the CI machine`);
     }
     await mkdir("test-artifacts", { recursive: true });
