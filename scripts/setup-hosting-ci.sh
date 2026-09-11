@@ -9,6 +9,8 @@ ksa_pool=ksa-hosting-github
 ksa_provider=github
 ksa_service_account=ksa-hosting-deploy
 ksa_sa_email="$ksa_service_account@$ksa_project.iam.gserviceaccount.com"
+ksa_backend_service=kiri-store-accounting-ai-scan
+ksa_backend_region=us-east1
 ksa_repo_id=1364339197
 ksa_owner_id=292371268
 
@@ -24,7 +26,7 @@ ksa_provider_name="$ksa_pool_name/providers/$ksa_provider"
 printf 'מפעיל את שירותי ההתחברות והפרסום הנדרשים…\n'
 gcloud services enable iam.googleapis.com iamcredentials.googleapis.com \
   sts.googleapis.com cloudresourcemanager.googleapis.com \
-  firebase.googleapis.com firebasehosting.googleapis.com \
+  firebase.googleapis.com firebasehosting.googleapis.com run.googleapis.com \
   --project="$ksa_project" --quiet
 
 printf 'מכין חשבון ייעודי לפרסום האתר…\n'
@@ -42,6 +44,15 @@ for ksa_role in roles/firebasehosting.admin roles/serviceusage.serviceUsageConsu
     --member="serviceAccount:$ksa_sa_email" --role="$ksa_role" \
     --condition=None --quiet --format=none
 done
+
+# Hosting validates the /api rewrite server-side when finalizing a version.
+# This requires run.services.get even for --only hosting. Limit read access to
+# the existing backend service; the deployer cannot update it or its IAM policy.
+printf 'מאפשר לפרסום לקרוא את הגדרות שירות השרת הקיים…\n'
+gcloud run services add-iam-policy-binding "$ksa_backend_service" \
+  --project="$ksa_project" --region="$ksa_backend_region" \
+  --member="serviceAccount:$ksa_sa_email" --role=roles/run.viewer \
+  --condition=None --quiet --format=none
 
 printf 'מחבר את הפרסום למאגר ולענף main בלבד…\n'
 ksa_existing_pool=$(gcloud iam workload-identity-pools list \
