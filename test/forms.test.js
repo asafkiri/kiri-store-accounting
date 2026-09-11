@@ -687,42 +687,58 @@ test("concurrent supplier conflict preserves invoice fields and offers explicit 
   assert.notEqual(saved[0].body.mutationId, saved[1].body.mutationId);
 });
 
-test("credit review explains negative amounts and never silently changes printed positive amounts", async () => {
+test("credit entry accepts magnitudes, preserves printed evidence and stores a negative reviewed amount", async () => {
   const { ctx, saved } = setup();
   const scan = supplierScan("ספק בדיקה");
   scan.result.documentType = "credit";
   await invoiceForm(ctx, null, scan);
-  assert.match(
-    document.querySelector("[data-credit-notice]").textContent,
-    /הזן את סכום הזיכוי כמספר שלילי/,
-  );
+  assert.match(document.querySelector("[data-credit-notice]").textContent, /כמספר חיובי/);
   assert.equal(document.querySelector("[name=total]").value, "12.00");
-  assert.equal(document.querySelector("[name=total]").inputMode, "text");
-  fill("documentType", "invoice");
   assert.equal(document.querySelector("[name=total]").inputMode, "decimal");
-  fill("documentType", "credit");
-  assert.equal(document.querySelector("[name=total]").value, "12.00");
+  assert.match(document.querySelector("[name=total]").closest("label").textContent, /12/);
+  fill("total", "30"); fill("final", "30");
   document.querySelector("[name=review]").checked = true;
-  submit();
-  await tick();
-  assert.equal(saved.length, 0);
-  assert.match(
-    document.querySelector("[data-form-error]").textContent,
-    /זיכוי.*שלילי/,
-  );
-  fill("total", "-30");
-  fill("final", "-30");
-  submit();
-  await tick();
+  submit(); await tick();
   assert.equal(saved[0].body.data.finalAgorot, -3000);
-  assert.equal(
-    totals([
-      { ...existingInvoice(), totalAgorot: 10000, finalAgorot: 10000 },
-      { ...saved[0].body.data },
-    ]).final,
-    7000,
-  );
+  assert.equal(scan.result.totalAgorot, 1200);
+  assert.equal(totals([{ ...existingInvoice(), totalAgorot: 10000, finalAgorot: 10000 }, saved[0].body.data]).final, 7000);
+  await invoiceForm(ctx, { ...existingInvoice(), documentType: "credit", totalAgorot: -3000, finalAgorot: -3000 });
+  assert.equal(document.querySelector("[name=total]").value, "30.00");
 });
+
+for (const recovery of [true, false]) test(`server save remains successful after local cleanup fails (reopen=${recovery})`, async () => {
+  globalThis.indexedDB = (await import("fake-indexeddb")).indexedDB;
+  const { Drafts } = await import("../src/drafts.js");
+  const { ctx, saved } = setup();
+  const local = new Drafts("save-close-" + recovery);
+  ctx.drafts = local;
+  const save = ctx.api.save;
+  let closed = false, merged;
+  ctx.api.save = async pending => {
+    const result = await save(pending);
+    local.db.close();
+    if (!recovery) local.remove = async () => { throw new DOMException("closed", "InvalidStateError"); };
+    return result;
+  };
+  ctx.closeModal = () => { closed = true; };
+  ctx.mergeRecord = record => { merged = record; };
+  await cashForm(ctx);
+  fill("cash", "123");
+  submit();
+  for (let n = 0; n < 30 && !closed; n++) await tick();
+  assert.equal(closed, true);
+  assert.equal(saved.length, 1);
+  assert.equal(merged.cashAgorot, 12300);
+  assert.match(document.querySelector("#toast").textContent, /נשמר בחנות/);
+  assert.equal(document.querySelector("[data-form-error]").hidden, true);
+  if (!recovery) {
+    assert.match(ctx.draftWarning, /השמירה בחנות הושלמה/);
+    assert.equal((await local.load("cash")).pending.body.mutationId, saved[0].body.mutationId);
+  } else assert.equal(await local.load("cash"), null);
+  submit(); await tick(); assert.equal(saved.length, 1);
+  local.db.close();
+});
+
 test("persistent server failure can be cancelled, edited and saved with a new identity after the server fence", async () => {
   const { ctx, drafts } = setup();
   const writes = [],

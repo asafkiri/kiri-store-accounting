@@ -54,3 +54,10 @@ test("invalid phone input never renders reCAPTCHA or sends SMS", async () => {
   await assert.rejects(f.sendCode({}, "1", "recaptcha"), /מספר טלפון תקין/);
   assert.deepEqual(f.counts(), { rendered: 0, attempts: 0 });
 });
+
+test("startup configuration fetch reports a network failure in Hebrew", async t => {
+  const f = await fixture(), original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async () => { throw new TypeError("Load failed"); };
+  await assert.rejects(f.initializeAuth(), /אין חיבור לרשת כרגע/);
+});

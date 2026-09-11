@@ -10,7 +10,13 @@ import {
 } from "firebase/auth";
 export async function initializeAuth() {
   // Firebase Hosting serves this PUBLIC web-app configuration automatically. It contains no server secrets.
-  const r = await fetch("/__/firebase/init.json", { cache: "no-store" });
+  let r;
+  try { r = await fetch("/__/firebase/init.json", { cache: "no-store" }); }
+  catch (error) {
+    if (error instanceof TypeError || error?.name === "TypeError")
+      throw Error("אין חיבור לרשת כרגע. בדוק קליטה ונסה שוב.");
+    throw error;
+  }
   if (!r.ok)
     throw Error(
       "המערכת עדיין לא חוברה ל־Firebase. יש להשלים את ההפעלה הראשונית.",
@@ -18,7 +24,8 @@ export async function initializeAuth() {
   let config;
   try {
     config = await r.json();
-  } catch {
+  } catch (error) {
+    if (error?.name === "TypeError") throw Error("אין חיבור לרשת כרגע. בדוק קליטה ונסה שוב.");
     throw Error(
       "הגדרת החיבור עדיין אינה זמינה. יש להשלים את ההפעלה הראשונית ב־Firebase.",
     );

@@ -28,10 +28,11 @@ async function setup(t, sdk = {}) {
       'export const {initializeAuth,sendCode}=globalThis.appTestSdk; export const onAuthStateChanged=(_auth,fn)=>{globalThis.appAuthCallback=fn;}, signOut=async()=>{}; export {authMessage} from "' +
       resolveAuthPath() +
       '";',
+    "./export.js": "export const invoiceCsv=()=>'',cashCsv=()=>'',download=async(...args)=>globalThis.appTestSdk.download?.(...args);",
     "./api.js":
       "export class Api { request(...args) { return globalThis.appTestSdk.request(...args); } } export class ApiError extends Error {} export const pendingMutation=()=>{};",
     "./drafts.js":
-      "export class Drafts { async open(){} async names(){return [...globalThis.appTestSdk.drafts.keys()];} async load(k){return globalThis.appTestSdk.drafts.get(k);} async save(k,v){globalThis.appTestSdk.drafts.set(k,structuredClone(v));} async remove(k){globalThis.appTestSdk.drafts.delete(k);} }",
+      "export class Drafts { async open(){} async names(){if(globalThis.appTestSdk.namesError)throw globalThis.appTestSdk.namesError;return [...globalThis.appTestSdk.drafts.keys()];} async load(k){return globalThis.appTestSdk.drafts.get(k);} async save(k,v){globalThis.appTestSdk.drafts.set(k,structuredClone(v));} async remove(k){globalThis.appTestSdk.drafts.delete(k);} }",
   });
   await tick();
 }
@@ -44,7 +45,7 @@ test("startup hides native browser diagnostics", async (t) => {
       throw Error("Load failed");
     },
   });
-  assert.match(document.body.textContent, /המערכת עדיין אינה מוכנה/);
+  assert.match(document.body.textContent, /טעינת המערכת לא הושלמה/);
   assert.doesNotMatch(document.body.textContent, /Load failed/);
 });
 test("archived stale drafts remain readable without changing the current record", async (t) => {
@@ -153,4 +154,33 @@ test("initial sync failure renders retry, never a false empty list, then loads a
     document.getElementById("main").textContent,
     /לא התקבל עדכון/,
   );
+});
+
+
+test("successful sync renders server data even when local draft reads fail", async t => {
+  await setup(t, {
+    namesError: new DOMException("closed", "InvalidStateError"),
+    request: async path => path === "me" ? { uid: "owner" } : {
+      full: true, version: 5, suppliers: [], dailyCash: [],
+      invoices: [{ id: "persisted-001", documentNumber: "SERVER-OK", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000 }],
+    },
+  });
+  await globalThis.appAuthCallback({});
+  assert.match(document.body.textContent, /SERVER-OK/);
+  assert.match(document.body.textContent, /טיוטות במכשיר/);
+  assert.doesNotMatch(document.body.textContent, /InvalidStateError|לא התקבל עדכון מהשרת/);
+});
+
+
+test("async export errors reach the Hebrew action error handler", async t => {
+  await setup(t, {
+    request: async path => path === "me" ? { uid: "owner" } : { full: true, version: 1, invoices: [], suppliers: [], dailyCash: [] },
+    download: async () => { throw new DOMException("NotAllowedError", "NotAllowedError"); },
+  });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="settings"]').click();
+  const button = document.querySelector('[data-action="backup"]');
+  await document.querySelector("#app").onclick({ target: button });
+  assert.match(document.querySelector("#toast").textContent, /הפעולה לא הושלמה/);
+  assert.doesNotMatch(document.querySelector("#toast").textContent, /NotAllowedError/);
 });
