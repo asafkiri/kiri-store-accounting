@@ -32,6 +32,12 @@ jobs:
       - run: npm run build
       - name: Install browsers with bounded package-download waits
         run: |
+          # The runner's Azure mirror has stalled font downloads for over ten
+          # minutes. Keep the configured suites and signed-package checks, but
+          # fetch through Ubuntu's primary archive on mirror-list runners.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
           sudo tee /etc/apt/apt.conf.d/80-ksa-network-timeouts >/dev/null <<'APT'
           Acquire::Retries "2";
           Acquire::http::Timeout "20";
