@@ -552,6 +552,7 @@ for (const engine of [chromium, webkit]) {
 
   test(`${engine.name()}: approved photo survives manual entry and explicit invoice save without AI`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(() => window.openScanner());
     await page.evaluate(() => window.chooseScanPhoto());
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
@@ -673,9 +674,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: today's cash starts clean and a failed save can be cancelled, edited and discarded offline`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage(phoneOptions(engine));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
@@ -794,9 +798,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: mobile supplier review confirms creation, similar names and reactivation before saving`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage(phoneOptions(engine));
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(
@@ -933,9 +940,12 @@ for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: reproduce the old receiver failure and verify the fixed API`, async (t) => {
     const server = createBrowserCheckServer();
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const browser = await engine.launch();
-    t.after(() => browser.close());
+    let browser;
+    t.after(async () => {
+      try { await browser?.close(); }
+      finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+    }, { timeout: 15000 });
+    browser = await engine.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await page.waitForFunction(() => {
@@ -954,9 +964,12 @@ for (const engine of [chromium, webkit]) {
     async (t) => {
       const server = createBrowserCheckServer();
       await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-      t.after(() => new Promise((resolve) => server.close(resolve)));
-      const browser = await engine.launch();
-      t.after(() => browser.close());
+      let browser;
+      t.after(async () => {
+        try { await browser?.close(); }
+        finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+      }, { timeout: 15000 });
+      browser = await engine.launch();
       const page = await browser.newPage(phoneOptions(engine));
       await page.goto(`http://127.0.0.1:${server.address().port}`);
       await page.waitForFunction(
