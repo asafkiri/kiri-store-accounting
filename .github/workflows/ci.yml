@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -20,6 +21,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - run: bash -n scripts/setup-hosting-ci.sh
       - run: |
           cmp firestore.rules api-rules-check/test/firestore.rules
           cmp storage.rules api-rules-check/test/storage.rules
@@ -30,6 +32,17 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:browser
+      - name: Save the tested Hosting build
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firebase-hosting-${{ github.sha }}
+          path: |
+            dist/
+            firebase.json
+          if-no-files-found: error
+          retention-days: 5
+          overwrite: true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -37,3 +50,64 @@ jobs:
           path: test-artifacts/
           if-no-files-found: ignore
           retention-days: 5
+          overwrite: true
+  deploy:
+    name: Publish Firebase Hosting
+    needs: check
+    if: >-
+      github.repository == 'asafkiri/kiri-store-accounting' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: firebase-hosting-live
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Skip a build superseded by a newer main commit
+        id: current
+        env:
+          KSA_BUILD_SHA: ${{ github.sha }}
+        run: |
+          ksa_main_sha=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [[ -z "$ksa_main_sha" ]]; then
+            echo 'Could not read main; refusing to publish.' >&2
+            exit 1
+          fi
+          if [[ "$ksa_main_sha" == "$KSA_BUILD_SHA" ]]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+            echo 'A newer commit is already on main. This older build was not published.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.current.outputs.publish == 'true'
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        if: steps.current.outputs.publish == 'true'
+        with:
+          name: firebase-hosting-${{ github.sha }}
+      - name: Install the pinned Firebase CLI before requesting credentials
+        if: steps.current.outputs.publish == 'true'
+        run: npm install --global firebase-tools@14.16.0
+      - name: Authenticate the Hosting deployer
+        if: steps.current.outputs.publish == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: kiri-store-accounting
+          workload_identity_provider: projects/292191260602/locations/global/workloadIdentityPools/ksa-hosting-github/providers/github
+          service_account: ksa-hosting-deploy@kiri-store-accounting.iam.gserviceaccount.com
+      - name: Publish the tested build
+        if: steps.current.outputs.publish == 'true'
+        env:
+          KSA_BUILD_SHA: ${{ github.sha }}
+        run: |
+          firebase deploy --project kiri-store-accounting --only hosting --non-interactive --message "GitHub $KSA_BUILD_SHA"
+          echo "Published $KSA_BUILD_SHA to https://kiri-store-accounting.web.app" >> "$GITHUB_STEP_SUMMARY"

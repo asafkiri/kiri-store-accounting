@@ -63,7 +63,7 @@ Service account של ה־revision צריך להישאר:
 
 ## 5. פריסת האפליקציה ל־Firebase Hosting
 
-הקוד ב־GitHub אינו מתפרסם אוטומטית ל־Hosting. הפעולה הזו דורשת כניסה לחשבון Google עם הרשאה לפרויקט.
+יש להשלים פעם אחת את [חיבור הפרסום האוטומטי](AUTODEPLOY.md) בחשבון Google שמורשה להגדיר את ההרשאות בפרויקט. לאחר מכן, מיזוג ל־main מפעיל את הבדיקות ומפרסם את הממשק אוטומטית כשהן עוברות. בלי חיבור ההרשאות, שלב הפרסום ב־GitHub ייכשל ולא יוצג כהצלחה. ההוראות בהמשך הסעיף הן לפרסום ידני לפי הצורך.
 
 בבדיקת הריפו נמצאה הגדרת GitHub Pages קיימת שמפעילה `pages build and deployment`. האפליקציה אינה משתמשת בה. כדי לכבות אותה: בריפו האפליקציה → **Settings → Pages → Build and deployment → Source: Deploy from a branch → Branch: None → Save**. אל תמחק את הריפו. ההגדרה אינה משנה את Firebase Hosting. [הוראות GitHub](https://docs.github.com/en/pages/getting-started-with-github-pages/deleting-a-github-pages-site).
 

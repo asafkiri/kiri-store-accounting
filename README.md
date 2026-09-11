@@ -82,6 +82,10 @@ npm run dev
 
 אין `.env` ל־frontend ואין צורך להעתיק מפתחות שרת. האפליקציה קוראת את `/__/firebase/init.json` ש־Firebase Hosting מספק עבור ה־Web App בפרויקט. זהו config ציבורי של Firebase; הרשאות המידע נקבעות בשרת וב־Rules. אם עדיין אין Web App רשום, הוסף Web App בתוך הפרויקט הקיים וקשר אותה לאתר Hosting באמצעות Link to a Firebase Hosting site, לפי מדריך ההפעלה.
 
+לאחר [חיבור חד־פעמי לפרסום אוטומטי](docs/AUTODEPLOY.md), מיזוג ל־`main` מפעיל בדיקות ובנייה ואז מפרסם ל־Firebase Hosting. הפרסום משתמש בתוצר הבנייה שנבדק באותה הרצה. בקשות PR אינן מקבלות הרשאת פרסום. החיבור ל־Google מבוסס Workload Identity Federation, בלי מפתח קבוע או GitHub secret. שרת ה־AI ממשיך במסלול Cloud Build הקיים שלו.
+
+לפריסה ידנית לפי הצורך:
+
 ```sh
 npm ci
 npm test
@@ -89,7 +93,7 @@ npm run build
 npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 ```
 
-הפקודה דורשת חשבון Google מורשה. כללי Firestore/Storage נשארים חסומים. אין פריסה אוטומטית ל־Firebase על כל commit; GitHub Actions בודק build/tests, והפריסה מתבצעת עם CLI מורשה. אין צורך לחשוף service-account key ב־GitHub.
+הפקודה הידנית דורשת חשבון Google מורשה. פרסום הממשק, ידני או אוטומטי, מוגבל ל־Hosting; כללי Firestore/Storage אינם נפרסים במסלול הזה.
 
 ## אמינות, פרטיות ומגבלות ידועות
 
