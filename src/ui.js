@@ -2,6 +2,7 @@ import { escapeHtml as e } from "./format.js";
 export const $ = (selector, root = document) => root.querySelector(selector);
 export function icon(name) {
   const paths = {
+    trash: "M3 6h18 M9 6V3h6v3 M6 6l1 15h10l1-15 M10 10v7 M14 10v7",
     folder: "M3 7V4h6l2 3h10v13H3z",
     image: "M3 3h18v18H3z M3 16l5-5 4 4 3-3 6 6 M15 7h.01",
     invoice: "M7 3h10v18l-5-3-5 3z M10 7h4 M10 11h4",

@@ -2,13 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import {
-  invoiceForm,
+  invoiceForm as openInvoiceForm,
   paymentForm,
   cashForm,
   supplierForm,
 } from "../src/forms.js";
 import { ApiError } from "../src/api.js";
 import { today, totals } from "../src/format.js";
+// These tests exercise the retained detailed editor; quick intake has its own
+// integration tests for sequential answers, summary approval and recovery.
+const invoiceForm = (ctx, record = null, scan = null, attachments = []) =>
+  openInvoiceForm(ctx, record, scan, attachments, { fullEditor: true });
 const tick = () => new Promise((r) => setTimeout(r, 20));
 function setup() {
   const dom = new JSDOM(
@@ -206,7 +210,7 @@ test("cash edits archive stale values, while explicit resume can recover an unsa
   });
   await cashForm(ctx, record);
   assert.equal(document.querySelector("[name=cash]").value, "200.00");
-  assert.equal(drafts.get("cash").version, 2);
+  assert.equal(drafts.has("cash"), false);
   assert.equal(drafts.get("saved-cash-" + date).fields.notes, "ישן");
   drafts.set("cash", {
     recordId: date,
@@ -292,6 +296,9 @@ for (const kind of ["invoice", "supplier"]) {
     await tick();
     delete drafts.get(kind).mode; // Upgrade safety for drafts from the previous version.
     await open(ctx);
+    assert.equal(drafts.has(kind), false, "merely opening Add does not create work");
+    fill("notes", "new record");
+    await tick();
     assert.notEqual(drafts.get(kind).recordId, record.id);
     assert.equal(drafts.get(kind).version, 0);
     assert.equal(drafts.get(kind).mode, "new");
@@ -328,7 +335,7 @@ test("reopening stale fields archives them and opens the current version without
   };
   ctx.data.invoices = [current];
   await invoiceForm(ctx, current);
-  assert.equal(drafts.get("invoice").version, 2);
+  assert.equal(drafts.has("invoice"), false);
   assert.equal(
     document.querySelector("[name=notes]").value,
     "newer saved note",
@@ -916,13 +923,13 @@ test("deleting an unused supplier survives lost response and reuses the deletion
   assert.equal(drafts.has("supplier"), false);
 });
 
-test("supplier removal protects even deleted invoice history and manual invoice excludes delivery notes", async () => {
+test("supplier removal keeps invoice history and manual invoice excludes delivery notes", async () => {
   const { ctx, saved } = setup();
   const supplier = { ...ctx.data.suppliers[0], version: 1 };
   ctx.data.invoices.push({ supplierId: supplier.id, deletedAt: 123 });
   await supplierForm(ctx, supplier);
   document.querySelector("[data-remove-supplier]").click();
-  assert.match(document.querySelector("[data-form-error]").textContent, /היסטוריית חשבוניות/);
+  assert.match(document.querySelector(".delete-form").textContent, /החשבוניות והצילומים שלו יישארו בהיסטוריה/);
   assert.equal(saved.length, 0);
   await invoiceForm(ctx);
   const options = [...document.querySelector('[name="documentType"]').options].map(o => o.value);

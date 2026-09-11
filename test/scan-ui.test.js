@@ -76,7 +76,8 @@ test("recovering a scan retrieves its result without an extra paid scan and open
   assert.deepEqual(calls, ["scan-jobs/job-unit-1"]);
   assert.ok(document.getElementById("invoice-form"));
   assert.equal(document.querySelector("[name=vat]").value, "");
-  assert.equal(document.querySelector("[name=review]").checked, false);
+  assert.equal(document.querySelector(".quick-invoice [type=submit]").hidden, true);
+  assert.ok(document.querySelector('[data-quick-choice="vat-rate"]'));
 });
 test("failed AI can continue with a manual invoice retaining already-uploaded files", async () => {
   const { ctx, calls, cache } = setup({

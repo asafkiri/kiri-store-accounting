@@ -554,9 +554,11 @@ for (const engine of [chromium, webkit]) {
     await page.locator("#run-scan").tap();
     await page.waitForSelector("#invoice-form");
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents", "scan-invoice"]);
-    assert.equal(await page.locator("[name=review]").isChecked(), false);
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.equal(await page.locator('.quick-invoice [type="submit"]').isVisible(), true);
+    assert.match(await page.locator('.quick-invoice [type="submit"]').innerText(), /אשר ושמור/);
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
-    assert.equal(await page.locator("[name=final]").inputValue(), "3995.00");
+    assert.match(await page.locator("[data-quick-final]").innerText(), /3,995\.00/);
     assert.deepEqual(errors, []);
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
     console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);
@@ -1247,7 +1249,8 @@ for (const engine of [chromium, webkit]) {
     assert.ok(box.height >= 48 && box.width >= 240);
     await create.tap();
     assert.equal(await page.evaluate(() => window.supplierRequests.length), 0);
-    await page.locator("[name=review]").check();
+    await page.locator(".quick-other > summary").click();
+    await page.locator('[data-quick-choice="vat-unknown"]').tap();
     await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 1);
     assert.match(
@@ -1261,12 +1264,14 @@ for (const engine of [chromium, webkit]) {
       0,
     );
     await page.locator("[data-supplier-action=confirm]").tap();
-    await page.locator("[name=review]").check();
+    await page.locator(".quick-other > summary").click();
+    await page.locator('[data-quick-choice="vat-unknown"]').tap();
     await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 2);
     await page.evaluate(() => window.openSupplierReview("ספק לא פעיל"));
     await page.locator("[data-supplier-action=reactivate]").tap();
-    await page.locator("[name=review]").check();
+    await page.locator(".quick-other > summary").click();
+    await page.locator('[data-quick-choice="vat-unknown"]').tap();
     await page.locator("[type=submit]").tap();
     await page.waitForFunction(() => window.supplierRequests.length === 3);
     const requests = await page.evaluate(() => window.supplierRequests);
@@ -1516,8 +1521,10 @@ for (const engine of [chromium, webkit]) {
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/workspace-${engine.name()}.png`, fullPage: true });
     await page.locator(".scan-primary").click();
-    await page.locator("#run-scan").waitFor();
-    assert.ok(await page.locator(".capture-actions").isVisible());
+    await page.locator(".scan-live").waitFor();
+    assert.ok(await page.locator("[data-live-gallery]").count());
+    assert.ok(await page.locator("[data-live-manual]").isVisible());
+    await page.locator("[data-live-cancel]").click();
     await page.locator("[data-close-modal]").click();
     await page.locator('.sidebar [data-route="documents"]').click();
     const current = page.locator(`[data-folder="photos:${month}"]`);
@@ -1571,8 +1578,85 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').count(), 0);
     await page.locator('[data-action="supplier-edit"][data-id="supplier-tnuva"]').click();
     await page.locator("[data-remove-supplier]").click();
-    assert.match(await page.locator("[data-form-error]").innerText(), /היסטוריית חשבוניות/);
-    assert.equal(requests.filter(r => r.method === "DELETE").length, 1);
+    assert.match(await page.locator(".delete-form").innerText(), /30 יום/);
+    await page.locator('.delete-form [type="submit"]').click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    await page.locator('[data-route="supplier-trash"]').click();
+    assert.equal(await page.locator(".trash-card").count(), 2);
+    await page.locator('[data-action="supplier-restore"][data-id="supplier-tnuva"]').click();
+    await page.locator('.delete-form [type="submit"]').click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    assert.equal(await page.locator(".trash-card").count(), 1);
+    await page.screenshot({ path: `test-artifacts/trash-${engine.name()}.png`, fullPage: true });
+    assert.equal(requests.filter(r => r.method === "DELETE").length, 2);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: direct camera, PDF intake, short questions, compact approval and real draft reminders`, { timeout: 60000 }, async t => {
+    const { server, requests, data } = workspaceFixture();
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.locator(".scan-primary").waitFor();
+    assert.equal(await page.locator(".draft-banner").count(), 0);
+    assert.equal(await page.locator('main [data-route="documents"]').count(), 0);
+    await page.locator('[data-action="invoice"]').click();
+    await page.locator("#invoice-form").waitFor();
+    await page.locator("[data-close-modal]").click();
+    assert.equal(await page.locator(".draft-banner").count(), 0);
+    await page.locator(".scan-primary").click();
+    await page.locator(".scan-live").waitFor();
+    assert.equal(await page.locator(".scan-view").isVisible(), false);
+    await page.locator("[data-live-gallery]").setInputFiles({ name: "invoice.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n% synthetic fixture\n%%EOF") });
+    await page.locator(".pdf-preview").waitFor();
+    await page.locator("#run-scan").click();
+    await page.locator('[data-quick-choice="invoice"]').click();
+    await page.locator('[data-quick-choice="vat-rate"]').waitFor();
+    assert.match(await page.locator('[data-quick-choice="vat-rate"]').innerText(), /18%/);
+    await page.locator('[data-quick-choice="vat-rate"]').click();
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.equal(await page.locator(".quick-question").count(), 0);
+    for (const width of [360, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      const layout = await page.locator("#modal").evaluate(el => ({ height: el.clientHeight, content: el.scrollHeight, width: el.scrollWidth, clientWidth: el.clientWidth }));
+      assert.ok(layout.content <= layout.height + 2, `summary fits without scrolling at ${width}: ${JSON.stringify(layout)}`);
+      assert.ok(layout.width <= layout.clientWidth + 1, "no horizontal overflow");
+    }
+    await page.locator('[name="paymentReduction"]').fill("100");
+    await page.locator('[name="notes"]').fill("חוסר שאושר עם הספק");
+    await page.locator('[name="notes"]').blur();
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/quick-invoice-${engine.name()}.png`, fullPage: true });
+    await page.locator("[data-close-modal]").click();
+    await page.locator('.draft-banner[data-key="invoice"]').waitFor();
+    assert.equal(await page.locator(".draft-banner").count(), 1);
+    const color = await page.locator(".draft-banner").evaluate(el => getComputedStyle(el).color);
+    assert.equal(color, "rgb(155, 32, 40)");
+    await page.reload();
+    await page.locator('.draft-banner[data-key="invoice"]').click();
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.equal(await page.locator('[name="paymentReduction"]').inputValue(), "100");
+    assert.equal(requests.filter(r => r.path === "/api/v1/scan-invoice").length, 1);
+    await page.locator('.quick-invoice [type="submit"]').click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    await page.waitForFunction(() => !document.querySelector(".draft-banner"));
+    const saved = data.invoices.find(i => i.documentNumber === "SCAN-118");
+    assert.equal(saved.finalAgorot, 1800); assert.equal(saved.vatAgorot, 1800); assert.equal(saved.totalAgorot, 11800);
+    assert.equal(saved.attachmentIds.length, 1);
+    await page.locator('.topbar [data-route="settings"]').click();
+    await page.locator('[data-action="vat-preferences"]').click();
+    await page.locator('[name="rate"]').fill("17");
+    await page.locator('#modal [type="submit"]').click();
+    await page.locator("#modal").waitFor({ state: "hidden" });
+    await page.reload();
+    await page.locator('.topbar [data-route="settings"]').click();
+    assert.match(await page.locator("main").innerText(), /17%/);
     assert.deepEqual(errors, []);
   });
 }
