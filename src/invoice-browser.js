@@ -42,7 +42,7 @@ export function invoiceFolders(items, ctx, renderCards, { photos = false } = {})
   const groups = groupInvoices(items), supplierMap = new Map(ctx.data.suppliers.map(s => [s.id, s]));
   const limit = ctx.limit || 80;
   let rendered = 0;
-  const isOpen = (key, fallback) => ctx.folderState?.[key] ?? fallback;
+  const isOpen = (key, fallback) => Boolean(ctx.filters.q || ctx.filters.supplierId) || (ctx.folderState?.[key] ?? fallback);
   const html = groups.map(([month, suppliers], monthIndex) => {
     const monthItems = [...suppliers.values()].flat();
     const monthKey = `${photos ? "photos" : "invoices"}:${month}`;

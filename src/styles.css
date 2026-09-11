@@ -981,6 +981,8 @@ dialog.crop-modal {
 .accountant-tools summary { cursor: pointer; min-height: 44px; color: #36506f; }
 .supplier-removal { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 12px; }
 .delete-form button[type=submit] { background: var(--danger); }
+.delete-form [data-discard-draft] { color: #185fb7; }
+.delete-form [data-draft-status] { display: none; }
 @media (max-width: 680px) {
   main#main { padding: 18px 16px 15px; }
   .page-heading { margin-bottom: 16px; }

@@ -175,7 +175,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       if (
         draft.pending ||
         submit.disabled ||
-        !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו.")
+        (!options.skipDiscardConfirmation && !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו."))
       )
         return;
       disposed = true;
@@ -366,7 +366,7 @@ async function supplierRemovalForm(ctx, record, existing = null) {
   const draft = existing || { operation: "delete", mode: "edit", recordId: record.id, version: record.version, fields: { name: record.name } };
   const root = ctx.dialog("מחיקת ספק", `<form class="delete-form"><p>למחוק את הספק <strong>${e(draft.fields.name)}</strong> מהחנות?</p><p class="muted">ספק עם היסטוריית חשבוניות לא יימחק.</p>${footer("מחק ספק", "ביטול — השאר את הספק")}</form>`);
   bindDraft(ctx, root.querySelector("form"), "supplier", draft, () => draft.fields,
-    () => pendingMutation("suppliers/" + draft.recordId, null, draft.version, "DELETE"));
+    () => pendingMutation("suppliers/" + draft.recordId, null, draft.version, "DELETE"), { skipDiscardConfirmation: true });
 }
 export async function invoiceForm(
   ctx,

@@ -6,6 +6,7 @@ import {
   money,
   displayDate,
   today,
+  monthLabel,
   methods,
   types,
   filterInvoices,
@@ -82,7 +83,7 @@ export function reportsView(ctx) {
   const supplierMap = new Map(ctx.data.suppliers.map(s => [s.id, s.name]));
   const supplierIds = [...new Set(items.map(i => i.supplierId))].sort((a, b) => (supplierMap.get(a) || "").localeCompare(supplierMap.get(b) || "", "he"));
   return `<div class="page-heading"><h1>סיכום חודשי</h1></div><p class="page-intro">כמה נרשם בחשבוניות, מה שולם ומה עוד לתשלום. לפי תאריך החשבונית.</p>${periodPicker(ctx)}${filters(ctx, { status: true, period: false })}
-    <div class="report-overview"><span>${items.length} חשבוניות בתקופה</span><strong>${e(summaryMoney(t.final))}</strong><small>סכום סופי לאחר הפחתות וזיכויים</small></div>
+    <div class="report-overview"><span>${items.length} חשבוניות · ${e(ctx.filters.month ? monthLabel(ctx.filters.month) : `${ctx.filters.from ? displayDate(ctx.filters.from) : "מההתחלה"} — ${ctx.filters.to ? displayDate(ctx.filters.to) : "עד היום"}`)}</span><strong>${e(summaryMoney(t.final))}</strong><small>סכום סופי לאחר הפחתות וזיכויים</small></div>
     <div class="cash-totals"><div class="summary-card"><span>שולם</span><strong>${e(summaryMoney(totals(paid).final))}</strong><small>${paid.length} חשבוניות</small></div><div class="summary-card"><span>נותר לתשלום</span><strong>${e(summaryMoney(totals(unpaid).final))}</strong><small>${unpaid.length} חשבוניות</small></div></div>
     ${creditNotice(t.invalidCredits)}
     <section class="report-section"><h2>פירוט לפי ספק</h2>${items.length ? `<div class="report-suppliers">${supplierIds.map(id => {
