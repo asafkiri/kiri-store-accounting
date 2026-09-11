@@ -12,11 +12,20 @@ import {
 import { pendingMutation } from "./api.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
 import { creditSignIssues } from "./credit.js";
+import { hasDraftContent } from "./draft-activity.js";
+import { quickInvoiceReview } from "./quick-invoice.js";
 import {
   cancellationFor,
   cancelAttempt,
   mergeAttemptResult,
 } from "./attempts.js";
+
+async function removeLinkedScan(ctx, draft) {
+  const scan = await ctx.drafts.load("scan");
+  if ((draft.fields.scanJobId && scan?.jobId === draft.fields.scanJobId) ||
+    (scan?.attachmentIds?.length && scan.attachmentIds.every(id => draft.fields.attachmentIds?.includes(id))))
+    await ctx.drafts.remove("scan");
+}
 
 function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   const status = $("[data-draft-status]", form),
@@ -30,12 +39,15 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   const active = () => !disposed && form.isConnected && ctx.api === api;
   const persist = async (critical = false) => {
     try {
-      await ctx.drafts.save(key, draft);
-      if (status) status.textContent = "טיוטה שמורה במכשיר";
+      if (hasDraftContent(key, draft)) await ctx.drafts.save(key, draft);
+      else await ctx.drafts.remove(key);
+      if (status) { status.textContent = "טיוטה שמורה במכשיר"; status.dataset.saved = "true"; }
     } catch {
-      if (status)
+      if (status) {
+        status.dataset.saved = "false";
         status.textContent =
           "לא ניתן לשמור טיוטה במכשיר. השאר את החלון פתוח עד לשמירה בשרת.";
+      }
       if (critical)
         throw Error(
           "אין מספיק מקום לשמירת טיוטה בטוחה במכשיר. יש לפנות מקום לפני שליחה.",
@@ -87,7 +99,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       button.disabled = true;
       try {
         const collection =
-          key === "supplier"
+          key === "preferences" ? "settings" : key === "supplier"
             ? "suppliers"
             : key === "cash"
               ? "daily-cash"
@@ -134,6 +146,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
     });
     return cancellationPromise;
   };
+  if (!draft.restored) draft.initialFields ||= structuredClone(draft.fields);
   submit.dataset.label = submit.textContent;
   lock();
   persist();
@@ -188,6 +201,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
             draft.cancelPending,
           );
         await ctx.drafts.remove(key);
+        if (key === "invoice") await removeLinkedScan(ctx, draft);
         ctx.closeModal();
         ctx.render();
         if (draft.cancelPending) {
@@ -228,10 +242,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       // local cleanup is unavailable. Keep the original pending identity on disk.
       try {
         await ctx.drafts.remove(key);
-        if (key === "invoice" && draft.fields.scanJobId) {
-          const scan = await ctx.drafts.load("scan");
-          if (scan?.jobId === draft.fields.scanJobId) await ctx.drafts.remove("scan");
-        }
+        if (key === "invoice") await removeLinkedScan(ctx, draft);
       } catch {
         ctx.draftWarning = "השמירה בחנות הושלמה. לא ניתן לנקות כרגע את הטיוטה במכשיר.";
       }
@@ -246,7 +257,8 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       toast(
         result.supplierAction === "created"
           ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר לערוך אותו דרך ניהול ספקים.`
-          : key === "supplier" && draft.operation === "delete" ? "הספק נמחק מהחנות"
+          : key === "supplier" && draft.operation === "delete" ? "הספק הועבר לסל המחזור · ניתן לשחזר במשך 30 יום"
+          : key === "supplier" && draft.operation === "restore" ? "הספק שוחזר"
           : key === "invoice" ? "החשבונית נשמרה · " + monthLabel((result.record.invoiceDate || draft.fields.invoiceDate)?.slice(0, 7))
           : "נשמר בחנות",
       );
@@ -285,7 +297,7 @@ export async function retainDraft(ctx, key, old) {
   await ctx.drafts.save(name, { ...old, kind: key });
 }
 async function matchingDraft(ctx, key, old, record, compatible = true) {
-  if (!old) return null;
+  if (!old || !hasDraftContent(key, old)) return null;
   // Legacy drafts have no mode. A nonzero version belongs to an existing record.
   const mode = old.mode || (old.version === 0 ? "new" : "edit");
   const matches = record ? old.recordId === record.id : mode === "new";
@@ -294,7 +306,7 @@ async function matchingDraft(ctx, key, old, record, compatible = true) {
     old.version !== record.version &&
     !old.pending &&
     !old.cancelPending;
-  if (compatible && matches && !stale) return { ...old, mode };
+  if (compatible && matches && !stale) return { ...old, mode, restored: true };
   await retainDraft(ctx, key, old);
   return null;
 }
@@ -311,7 +323,7 @@ const staleNotice = (old, record, draft) =>
 export async function supplierForm(ctx, record = null) {
   const key = "supplier",
     old = await ctx.drafts.load(key);
-  if (old?.operation === "delete" && record?.id === old.recordId)
+  if (["delete", "restore"].includes(old?.operation) && record?.id === old.recordId)
     return supplierRemovalForm(ctx, record || ctx.data.suppliers.find(s => s.id === old.recordId), old);
   const draft = (await matchingDraft(ctx, key, old, record)) || {
     mode: record ? "edit" : "new",
@@ -327,7 +339,7 @@ export async function supplierForm(ctx, record = null) {
   const f = draft.fields;
   const root = ctx.dialog(
     record ? "עריכת ספק" : "הוספת ספק",
-    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">אם קיימות לספק חשבוניות, אפשר לבחור למעלה ״לא פעיל״ ולשמור. ההיסטוריה תישאר זמינה.</p></section>` : ""}</form>`,
+    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">הספק יעבור לסל המחזור ל־30 יום. החשבוניות שלו יישארו בהיסטוריה.</p></section>` : ""}</form>`,
   );
   const form = $("form", root);
   bindDraft(
@@ -351,28 +363,87 @@ export async function supplierForm(ctx, record = null) {
   const remove = form.querySelector("[data-remove-supplier]");
   if (remove) remove.onclick = async () => {
     if (draft.pending || draft.cancelPending || draft.conflict || form.querySelector("[type=submit]").disabled) return;
-    if (ctx.data.invoices.some(i => i.supplierId === record.id)) {
-      const error = form.querySelector("[data-form-error]");
-      error.hidden = false;
-      error.textContent = "לספק הזה יש היסטוריית חשבוניות. כדי להסיר אותו מהרשימה הפעילה, בחר ׳לא פעיל׳ ושמור.";
-      error.scrollIntoView?.({ block: "nearest" });
-      return;
-    }
     try { await supplierRemovalForm(ctx, record); }
     catch (err) { toast(errorText(err), true); }
   };
 }
-async function supplierRemovalForm(ctx, record, existing = null) {
-  const draft = existing || { operation: "delete", mode: "edit", recordId: record.id, version: record.version, fields: { name: record.name } };
-  const root = ctx.dialog("מחיקת ספק", `<form class="delete-form"><p>למחוק את הספק <strong>${e(draft.fields.name)}</strong> מהחנות?</p><p class="muted">ספק עם היסטוריית חשבוניות לא יימחק.</p>${footer("מחק ספק", "ביטול — השאר את הספק")}</form>`);
+export async function supplierRemovalForm(ctx, record, existing = null, operation = "delete") {
+  const draft = existing || { operation, mode: "edit", recordId: record.id, version: record.version, fields: { name: record.name } };
+  const restore = draft.operation === "restore";
+  const root = ctx.dialog(restore ? "שחזור ספק" : "מחיקת ספק", `<form class="delete-form"><p>${restore ? "לשחזר את הספק" : "האם אתה בטוח שברצונך למחוק את הספק"} <strong>${e(draft.fields.name)}</strong>?</p><p class="muted">${restore ? "הספק יחזור לרשימת הספקים." : "הספק יוסר מהרשימה ויהיה ניתן לשחזר אותו מסל המחזור במשך 30 יום. החשבוניות והצילומים שלו יישארו בהיסטוריה."}</p>${footer(restore ? "כן, שחזר ספק" : "כן, מחק ספק", "לא, חזור")}</form>`);
   bindDraft(ctx, root.querySelector("form"), "supplier", draft, () => draft.fields,
-    () => pendingMutation("suppliers/" + draft.recordId, null, draft.version, "DELETE"), { skipDiscardConfirmation: true });
+    () => pendingMutation("suppliers/" + draft.recordId + (restore ? "/restore" : ""), null, draft.version, restore ? "POST" : "DELETE"), { skipDiscardConfirmation: true });
 }
+
+export async function preferencesForm(ctx) {
+  const record = ctx.data.settings?.find(s => s.id === "accounting");
+  const old = await ctx.drafts.load("preferences");
+  const draft = old || { recordId: "accounting", version: record?.version || 0, fields: { rate: String((record?.defaultVatBasisPoints ?? 1800) / 100) } };
+  const root = ctx.dialog("ברירת מחדל למע״מ", `<form>${field("שיעור מע״מ באחוזים", "rate", draft.fields.rate, { required: true })}<p class="small muted">יוצע כשהמע״מ לא נקלט בסריקה. החישוב מתבצע רק אחרי בחירה שלך.</p>${footer("שמור הגדרה")}</form>`);
+  bindDraft(ctx, $("form", root), "preferences", draft, () => formObject($("form", root)), values => {
+    const rate = parseMoney(values.rate);
+    if (rate < 0 || rate > 10000) throw Error("יש לבחור שיעור בין 0 ל־100 אחוזים.");
+    return pendingMutation("settings/accounting", { defaultVatBasisPoints: rate }, draft.version);
+  });
+}
+export function invoiceMutation(draft, values, record = null) {
+      if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
+        throw Error("יש לבחור סוג מסמך לפי התעודה.");
+      if (values.deductions.some((d) => d.included === "unknown"))
+        throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
+      if (!values.supplierId || draft.supplierConflict)
+        throw Error("יש לבחור ספק או לאשר פתיחת ספק חדש לפני השמירה.");
+      const pending = pendingMutation(
+        "invoices/" + draft.recordId,
+        {
+          supplierId: values.supplierId,
+          ...(draft.newSupplier
+            ? { newSupplier: { name: draft.newSupplier.name } }
+            : {}),
+          ...(draft.reactivateSupplier
+            ? {
+                reactivateSupplier: {
+                  expectedVersion: draft.reactivateSupplier.expectedVersion,
+                },
+              }
+            : {}),
+          documentNumber: values.documentNumber,
+          invoiceDate: values.invoiceDate,
+          documentType: values.documentType,
+          subtotalAgorot: parseMoney(values.subtotal, true),
+          vatAgorot: parseMoney(values.vat, true),
+          totalAgorot: parseMoney(values.total),
+          finalAgorot: parseMoney(values.final),
+          deductions: values.deductions.map((d) => ({
+            label: d.label,
+            amountAgorot: parseMoney(d.amount),
+            includedInTotal: d.included === "yes",
+          })),
+          notes: values.notes,
+          attachmentIds: draft.fields.attachmentIds,
+          source: draft.fields.source,
+          scanJobId: draft.fields.scanJobId,
+          reviewConfirmed: values.review === "on",
+        },
+        draft.version,
+      );
+      if (pending.body.data.documentType === "credit") {
+        for (const key of ["subtotalAgorot", "vatAgorot", "totalAgorot", "finalAgorot"])
+          if (pending.body.data[key] !== null) pending.body.data[key] = -Math.abs(pending.body.data[key]) || 0;
+      }
+      if (creditSignIssues(pending.body.data).length)
+        throw Error(
+          "סכום הזיכוי והסכום הסופי חייבים להיות גדולים מאפס.",
+        );
+      return pending;
+}
+
 export async function invoiceForm(
   ctx,
   record = null,
   scan = null,
   manualAttachments = [],
+  options = {},
 ) {
   const key = "invoice",
     old = await ctx.drafts.load(key);
@@ -443,6 +514,10 @@ export async function invoiceForm(
       draft.newSupplier?.name ||
       ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name ||
       (uncertain("supplierName") ? "" : r?.supplierName || "");
+  if (!record && r && !options.fullEditor) return quickInvoiceReview(ctx, draft, {
+    bindDraft, footer, buildMutation: values => invoiceMutation(draft, values),
+    openEditor: () => invoiceForm(ctx, null, draft.scan, [], { fullEditor: true }),
+  });
   const root = ctx.dialog(
     record ? "עריכת חשבונית" : r ? "בדיקת החשבונית שנסרקה" : "הוספת חשבונית",
     `${staleNotice(old, record, draft)}<form id="invoice-form">
@@ -505,57 +580,7 @@ export async function invoiceForm(
     key,
     draft,
     collect,
-    (values) => {
-      if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
-        throw Error("יש לבחור סוג מסמך לפי התעודה.");
-      if (values.deductions.some((d) => d.included === "unknown"))
-        throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");
-      if (!values.supplierId || draft.supplierConflict)
-        throw Error("יש לבחור ספק או לאשר פתיחת ספק חדש לפני השמירה.");
-      const pending = pendingMutation(
-        "invoices/" + draft.recordId,
-        {
-          supplierId: values.supplierId,
-          ...(draft.newSupplier
-            ? { newSupplier: { name: draft.newSupplier.name } }
-            : {}),
-          ...(draft.reactivateSupplier
-            ? {
-                reactivateSupplier: {
-                  expectedVersion: draft.reactivateSupplier.expectedVersion,
-                },
-              }
-            : {}),
-          documentNumber: values.documentNumber,
-          invoiceDate: values.invoiceDate,
-          documentType: values.documentType,
-          subtotalAgorot: parseMoney(values.subtotal, true),
-          vatAgorot: parseMoney(values.vat, true),
-          totalAgorot: parseMoney(values.total),
-          finalAgorot: parseMoney(values.final),
-          deductions: values.deductions.map((d) => ({
-            label: d.label,
-            amountAgorot: parseMoney(d.amount),
-            includedInTotal: d.included === "yes",
-          })),
-          notes: values.notes,
-          attachmentIds: f.attachmentIds,
-          source: f.source,
-          scanJobId: f.scanJobId,
-          reviewConfirmed: values.review === "on",
-        },
-        draft.version,
-      );
-      if (pending.body.data.documentType === "credit") {
-        for (const key of ["subtotalAgorot", "vatAgorot", "totalAgorot", "finalAgorot"])
-          if (pending.body.data[key] !== null) pending.body.data[key] = -Math.abs(pending.body.data[key]) || 0;
-      }
-      if (creditSignIssues(pending.body.data).length)
-        throw Error(
-          "סכום הזיכוי והסכום הסופי חייבים להיות גדולים מאפס.",
-        );
-      return pending;
-    },
+    (values) => invoiceMutation(draft, values, record),
     {
       onError: async (err) => {
         if (["SUPPLIER_EXISTS", "SUPPLIER_CHANGED"].includes(err.code))

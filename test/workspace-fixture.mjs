@@ -18,7 +18,7 @@ export function workspaceFixture() {
     vatAgorot: 0, totalAgorot: amount, finalAgorot: amount, attachmentIds, deductions: [], status, version: 1,
     ...(status === "paid" ? { payment: { method: "check", paymentDate: invoiceDate } } : {}),
   });
-  const data = { full: true, version: 1, suppliers, invoices: [
+  const data = { full: true, version: 1, settings: [], suppliers, invoices: [
     invoice("INV-101", "supplier-tnuva", month + "-08", 125400, ["a".repeat(64), "b".repeat(64)]),
     invoice("INV-102", "supplier-marina", month + "-05", 46000, ["c".repeat(64)], "paid"),
     invoice("INV-099", "supplier-tnuva", previous + "-20", 94000, ["d".repeat(64)], "paid"),
@@ -44,7 +44,9 @@ export function workspaceFixture() {
         return res.end(await readFile(new URL("../src/" + path.split("/").at(-1), import.meta.url)));
       } catch { res.statusCode = 404; return res.end(); }
     }
-    requests.push({ path, method: req.method });
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null;
+    requests.push({ path, method: req.method, body });
     res.setHeader("Content-Type", "application/json");
     if (req.headers.authorization !== "Bearer fixture-token") { res.statusCode = 401; return res.end("{}"); }
     if (path === "/api/v1/me") return res.end('{"uid":"workspace-fixture"}');
@@ -55,11 +57,29 @@ export function workspaceFixture() {
     }
     if (req.method === "DELETE" && path.startsWith("/api/v1/suppliers/")) {
       const record = suppliers.find(s => s.id === path.split("/").at(-1));
-      if (data.invoices.some(i => i.supplierId === record.id)) {
-        res.statusCode = 409; return res.end('{"error":{"code":"SUPPLIER_HAS_INVOICES","message":"יש היסטוריית חשבוניות"}}');
-      }
-      Object.assign(record, { deletedAt: Date.now(), active: false, version: 2 });
+      Object.assign(record, { deletedAt: Date.now(), restoreUntil: Date.now() + 30 * 86400000, active: false, version: record.version + 1 });
       data.version++;
+      return res.end(JSON.stringify({ record }));
+    }
+    if (req.method === "POST" && path.match(/^\/api\/v1\/suppliers\/[^/]+\/restore$/)) {
+      const record = suppliers.find(s => s.id === path.split("/").at(-2));
+      Object.assign(record, { deletedAt: null, restoreUntil: null, active: true, version: record.version + 1 }); data.version++;
+      return res.end(JSON.stringify({ record }));
+    }
+    if (req.method === "POST" && path === "/api/v1/documents") return res.end(JSON.stringify({ documents: body.files.map(() => ({ id: "f".repeat(64) })) }));
+    if (req.method === "POST" && path === "/api/v1/scan-invoice") {
+      return res.end(JSON.stringify({ id: body.jobId, status: "completed", attachmentIds: body.attachmentIds, result: {
+        supplierName: "תנובה", documentNumber: "SCAN-118", invoiceDate: month + "-10", documentType: null,
+        subtotalAgorot: null, vatAgorot: null, totalAgorot: 11800, finalAgorot: null, deductions: [],
+        uncertainFields: ["documentType", "vatAgorot", "subtotalAgorot", "finalAgorot"], needsReview: true, warnings: [],
+      } }));
+    }
+    if (req.method === "PUT" && path.startsWith("/api/v1/invoices/")) {
+      const record = { ...body.data, id: path.split("/").at(-1), version: 1, status: "unpaid" }; data.invoices.push(record); data.version++;
+      return res.end(JSON.stringify({ record }));
+    }
+    if (req.method === "PUT" && path === "/api/v1/settings/accounting") {
+      const record = { ...body.data, id: "accounting", version: 1 }; data.settings = [record]; data.version++;
       return res.end(JSON.stringify({ record }));
     }
     res.statusCode = 404;

@@ -11,7 +11,7 @@ export function supplierPickerMarkup(fields, uncertain, read) {
   </section>`;
 }
 
-export function bindSupplierPicker(ctx, form, draft, { collect, persist }) {
+export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelect }) {
   const root = form.querySelector("[data-supplier-picker]");
   const input = form.elements.supplierName;
   const selected = form.elements.supplierId;
@@ -19,7 +19,7 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist }) {
   input.maxLength = 160;
   let rejected = false;
   let lookupError = "";
-  const available = () => ctx.data.suppliers.filter((s) => !s.deletedAt);
+  const available = () => ctx.data.suppliers.filter((s) => !s.deletedAt || (draft.mode === "edit" && s.id === draft.fields.supplierId));
   const matches = () =>
     available().filter(
       (s) =>
@@ -182,5 +182,9 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist }) {
     persistChoice();
   });
   if (draft.supplierConflict && !draft.pending) recover();
+  proposal.addEventListener("click", event => {
+    const action = event.target.closest("[data-supplier-action]");
+    if (action && ["create", "confirm", "reactivate"].includes(action.dataset.supplierAction) && selected.value) onSelect?.();
+  });
   return { recover };
 }

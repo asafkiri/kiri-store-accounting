@@ -8,6 +8,7 @@ import {
 } from "./auth.js";
 import { Api, pendingMutation } from "./api.js";
 import { Drafts } from "./drafts.js";
+import { actionableDraftNames } from "./draft-activity.js";
 import { $, icon, toast, errorText } from "./ui.js";
 import { settleDiscardedAttempts } from "./attempts.js";
 import {
@@ -23,6 +24,8 @@ import {
 import { shell } from "./views.js";
 import {
   supplierForm,
+  supplierRemovalForm,
+  preferencesForm,
   invoiceForm,
   paymentForm,
   cashForm,
@@ -35,7 +38,7 @@ const ctx = {
   filters: {},
   folderState: {},
   limit: 80,
-  data: { suppliers: [], invoices: [], dailyCash: [] },
+  data: { suppliers: [], invoices: [], dailyCash: [], settings: [] },
   version: 0,
   lastRefresh: 0,
   loading: false,
@@ -69,21 +72,21 @@ ctx.setModalBusy = (value) => {
 ctx.closeModal = () => {
   $("#modal").close();
   ctx.modalBusy = false;
-  ctx.updateDraftNames();
+  void ctx.updateDraftNames().then(() => ctx.render());
 };
 ctx.previewBlob = previewDocument;
 ctx.updateDraftNames = async () => {
   const drafts = ctx.drafts;
   if (!drafts) return;
   try {
-    const names = await drafts.names();
+    const names = await actionableDraftNames(drafts, ctx.data);
     if (ctx.drafts === drafts) ctx.draftNames = names;
   } catch {
     if (ctx.drafts === drafts) ctx.draftWarning = "הנתונים בחנות זמינים, אך הטיוטות במכשיר אינן זמינות כרגע.";
   }
 };
 ctx.mergeRecord = (record, path) => {
-  const collection = path.startsWith("suppliers")
+  const collection = path.startsWith("settings") ? "settings" : path.startsWith("suppliers")
     ? "suppliers"
     : path.startsWith("daily-cash")
       ? "dailyCash"
@@ -111,10 +114,10 @@ ctx.refresh = async (force = false) => {
     });
     if (epoch !== ctx.epoch) return;
     if (!r.unchanged) {
-      for (const collection of ["suppliers", "invoices", "dailyCash"]) {
-        if (r.full) ctx.data[collection] = r[collection];
+      for (const collection of ["suppliers", "invoices", "dailyCash", "settings"]) {
+        if (r.full) ctx.data[collection] = r[collection] || [];
         else
-          for (const item of r[collection])
+          for (const item of r[collection] || [])
             ctx.mergeRecord(
               item,
               collection === "dailyCash" ? "daily-cash" : collection,
@@ -136,7 +139,7 @@ ctx.refresh = async (force = false) => {
     if (el) el.textContent = "לא התקבל עדכון מהשרת";
     if (err.status === 403) {
       ctx.api = null;
-      ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
+      ctx.data = { suppliers: [], invoices: [], dailyCash: [], settings: [] };
       accessError(err);
     }
   } finally {
@@ -154,6 +157,7 @@ ctx.refresh = async (force = false) => {
 };
 ctx.reopen = async (key, id) => {
   const record = ctx.data.invoices.find((i) => i.id === id);
+  if (key === "preferences") return preferencesForm(ctx);
   if (key === "invoice") return invoiceForm(ctx, record);
   if (key === "supplier")
     return supplierForm(
@@ -237,9 +241,13 @@ async function action(type, data = {}) {
     case "invoice":
       return invoiceForm(ctx);
     case "scan":
-      return scanDialog(ctx);
+      return scanDialog(ctx, "invoice", { openCamera: true });
     case "report-scan":
       return scanDialog(ctx, "report");
+    case "vat-preferences":
+      return preferencesForm(ctx);
+    case "supplier-restore":
+      return supplierRemovalForm(ctx, ctx.data.suppliers.find(s => s.id === data.id), null, "restore");
     case "supplier":
       return supplierForm(ctx);
     case "manage-suppliers":
@@ -370,7 +378,7 @@ async function action(type, data = {}) {
     case "resume-draft": {
       const d = await ctx.drafts.load(data.key);
       if (data.key === "scan" || data.key === "reportScan")
-        return scanDialog(ctx, data.key === "scan" ? "invoice" : "report");
+        return scanDialog(ctx, data.key === "scan" ? "invoice" : "report", { resume: true });
       return ctx.reopen(data.key, d?.recordId);
     }
     case "check-cancelled": {
@@ -599,7 +607,7 @@ async function startup() {
       ctx.loading = false;
       ctx.syncError = false;
       ctx.draftWarning = "";
-      ctx.data = { suppliers: [], invoices: [], dailyCash: [] };
+      ctx.data = { suppliers: [], invoices: [], dailyCash: [], settings: [] };
       ctx.closeModal();
       $("#modal").innerHTML = "";
       if (!user) {
@@ -631,6 +639,11 @@ async function startup() {
 }
 $("#modal").addEventListener("cancel", (ev) => {
   if (ctx.modalBusy) ev.preventDefault();
+});
+$("#modal").addEventListener("close", () => {
+  if ($("#modal").open) return;
+  $("#modal").replaceChildren();
+  void ctx.updateDraftNames().then(() => ctx.render());
 });
 $("#modal").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-close-modal]") && !ctx.modalBusy)

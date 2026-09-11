@@ -1715,3 +1715,66 @@ dialog.crop-modal {
     font-size: 1.1rem;
   }
 }
+
+/* Short invoice intake: one question, then one compact approval surface. */
+.draft-banner { background: #fff0f0; color: #9b2028; border: 1px solid #dc646d; border-inline-start: 5px solid #bb2733; font-weight: 700; }
+.recycle-link { margin: 4px 0 12px; }
+.trash-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; background: white; padding: 18px; border: 1px solid var(--line); border-radius: 14px; margin-bottom: 12px; }
+.trash-card h2 { font-size: 1.05rem; margin: 0; }
+.trash-card p { margin: 5px 0 0; }
+.trash-card > div { min-width: 0; overflow-wrap: anywhere; }
+.trash-card > button { flex-shrink: 0; }
+.live-alternatives { display: flex; justify-content: space-evenly; gap: 8px; flex-shrink: 0; padding: 0 8px max(10px, env(safe-area-inset-bottom)); }
+.live-alternatives .text-button { color: #dceaff; font-size: 14px; padding: 8px 4px; }
+.quick-modal-content { padding: 18px; }
+.quick-modal-content .modal-heading { margin-bottom: 10px; }
+.quick-modal-content .modal-heading h2 { font-size: 1.2rem; }
+.quick-invoice .quick-progress, .quick-summary-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; margin-bottom: 10px; }
+.quick-photo { display: inline-flex; align-items: center; gap: 5px; padding: 4px; min-height: 36px; font-size: 14px; }
+.quick-photo svg { width: 18px; height: 18px; }
+.quick-question { display: flex; flex-direction: column; gap: 12px; }
+.quick-question h3 { font-size: 1.4rem; line-height: 1.35; margin: 6px 0 12px; }
+.quick-question p { margin: 0 0 6px; }
+.quick-question .field { margin: 0; }
+.quick-question .field > span { font-size: 15px; }
+.quick-choice { width: 100%; display: flex; flex-direction: column; gap: 3px; justify-content: center; min-height: 52px; padding: 12px; }
+.quick-choice small { font-size: 14px; font-weight: 400; }
+.quick-other { margin-top: 4px; }
+.quick-other > summary { min-height: 44px; color: var(--blue); cursor: pointer; }
+.quick-other .quick-choice, .quick-other .field { margin-top: 8px; }
+.quick-question .supplier-picker { border: 0; padding: 0; background: transparent; }
+.quick-question .supplier-picker p { font-size: 15px; margin: 8px 0; }
+.quick-question .supplier-picker .primary { width: 100%; }
+.quick-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.quick-summary-row { min-width: 0; width: 100%; display: flex; flex-direction: column; gap: 3px; align-items: start; text-align: start; padding: 10px 12px; background: white; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.quick-summary-row > span { color: var(--muted); font-size: 14px; font-weight: 400; }
+.quick-summary-row > strong { font-size: 16px; overflow-wrap: anywhere; line-height: 1.3; }
+.quick-summary-row:hover, .quick-summary-row:focus-visible { background: #f1f6ff; }
+.quick-summary-grid .quick-summary-row:nth-child(odd) { border-inline-end: 1px solid var(--line); }
+.quick-summary-grid .quick-summary-row:nth-last-child(-n + 2) { border-bottom: 0; }
+.quick-total .quick-summary-row { flex-direction: row; align-items: center; justify-content: space-between; border: 0; padding: 10px 2px; }
+.quick-deductions { margin: 4px 0 12px; font-size: 14px; }
+.quick-reduction { display: grid; grid-template-columns: 1fr 110px; gap: 10px; align-items: center; margin: 6px 0 12px; }
+.quick-reduction label { font-size: 16px; font-weight: 600; }
+.quick-reduction label small { display: block; font-size: 14px; font-weight: 400; color: var(--muted); }
+.quick-reduction input { width: 100%; min-width: 0; min-height: 44px; text-align: center; }
+.quick-notes { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.quick-notes > span { flex-shrink: 0; }
+.quick-notes textarea { width: 100%; min-width: 0; min-height: 44px; padding: 10px; }
+.quick-payable { display: flex; gap: 8px; justify-content: space-between; align-items: center; background: #eef4ff; border-radius: 10px; margin-top: 12px; padding: 10px 12px; }
+.quick-payable > strong { font-size: 1.25rem; }
+.quick-payable .text-button { font-size: 14px; padding: 3px; min-height: 34px; }
+.quick-invoice .form-footer { margin-top: 12px; padding-top: 12px; gap: 8px; }
+.quick-invoice .form-footer > small { font-size: 13px; }
+.quick-invoice .form-footer .primary { min-height: 48px; padding: 12px; }
+.quick-invoice .form-footer .text-button { padding: 6px; min-height: 36px; font-size: 14px; }
+@media (max-width: 380px) {
+  .quick-modal-content { padding: 12px; }
+  .quick-summary-row { padding: 8px; }
+  .quick-reduction { grid-template-columns: 1fr 95px; }
+  .trash-card { flex-wrap: wrap; }
+}
+.quick-invoice .form-footer > small[data-saved="true"] { display: none; }
+.quick-full-editor { font-size: 14px; min-height: 36px; padding: 4px; }
+.quick-summary-row { padding-block: 8px; gap: 2px; }
+.quick-summary-row > span { line-height: 1.2; }
