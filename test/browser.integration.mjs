@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
+import { installScannerFixtures } from "./scanner-fixtures.mjs";
 
 // Exercise narrow Android/Chromium and iPhone/WebKit layouts with touch enabled.
 // These are browser emulations, not a claim of testing physical phones.
@@ -15,6 +16,147 @@ const phoneOptions = (engine) => ({
   hasTouch: true,
   deviceScaleFactor: 3,
 });
+
+async function scannerPage(t, engine) {
+  const server = createBrowserCheckServer();
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const browser = await engine.launch(); t.after(() => browser.close());
+  const page = await browser.newPage(phoneOptions(engine));
+  await page.goto(`http://127.0.0.1:${server.address().port}`);
+  await page.waitForFunction(() => document.querySelector("#result").textContent !== "Running…");
+  await page.evaluate(installScannerFixtures);
+  return page;
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: scanner geometry, perspective/20-degree/long fixtures and thin text preservation`, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { orderCorners, homography, projectPoint, detectCorners, warpImage, enhanceImage, fullCorners } = await import("/scan-worker.js");
+      const expected = [{ x: 20, y: 30 }, { x: 450, y: 80 }, { x: 400, y: 700 }, { x: 10, y: 640 }];
+      const ordered = orderCorners([expected[2], expected[0], expected[3], expected[1]]);
+      const known = [.9, .12, 20, .03, 1.1, 18, .0002, .0003, 1];
+      const base = [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 850 }, { x: 0, y: 850 }];
+      const transform = homography(base, base.map(p => projectPoint(known, p)));
+      const predictionErrors = [...base, { x: 200, y: 400 }, { x: 730, y: 210 }].map(p => {
+        const a = projectPoint(known, p), b = projectPoint(transform, p); return Math.hypot(a.x - b.x, a.y - b.y);
+      });
+      const detections = [];
+      for (const mode of ["perspective", "rotated", "long", "none", "circle"]) {
+        const { canvas, corners } = window.makeDocumentCanvas(mode, mode === "long" ? 500 : 1000);
+        const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+        const found = detectCorners(pixels);
+        const error = corners && found ? Math.max(...found.map((p, i) => Math.hypot((p.x - corners[i].x) * canvas.width, (p.y - corners[i].y) * canvas.height))) / Math.max(canvas.width, canvas.height) : null;
+        detections.push({ mode, found, error });
+      }
+      const rotated = document.createElement("canvas"); rotated.width = 1000; rotated.height = 850;
+      const pen = rotated.getContext("2d"); pen.fillStyle = "#222"; pen.fillRect(0, 0, 1000, 850);
+      pen.translate(500, 425); pen.rotate(20 * Math.PI / 180); pen.fillStyle = "white"; pen.fillRect(-230, -300, 460, 600);
+      pen.fillStyle = "#333"; pen.fillRect(-210, -2, 420, 4);
+      const { corners } = window.makeDocumentCanvas("rotated");
+      const warped = warpImage(pen.getImageData(0, 0, 1000, 850), corners);
+      let darkRowMin = Infinity, darkRowMax = 0;
+      for (let x = 25; x < warped.width - 25; x += 10) for (let y = 10; y < warped.height - 10; y++) {
+        if (warped.data[(y * warped.width + x) * 4] < 100) { darkRowMin = Math.min(darkRowMin, y); darkRowMax = Math.max(darkRowMax, y); }
+      }
+      const thin = new ImageData(320, 250);
+      for (let y = 0; y < thin.height; y++) for (let x = 0; x < thin.width; x++) {
+        const i = (y * thin.width + x) * 4, gray = x === 160 ? 184 : 220;
+        thin.data.set([gray, gray, gray, 255], i);
+      }
+      const before = [...thin.data.slice((100 * 320 + 160) * 4, (100 * 320 + 161) * 4)];
+      const enhanced = enhanceImage(thin);
+      const text = enhanced.data[(100 * 320 + 160) * 4], paper = enhanced.data[(100 * 320 + 150) * 4];
+      const small = warpImage(new ImageData(200, 300), fullCorners());
+      return { expected, ordered, predictionErrors, detections, rotation: [warped.width, warped.height, darkRowMax - darkRowMin], thin: { before, text, paper }, small: [small.width, small.height] };
+    });
+    assert.deepEqual(result.ordered, result.expected);
+    assert.ok(result.predictionErrors.every(e => e < .5), JSON.stringify(result.predictionErrors));
+    for (const detection of result.detections) {
+      if (["none", "circle"].includes(detection.mode)) assert.equal(detection.found, null, detection.mode);
+      else { assert.ok(detection.found, detection.mode); assert.ok(detection.error <= .02, JSON.stringify(detection)); }
+    }
+    assert.ok(Math.abs(result.rotation[0] - 461) <= 1 && Math.abs(result.rotation[1] - 601) <= 1, JSON.stringify(result.rotation));
+    assert.ok(result.rotation[2] <= 5, "the rotated stripe must become horizontal");
+    assert.ok(result.thin.paper - result.thin.text >= 30, JSON.stringify(result.thin));
+    assert.ok(result.thin.text > 0 && result.thin.text < 240, "thin gray printing must remain gray");
+    assert.deepEqual(result.small, [200, 300], "no enlargement of a small original");
+  });
+
+  test(`${engine.name()}: local camera crop, corner dragging, one upload and unchanged human Review gate`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const errors = []; page.on("pageerror", e => errors.push(e.message));
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    await page.waitForFunction(() => !document.querySelector("[data-crop-zoom]").disabled);
+    assert.equal(await page.locator("[data-crop-corner]").count(), 4);
+    const handle = page.locator('[data-crop-corner="0"]');
+    const before = await handle.evaluate(el => el.style.left);
+    const box = await handle.boundingBox(); assert.ok(box.width >= 48 && box.height >= 48);
+    if (engine.name() === "chromium") {
+      const session = await page.context().newCDPSession(page);
+      const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x + 8, y: point.y + 8 }] });
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await session.detach();
+    } else {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 8, box.y + box.height / 2 + 8, { steps: 4 }); await page.mouse.up();
+    }
+    assert.notEqual(await handle.evaluate(el => el.style.left), before);
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    // A cancelled retake leaves the current selection intact.
+    const adjusted = await handle.evaluate(el => el.style.left);
+    await page.evaluate(() => document.querySelector("[data-crop-retake]").onchange());
+    assert.equal(await handle.evaluate(el => el.style.left), adjusted);
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => window.scanDrafts().find(([k]) => k === "scan")?.[1].files.length === 1);
+    const photo = await page.evaluate(async () => {
+      const file = window.scanDrafts().find(([k]) => k === "scan")[1].files[0];
+      const blob = new Blob([Uint8Array.from(atob(file.data), c => c.charCodeAt(0))], { type: file.mime });
+      const bitmap = await createImageBitmap(blob);
+      const result = { keys: Object.keys(file).sort(), width: bitmap.width, height: bitmap.height, mime: file.mime, bytes: blob.size }; bitmap.close(); return result;
+    });
+    assert.deepEqual(photo.keys, ["data", "mime", "name"]);
+    assert.equal(photo.mime, "image/jpeg"); assert.equal(Math.max(photo.width, photo.height), 2500);
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    await page.locator("#run-scan").tap();
+    await page.waitForSelector("#invoice-form");
+    assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents", "scan-invoice"]);
+    assert.equal(await page.locator("[name=review]").isChecked(), false);
+    assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
+    assert.equal(await page.locator("[name=final]").inputValue(), "3995.00");
+    assert.deepEqual(errors, []);
+    console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);
+  });
+
+  test(`${engine.name()}: missing boundaries and worker failure keep the full-photo escape usable`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא זוהו גבולות"));
+    assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]]);
+    await page.locator("[data-crop-original]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    const equal = await page.evaluate(async () => {
+      const { readFile } = await import("/image-upload.js");
+      return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[0]);
+    });
+    assert.equal(equal, true, "without crop must match the existing full-photo preparation exactly");
+    await page.evaluate(() => { window.Worker = class { constructor() { throw Error("Worker unavailable"); } }; });
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד אינו זמין"));
+    assert.equal(await page.locator("[data-crop-original]").isEnabled(), true);
+    await page.locator("[data-crop-original]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    assert.equal(await page.locator("#run-scan").isEnabled(), true);
+  });
+}
 
 for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: today's cash starts clean and a failed save can be cancelled, edited and discarded offline`, async (t) => {
@@ -366,7 +508,20 @@ for (const engine of [chromium, webkit]) {
           );
         const input = document.getElementById("gallery-file");
         input.files = transfer.files;
-        await input.onchange();
+        const selection = input.onchange();
+        for (let i = 0; i < 8; i++) {
+          const deadline = Date.now() + 15000;
+          while (!document.querySelector("[data-crop-original]")) {
+            if (Date.now() > deadline) throw Error("Missing crop view");
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          document.querySelector("[data-crop-original]").click();
+          while ((drafts.get("scan")?.files.length || 0) <= i) {
+            if (Date.now() > deadline) throw Error("Page was not retained");
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        }
+        await selection;
         const files = drafts.get("scan")?.files || [];
         const dimensions = [];
         for (const f of files) {
