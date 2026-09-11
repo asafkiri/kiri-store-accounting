@@ -63,7 +63,7 @@ async function assertWholeCropVisible(page) {
       area: rect(area), image: rect(img), ratio: img.naturalWidth / img.naturalHeight,
       available: [area.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), area.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)],
       scroll: [area.scrollWidth - area.clientWidth, area.scrollHeight - area.clientHeight, area.scrollLeft, area.scrollTop],
-      handles: [...document.querySelectorAll("[data-crop-corner]")].map(handle => {
+      handles: [...document.querySelectorAll("[data-crop-corner]")].filter(handle => handle.offsetParent !== null).map(handle => {
         const r = rect(handle), hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
         return { ...r, reachable: handle.contains(hit) };
       }),
@@ -81,6 +81,12 @@ async function assertWholeCropVisible(page) {
     assert.ok(handle.width >= 48 && handle.height >= 48, "keep large touch targets");
   }
   assert.ok(layout.actions.every(r => inside(r, layout.screen)), "approval actions remain on screen");
+}
+// The result screen has three action buttons; the manual tools open behind "fix by hand".
+async function openManualTools(page) {
+  await page.waitForFunction(() => !document.querySelector("[data-crop-adjust]").disabled);
+  await page.locator("[data-crop-adjust]").press("Enter");
+  await page.waitForFunction(() => document.querySelector(".scan-crop").classList.contains("adjusting") && !document.querySelector("[data-crop-toolbar], .crop-toolbar").hidden);
 }
 
 for (const engine of [chromium, webkit]) {
@@ -357,9 +363,10 @@ for (const engine of [chromium, webkit]) {
       const input = document.querySelector("#camera-file"); input.files = transfer.files; window.pendingPhotoSelection = input.onchange();
     });
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
-    assert.match(await page.locator("[data-crop-status]").textContent(), /לא זוהו גבולות/);
+    assert.match(await page.locator("[data-crop-status]").textContent(), /לא נמצאו גבולות ברורים/);
     const initialUrl = await page.locator("[data-crop-result]").getAttribute("src");
     const initialBytes = await page.evaluate(async () => [...new Uint8Array(await window.cropBlobs.get(document.querySelector("[data-crop-result]").src).arrayBuffer())]);
+    await openManualTools(page);
     await page.locator("[data-crop-straighten]").press("Enter");
     await assertWholeCropVisible(page);
     const corners = await page.evaluate(() => window.manualCorners), box = await page.locator(".crop-source").boundingBox();
@@ -438,6 +445,8 @@ for (const engine of [chromium, webkit]) {
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/scanner-long-${engine.name()}.png`, fullPage: true });
     assert.equal(await page.locator("[data-crop-reset]").count(), 0, "Back replaces Reset");
+    await openManualTools(page);
+    await assertWholeCropVisible(page);
     const bytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
     const initialBytes = await bytes();
     const crop = async key => {
@@ -503,6 +512,8 @@ for (const engine of [chromium, webkit]) {
     const handle = page.locator('[data-crop-corner="0"]');
     assert.equal(await page.locator(".scan-crop img").count(), 1, "one processed image is the crop surface");
     assert.equal(await page.locator("[data-crop-source]").count(), 0, "the unprocessed original is not displayed");
+    await assertWholeCropVisible(page);
+    await openManualTools(page);
     await assertWholeCropVisible(page);
     const before = await page.locator("[data-crop-result]").getAttribute("src");
     const box = await handle.boundingBox(); assert.ok(box.width >= 48 && box.height >= 48);
@@ -582,12 +593,14 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 
-  test(`${engine.name()}: missing boundaries and worker failure keep the full-photo escape usable`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: missing boundaries, a stuck save and a failed worker keep one-tap approval usable`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     await page.evaluate(() => window.openScanner());
     await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
-    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא זוהו גבולות"));
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא נמצאו גבולות ברורים"));
     await assertWholeCropVisible(page);
+    assert.equal(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.filter(h => h.offsetParent !== null).length), 0, "no handles on the result screen");
+    await openManualTools(page);
     assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]]);
     await page.locator("[data-crop-original]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
@@ -596,6 +609,7 @@ for (const engine of [chromium, webkit]) {
       return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[0]);
     });
     assert.equal(equal, true, "without crop must match the existing full-photo preparation exactly");
+    // A save that never completes can still be abandoned from the header.
     await page.evaluate(() => {
       const NativeWorker = window.Worker;
       window.Worker = class extends NativeWorker {
@@ -606,18 +620,71 @@ for (const engine of [chromium, webkit]) {
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("מיישר ושומר"));
-    await page.locator("[data-crop-original]").tap();
+    assert.equal(await page.locator("[data-crop-retake-button]").isEnabled(), true, "retake stays available while saving");
+    await page.locator("[data-crop-cancel]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "cancelling a stuck save keeps no page");
+    // Without a worker the photo is kept as it is with the same approve button.
     await page.evaluate(() => { window.Worker = class { constructor() { throw Error("Worker unavailable"); } }; });
     await page.evaluate(() => window.chooseScanPhoto());
-    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד אינו זמין"));
-    assert.equal(await page.locator("[data-crop-original]").isEnabled(), true);
-    await page.locator("[data-crop-original]").tap();
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד לא הצליח"));
+    assert.equal(await page.locator("[data-crop-adjust]").isDisabled(), true, "manual tools need a processed image");
+    assert.equal(await page.locator("[data-crop-accept]").isEnabled(), true);
+    assert.equal(await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth > 0 && !img.classList.contains("processing")), true, "the original photo stays on screen");
+    await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 3);
+    const kept = await page.evaluate(async () => {
+      const { readFile } = await import("/image-upload.js");
+      return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[1]);
+    });
+    assert.equal(kept, true, "approving after a worker failure stores the full photo");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     assert.equal(await page.locator("#run-scan").isEnabled(), true);
+  });
+
+  test(`${engine.name()}: the result screen offers one approval tap, and manual tools open and close without changing the image`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(() => {
+      window.cropBlobs = new Map(); const createObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = object => { const url = createObjectURL(object); if (object instanceof Blob) window.cropBlobs.set(url, object); return url; };
+    });
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    const visibleActions = () => page.locator(".crop-actions button").evaluateAll(buttons => buttons.filter(b => b.offsetParent !== null).map(b => b.textContent.trim()));
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "תקן ידנית"], "exactly three action buttons");
+    assert.equal(await page.locator(".crop-heading [data-crop-cancel]").isVisible(), true, "cancel stays in the header");
+    assert.equal(await page.locator(".crop-toolbar").isVisible(), false);
+    assert.match(await page.locator("[data-crop-status]").textContent(), /בדוק שכל התעודה נראית/);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/result-screen-${engine.name()}.png`, fullPage: true });
+    const shownBytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
+    const shown = await page.locator("[data-crop-result]").getAttribute("src"), before = await shownBytes();
+    await openManualTools(page);
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "ללא חיתוך"]);
+    assert.equal(await page.locator(".crop-toolbar").isVisible(), true);
+    assert.equal(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.filter(h => h.offsetParent !== null).length), 4);
+    await assertWholeCropVisible(page);
+    // Trim, then leave the manual screen: the image shown before is restored.
+    await page.locator('[data-crop-corner="0"]').press("Shift+ArrowRight");
+    await page.waitForFunction(shown => document.querySelector("[data-crop-result]").src !== shown && !document.querySelector("[data-crop-accept]").disabled, shown);
+    await page.locator("[data-crop-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop").classList.contains("adjusting") && !document.querySelector("[data-crop-accept]").disabled);
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "תקן ידנית"]);
+    assert.deepEqual(await shownBytes(), before, "leaving the manual screen restores the image shown before it");
+    // Cancel from the result screen leaves without storing a page.
+    await page.locator("[data-crop-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy);
+    assert.equal(await page.evaluate(() => window.scanDrafts().length), 0);
+    await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא נמצאו גבולות ברורים"));
+    await page.screenshot({ path: `test-artifacts/result-screen-undetected-${engine.name()}.png`, fullPage: true });
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "one tap stores the page");
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 
   test(`${engine.name()}: 24MP EXIF capture and canvas fallback cap retained source at 3000px and strip metadata`, { timeout: 60000 }, async t => {
@@ -1035,10 +1102,11 @@ for (const engine of [chromium, webkit]) {
         const selection = input.onchange();
         for (let i = 0; i < 8; i++) {
           const deadline = Date.now() + 15000;
-          while (!document.querySelector("[data-crop-original]")) {
+          while (!document.querySelector("[data-crop-adjust]") || document.querySelector("[data-crop-adjust]").disabled) {
             if (Date.now() > deadline) throw Error("Missing crop view");
             await new Promise(resolve => setTimeout(resolve, 10));
           }
+          document.querySelector("[data-crop-adjust]").click();
           document.querySelector("[data-crop-original]").click();
           while ((drafts.get("scan")?.files.length || 0) <= i) {
             if (Date.now() > deadline) throw Error("Page was not retained");

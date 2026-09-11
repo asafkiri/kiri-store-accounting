@@ -943,6 +943,12 @@ dialog.crop-modal {
   box-shadow: 0 0 0 2px #1264a3;
 }
 .crop-handle:focus-visible { outline: 3px solid #7dd3fc; outline-offset: 0; }
+/* The result screen shows only the processed page; handles and the mask appear
+   behind "fix by hand". The original photo is dimmed while the worker runs. */
+.scan-crop:not(.adjusting) .crop-outline, .scan-crop:not(.adjusting) .crop-handle { display: none; }
+.crop-source img.processing { opacity: .5; }
+.crop-actions > button[hidden] { display: none; }
+.crop-actions > .crop-adjust { font-size: 15px; color: var(--muted, #5b6b7d); }
 .crop-actions {
   position: relative;
   flex-shrink: 0;
