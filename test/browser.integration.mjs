@@ -1524,6 +1524,9 @@ for (const engine of [chromium, webkit]) {
     const supplier = current.locator(`[data-folder="photos:${month}:supplier-tnuva"]`);
     await supplier.locator(":scope > summary").click();
     assert.equal(await supplier.locator("[data-open-document]").count(), 2);
+    const documentTitle = await supplier.locator(".document-card-heading > div > strong").boundingBox();
+    const documentMeta = await supplier.locator(".document-card-heading .document-meta").boundingBox();
+    assert.ok(documentMeta.y >= documentTitle.y + documentTitle.height - 1, "invoice number and date occupy separate readable lines");
     await supplier.locator("[data-open-document]").first().click();
     await page.locator(".preview-dialog img").waitFor();
     assert.equal(requests.filter(r => r.path.startsWith("/api/v1/documents/")).length, 1);

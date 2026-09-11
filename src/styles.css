@@ -958,6 +958,7 @@ dialog.crop-modal {
 .document-card { border: 1px solid var(--line); background: #fafbfd; border-radius: 12px; padding: 14px; }
 .document-card-heading { display: flex; align-items: center; gap: 10px; }
 .document-card-heading > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.document-card-heading > div > strong, .document-card-heading .document-meta { display: block; }
 .document-card-heading .badge { font-size: .85rem; }
 .document-pages { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 4px; }
 .document-pages .secondary { min-height: 48px; flex: 1; }
