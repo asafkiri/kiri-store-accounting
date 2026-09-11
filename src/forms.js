@@ -7,6 +7,7 @@ import {
   today,
   methods,
   types,
+  monthLabel,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
@@ -174,7 +175,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       if (
         draft.pending ||
         submit.disabled ||
-        !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו.")
+        (!options.skipDiscardConfirmation && !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו."))
       )
         return;
       disposed = true;
@@ -244,7 +245,9 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       ctx.render();
       toast(
         result.supplierAction === "created"
-          ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר להוסיף לו פרטים במסך הספקים.`
+          ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר לערוך אותו דרך ניהול ספקים.`
+          : key === "supplier" && draft.operation === "delete" ? "הספק נמחק מהחנות"
+          : key === "invoice" ? "החשבונית נשמרה · " + monthLabel((result.record.invoiceDate || draft.fields.invoiceDate)?.slice(0, 7))
           : "נשמר בחנות",
       );
       ctx.refresh(false);
@@ -271,8 +274,8 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   });
   return { persist, lock };
 }
-const footer = (label) =>
-  `<div class="form-error" role="alert" data-form-error hidden></div><footer class="form-footer"><small data-draft-status>שומר טיוטה…</small><p class="notice" role="status" data-cancellation-status hidden></p><button class="primary" type="submit">${e(label)}</button><button class="secondary" type="button" data-cancel-attempt hidden>בטל את הניסיון</button><button class="text-button danger" type="button" data-discard-draft>מחק טיוטה</button></footer>`;
+const footer = (label, discardLabel = "מחק טיוטה") =>
+  `<div class="form-error" role="alert" data-form-error hidden></div><footer class="form-footer"><small data-draft-status>שומר טיוטה…</small><p class="notice" role="status" data-cancellation-status hidden></p><button class="primary" type="submit">${e(label)}</button><button class="secondary" type="button" data-cancel-attempt hidden>בטל את הניסיון</button><button class="text-button danger" type="button" data-discard-draft>${e(discardLabel)}</button></footer>`;
 const textArea = (name, value, label) =>
   `<label class="field wide"><span>${e(label)}</span><textarea name="${name}" rows="2" maxlength="4000">${e(value)}</textarea></label>`;
 
@@ -308,6 +311,8 @@ const staleNotice = (old, record, draft) =>
 export async function supplierForm(ctx, record = null) {
   const key = "supplier",
     old = await ctx.drafts.load(key);
+  if (old?.operation === "delete" && record?.id === old.recordId)
+    return supplierRemovalForm(ctx, record || ctx.data.suppliers.find(s => s.id === old.recordId), old);
   const draft = (await matchingDraft(ctx, key, old, record)) || {
     mode: record ? "edit" : "new",
     recordId: record?.id || crypto.randomUUID(),
@@ -322,7 +327,7 @@ export async function supplierForm(ctx, record = null) {
   const f = draft.fields;
   const root = ctx.dialog(
     record ? "עריכת ספק" : "הוספת ספק",
-    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק")}</form>`,
+    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">אם קיימות לספק חשבוניות, אפשר לבחור למעלה ״לא פעיל״ ולשמור. ההיסטוריה תישאר זמינה.</p></section>` : ""}</form>`,
   );
   const form = $("form", root);
   bindDraft(
@@ -343,6 +348,25 @@ export async function supplierForm(ctx, record = null) {
         draft.version,
       ),
   );
+  const remove = form.querySelector("[data-remove-supplier]");
+  if (remove) remove.onclick = async () => {
+    if (draft.pending || draft.cancelPending || draft.conflict || form.querySelector("[type=submit]").disabled) return;
+    if (ctx.data.invoices.some(i => i.supplierId === record.id)) {
+      const error = form.querySelector("[data-form-error]");
+      error.hidden = false;
+      error.textContent = "לספק הזה יש היסטוריית חשבוניות. כדי להסיר אותו מהרשימה הפעילה, בחר ׳לא פעיל׳ ושמור.";
+      error.scrollIntoView?.({ block: "nearest" });
+      return;
+    }
+    try { await supplierRemovalForm(ctx, record); }
+    catch (err) { toast(errorText(err), true); }
+  };
+}
+async function supplierRemovalForm(ctx, record, existing = null) {
+  const draft = existing || { operation: "delete", mode: "edit", recordId: record.id, version: record.version, fields: { name: record.name } };
+  const root = ctx.dialog("מחיקת ספק", `<form class="delete-form"><p>למחוק את הספק <strong>${e(draft.fields.name)}</strong> מהחנות?</p><p class="muted">ספק עם היסטוריית חשבוניות לא יימחק.</p>${footer("מחק ספק", "ביטול — השאר את הספק")}</form>`);
+  bindDraft(ctx, root.querySelector("form"), "supplier", draft, () => draft.fields,
+    () => pendingMutation("suppliers/" + draft.recordId, null, draft.version, "DELETE"), { skipDiscardConfirmation: true });
 }
 export async function invoiceForm(
   ctx,
@@ -423,9 +447,10 @@ export async function invoiceForm(
     record ? "עריכת חשבונית" : r ? "בדיקת החשבונית שנסרקה" : "הוספת חשבונית",
     `${staleNotice(old, record, draft)}<form id="invoice-form">
     ${r ? `<div class="notice ${r.needsReview ? "warning" : ""}"><strong>${r.needsReview ? "יש שדות שדורשים בדיקה" : "הסריקה מוכנה לבדיקה"}</strong><p>ליד השדות מופיע מה נקרא. הערכים בתיבות הם אלה שיישמרו.</p>${r.warnings.map((w) => `<p>${e(w)}</p>`).join("")}</div>` : ""}
+    ${r && r.documentType && !["invoice", "credit"].includes(r.documentType) ? '<p class="notice warning" role="alert">הסריקה זיהתה מסמך שאינו חשבונית. כאן שומרים חשבוניות וחשבוניות זיכוי בלבד. יש לבדוק את המסמך המקורי לפני שמירה.</p>' : ""}
     <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${supplierPickerMarkup(f, uncertain("supplierName"), read("supplierName"))}
-      ${field("מספר חשבונית / תעודה", "documentNumber", f.documentNumber, { required: true, read: read("documentNumber"), uncertain: uncertain("documentNumber") })}${field("תאריך המסמך", "invoiceDate", f.invoiceDate, { type: "date", required: true, read: read("invoiceDate"), uncertain: uncertain("invoiceDate") })}
-      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", ...types }, { wide: true, required: true, uncertain: uncertain("documentType"), read: r ? types[r.documentType] || "לא זוהה" : "" })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
+      ${field("מספר חשבונית", "documentNumber", f.documentNumber, { required: true, read: read("documentNumber"), uncertain: uncertain("documentNumber") })}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true, read: read("invoiceDate"), uncertain: uncertain("invoiceDate") })}
+      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true, uncertain: uncertain("documentType") || Boolean(r && !["invoice", "credit"].includes(r.documentType)), read: r ? types[r.documentType] || "לא זוהה" : "" })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
     <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true, read: read("finalAgorot", true), uncertain: uncertain("finalAgorot") })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
@@ -481,7 +506,7 @@ export async function invoiceForm(
     draft,
     collect,
     (values) => {
-      if (!Object.hasOwn(types, values.documentType))
+      if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
         throw Error("יש לבחור סוג מסמך לפי התעודה.");
       if (values.deductions.some((d) => d.included === "unknown"))
         throw Error("יש לבדוק אם כל הפחתה כבר כלולה בסכום המסמך.");

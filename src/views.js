@@ -1,3 +1,4 @@
+import { invoiceFolders, documentCards, periodPicker, statusTabs, summaryMoney } from "./invoice-browser.js";
 import { creditSignIssues } from "./credit.js";
 import { icon, empty, select, field } from "./ui.js";
 import {
@@ -5,6 +6,7 @@ import {
   money,
   displayDate,
   today,
+  monthLabel,
   methods,
   types,
   filterInvoices,
@@ -12,8 +14,6 @@ import {
 } from "./format.js";
 const act = (action, label, cls = "primary", glyph = "plus", extra = "") =>
   `<button class="${cls}" data-action="${action}" ${extra}>${glyph ? icon(glyph) : ""}${e(label)}</button>`;
-const summaryMoney = (value) =>
-  value === null ? "נדרש תיקון זיכוי" : money(value);
 const creditNotice = (count) =>
   count
     ? `<div class="notice warning">יש ${count} זיכויים עם סכומים שאינם שליליים. פתח ותקן אותם כדי להציג סיכום נכון.</div>`
@@ -25,7 +25,7 @@ export function invoiceCards(items, ctx) {
       .map((i) => {
         const name =
           ctx.data.suppliers.find((s) => s.id === i.supplierId)?.name || "ספק";
-        return `<article class="invoice-card"><button class="invoice-main" data-action="detail" data-id="${e(i.id)}"><div><span class="supplier-name">${e(name)}</span><span class="document-meta">${e(types[i.documentType])} ${e(i.documentNumber)} · ${e(displayDate(i.invoiceDate))}</span>${i.attachmentIds?.length ? `<span class="document-meta">${i.attachmentIds.length === 1 ? "מסמך מצורף" : i.attachmentIds.length + " מסמכים מצורפים"}</span>` : ""}${creditSignIssues(i).length ? '<span class="badge unpaid">זיכוי דורש תיקון</span>' : ""}${i.notes ? `<span class="invoice-note">${e(i.notes)}</span>` : ""}</div><strong class="amount">${e(money(i.finalAgorot))}</strong></button><div class="invoice-bottom"><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? icon("check") + "שולם · " + e(methods[i.payment?.method] || "") : "לא שולם"}</span>${i.status === "paid" ? `<span class="muted small">${e(displayDate(i.payment?.paymentDate))}</span>` : act("pay", "סמן כשולם", "pay-button", "check", `data-id="${e(i.id)}"`)}</div></article>`;
+        return `<article class="invoice-card"><button class="invoice-main" data-action="detail" data-id="${e(i.id)}"><div><span class="supplier-name">${e(name)}</span><span class="document-meta">${e(types[i.documentType])} ${e(i.documentNumber)} · ${e(displayDate(i.invoiceDate))}</span>${i.attachmentIds?.length ? `<span class="document-meta">${i.attachmentIds.length === 1 ? "מסמך מצורף" : i.attachmentIds.length + " מסמכים מצורפים"}</span>` : ""}${creditSignIssues(i).length ? '<span class="badge unpaid">זיכוי דורש תיקון</span>' : ""}${i.notes ? `<span class="invoice-note">${e(i.notes)}</span>` : ""}</div><strong class="amount">${e(money(i.finalAgorot))}</strong></button><div class="invoice-bottom"><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? icon("check") + "שולם · " + e(methods[i.payment?.method] || "") : "לא שולם"}</span>${i.attachmentIds?.length ? act("documents", "צילומי החשבונית", "text-button attachment-shortcut", "image", `data-id="${e(i.id)}"`) : ""}${i.status === "paid" ? `<span class="muted small">${e(displayDate(i.payment?.paymentDate))}</span>` : act("pay", "סמן כשולם", "pay-button", "check", `data-id="${e(i.id)}"`)}</div></article>`;
       })
       .join("") +
     (items.length > ctx.limit
@@ -33,57 +33,36 @@ export function invoiceCards(items, ctx) {
       : "")
   );
 }
-function filters(ctx, { status = false, cash = false } = {}) {
+function filters(ctx, { status = false, period = true } = {}) {
   const f = ctx.filters;
-  return `<details class="filter-panel" ${f.month || f.supplierId || f.from || f.to || f.method ? "open" : ""}><summary>סינון לפי תקופה${cash ? "" : " / ספק"}</summary><div class="filters">${field("חודש", "month", f.month || "", { type: "month" })}${field("מתאריך", "from", f.from || "", { type: "date" })}${field("עד תאריך", "to", f.to || "", { type: "date" })}${cash ? "" : select("ספק", "supplierId", f.supplierId || "", { "": "כל הספקים", ...Object.fromEntries(ctx.data.suppliers.map((s) => [s.id, s.name])) })}${cash ? "" : select("אמצעי תשלום", "method", f.method || "", { "": "כל האמצעים", ...methods })}${status ? select("מצב", "status", f.status || "", { "": "הכול", paid: "שולם", unpaid: "לא שולם" }) : ""}<button class="text-button" data-action="clear-filters">נקה סינון</button></div></details>`;
+  return `<details class="filter-panel" ${f.supplierId || f.method || (status && f.status) || (period && (f.from || f.to || f.month)) ? "open" : ""}><summary>${period ? "אפשרויות סינון נוספות" : "סינון לפי ספק או תשלום"}</summary><div class="filters advanced-filters">${period ? field("חודש מסוים", "month", f.month || "", { type: "month" }) + `<div class="date-range">${field("מתאריך", "from", f.from || "", { type: "date" })}${field("עד תאריך", "to", f.to || "", { type: "date" })}</div>` : ""}${select("ספק", "supplierId", f.supplierId || "", { "": "כל הספקים", ...Object.fromEntries(ctx.data.suppliers.filter(s => !s.deletedAt).map(s => [s.id, s.name])) })}${select("אמצעי תשלום", "method", f.method || "", { "": "כל האמצעים", ...methods })}${status ? select("מצב", "status", f.status || "", { "": "הכול", paid: "שולם", unpaid: "לא שולם" }) : ""}<button class="text-button" data-action="clear-filters">נקה סינון</button></div></details>`;
 }
+const searchBox = (ctx, id, label) => `<label class="search">${icon("search")}<input id="${id}" placeholder="${label}" value="${e(ctx.filters.q || "")}" aria-label="${label}"></label>`;
 export function invoicesView(ctx) {
-  const f = ctx.filters,
-    items = filterInvoices(ctx.data.invoices, f, ctx.data.suppliers),
-    allOpen = ctx.data.invoices.filter(
-      (i) => !i.deletedAt && i.status === "unpaid",
-    ),
-    openTotals = totals(allOpen),
-    itemTotals = totals(items);
-  return `<div class="page-heading"><div><span class="eyebrow">חשבוניות ותשלומים</span><h1>${f.supplierId ? e(ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name || "חשבוניות ספק") : "מה צריך לשלם?"}</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div><div class="overview"><div><span>חשבוניות פתוחות</span><strong>${allOpen.length}</strong></div><div><span>סכום החשבוניות הפתוחות</span><strong>${e(summaryMoney(openTotals.final))}</strong></div></div><div class="main-actions">${act("invoice", "הוסף חשבונית")}${act("scan", "סרוק חשבונית", "secondary", "camera")}</div>${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="resume-draft" data-key="invoice">יש טיוטת חשבונית במכשיר · המשך למלא ${icon("arrow")}</button>` : ""}<div class="tabs" role="group" aria-label="מצב חשבוניות">${[
-    ["unpaid", "לא שולמו"],
-    ["paid", "שולמו"],
-    ["", "הכול"],
-  ]
-    .map(
-      ([value, label]) =>
-        `<button class="${(f.status || "") === value ? "active" : ""}" data-action="status" data-value="${value}" aria-pressed="${(f.status || "") === value}">${label}</button>`,
-    )
-    .join(
-      "",
-    )}</div><label class="search">${icon("search")}<input id="invoice-search" placeholder="חפש ספק, מספר חשבונית או הערה" value="${e(f.q || "")}" aria-label="חיפוש חשבוניות"></label>${filters(ctx)}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}<div class="list-heading"><span>${items.length} חשבוניות בתצוגה</span><span>${e(summaryMoney(itemTotals.final))}</span></div><div class="invoice-list">${items.length ? invoiceCards(items, ctx) : empty(allOpen.length === 0 && f.status === "unpaid" ? "אין כרגע חשבוניות פתוחות" : "לא נמצאו חשבוניות בתצוגה הזאת", "אפשר להוסיף חשבונית או לשנות את הסינון.", act("invoice", "הוסף חשבונית ראשונה"))}</div>`;
+  const f = ctx.filters, items = filterInvoices(ctx.data.invoices, f, ctx.data.suppliers);
+  const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
+  const openTotals = totals(allOpen), itemTotals = totals(items);
+  return `<div class="page-heading"><div><h1>חשבוניות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
+    <section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>סרוק חשבונית</strong><small>צילום או העלאת קובץ</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>
+    ${ctx.draftNames.includes("scan") ? `<button class="draft-banner" data-action="resume-draft" data-key="scan">המשך סריקת חשבונית שהתחלת ${icon("arrow")}</button>` : ""}
+    ${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="resume-draft" data-key="invoice">המשך טיוטת חשבונית ${icon("arrow")}</button>` : ""}
+    <button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button>
+    <div class="section-label browser-heading"><h2>חשבוניות לפי חודש וספק</h2><button class="text-button" data-route="documents">${icon("image")} צילומים</button></div>
+    ${statusTabs(f.status)}${searchBox(ctx, "invoice-search", "חפש ספק או מספר חשבונית")}${filters(ctx)}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
+    <div class="list-heading"><span>${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>
+    ${items.length ? invoiceFolders(items, ctx, invoiceCards) : empty(f.q || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", f.q || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "סרוק חשבונית, בדוק את הפרטים ושמור. היא תופיע בחודש ובספק המתאימים.", f.q || f.month || f.supplierId || f.status ? act("clear-filters", "הצג את כל החשבוניות", "secondary", null) : "")}`;
 }
 export function suppliersView(ctx) {
-  const q = (ctx.filters.q || "").toLowerCase(),
-    suppliers = ctx.data.suppliers.filter(
-      (s) =>
-        !s.deletedAt &&
-        [s.name, s.notes, s.contact].join(" ").toLowerCase().includes(q) &&
-        (!ctx.filters.activeOnly || s.active),
-    );
-  return `<div class="page-heading"><div><span class="eyebrow">הספקים של החנות</span><h1>ספקים</h1></div>${act("supplier", "הוסף ספק", "primary", "plus")}</div><label class="search">${icon("search")}<input id="supplier-search" placeholder="חפש ספק" aria-label="חיפוש ספק" value="${e(ctx.filters.q || "")}"></label><label class="checkbox"><input id="active-only" type="checkbox" ${ctx.filters.activeOnly ? "checked" : ""}> הצג רק ספקים פעילים</label><div class="supplier-list">${
-    suppliers.length
-      ? suppliers
-          .sort((a, b) => a.name.localeCompare(b.name, "he"))
-          .map((s) => {
-            const rows = ctx.data.invoices.filter(
-              (i) =>
-                !i.deletedAt && i.supplierId === s.id && i.status === "unpaid",
-            );
-            return `<article class="supplier-card"><div class="supplier-avatar">${e(s.name[0])}</div><div class="supplier-info"><h2>${e(s.name)}${s.active ? "" : " <small>לא פעיל</small>"}</h2><p>${rows.length} חשבוניות פתוחות · <strong>${e(summaryMoney(totals(rows).final))}</strong></p>${s.contact ? `<p class="muted">${e(s.contact)}</p>` : ""}${s.notes ? `<p class="muted">${e(s.notes)}</p>` : ""}<div class="row-actions">${act("supplier-invoices", "צפה בחשבוניות", "secondary", "invoice", `data-id="${e(s.id)}"`)}${act("supplier-edit", "ערוך ספק", "text-button", null, `data-id="${e(s.id)}"`)}</div></div></article>`;
-          })
-          .join("")
-      : empty(
-          "אין עדיין ספקים",
-          "הוסף את הספק הראשון של החנות.",
-          act("supplier", "הוסף ספק"),
-        )
-  }</div>`;
+  const q = (ctx.filters.q || "").toLowerCase();
+  const suppliers = ctx.data.suppliers.filter(s => !s.deletedAt && [s.name, s.notes, s.contact].join(" ").toLowerCase().includes(q) && (!ctx.filters.activeOnly || s.active));
+  return `<button class="text-button back-link" data-route="invoices">חזרה לחשבוניות</button><div class="page-heading"><h1>ניהול ספקים</h1>${act("supplier", "הוסף ספק", "secondary", "plus")}</div>${searchBox(ctx, "supplier-search", "חפש ספק")}<label class="checkbox"><input id="active-only" type="checkbox" ${ctx.filters.activeOnly ? "checked" : ""}> הצג רק ספקים פעילים</label><div class="supplier-list">${suppliers.length ? suppliers.sort((a, b) => a.name.localeCompare(b.name, "he")).map(s => {
+    const rows = ctx.data.invoices.filter(i => !i.deletedAt && i.supplierId === s.id && i.status === "unpaid");
+    return `<article class="supplier-card"><div class="supplier-avatar">${e(s.name[0])}</div><div class="supplier-info"><h2>${e(s.name)}${s.active ? "" : " <small>לא פעיל</small>"}</h2><p>${rows.length} חשבוניות לתשלום · <strong>${e(summaryMoney(totals(rows).final))}</strong></p>${s.contact ? `<p class="muted">${e(s.contact)}</p>` : ""}<div class="row-actions">${act("supplier-invoices", "חשבוניות הספק", "secondary", "invoice", `data-id="${e(s.id)}"`)}${act("supplier-edit", "ערוך / הסר ספק", "text-button", null, `data-id="${e(s.id)}"`)}</div></div></article>`;
+  }).join("") : empty("אין ספקים בתצוגה הזאת", "אפשר להוסיף ספק כאן, או בזמן שמירת החשבונית.", act("supplier", "הוסף ספק", "secondary"))}</div>`;
+}
+export function documentsView(ctx) {
+  const items = filterInvoices(ctx.data.invoices, ctx.filters, ctx.data.suppliers).filter(i => i.attachmentIds?.length);
+  return `<div class="page-heading"><h1>צילומי חשבוניות</h1>${act("scan", "סרוק", "secondary", "camera")}</div><p class="page-intro">הצילומים וקובצי ה־PDF של החשבוניות שנשמרו, מסודרים לפי חודש ואז ספק.</p>${searchBox(ctx, "invoice-search", "חפש ספק או מספר חשבונית")}<div class="list-heading"><span>${items.length} חשבוניות עם צילומים</span></div>${items.length ? invoiceFolders(items, ctx, documentCards, { photos: true }) : empty("אין עדיין צילומי חשבוניות בתצוגה", ctx.filters.q ? "נסה שם ספק או מספר חשבונית אחר." : "אחרי סריקה, בדיקת הפרטים ושמירת החשבונית — הצילומים שלה יופיעו כאן.")}`;
 }
 export function cashView(ctx) {
   const f = ctx.filters,
@@ -96,31 +75,26 @@ export function cashView(ctx) {
       )
       .sort((a, b) => b.date.localeCompare(a.date));
   const sum = (k) => rows.reduce((n, r) => n + (r[k] ?? 0), 0);
-  return `<div class="page-heading"><div><span class="eyebrow">רישום יומי</span><h1>קופה ורב־קו</h1></div>${act("cash", "רשום סגירה", "primary", "plus")}</div><p class="muted">הקופה והרב־קו נרשמים בנפרד. הסכומים אינם מחוברים לחשבוניות.</p>${filters(ctx, { cash: true })}<div class="cash-totals"><div class="summary-card"><span>קופה בתקופה</span><strong>${e(money(sum("cashAgorot")))}</strong><small>${rows.filter((r) => r.cashAgorot !== null).length} רישומים</small></div><div class="summary-card"><span>רב־קו בתקופה</span><strong>${e(money(sum("ravKavAgorot")))}</strong><small>${rows.filter((r) => r.ravKavAgorot !== null).length} רישומים</small></div></div>${rows.length ? `<div class="list-heading"><span>${rows.length} ימי רישום</span>${act("cash-export", "ייצוא CSV", "text-button", "download")}</div><div class="cash-list">${rows.map((r) => `<button class="cash-row" data-action="cash-edit" data-id="${e(r.id)}"><strong>${e(displayDate(r.date))}</strong><span><small>קופה</small>${e(money(r.cashAgorot))}</span><span><small>רב־קו</small>${e(money(r.ravKavAgorot))}</span>${icon("arrow")}</button>`).join("")}</div>` : empty("אין עדיין רישומי סגירה בתקופה הזאת", "בסיום היום מזינים כל סכום בשדה שלו.", act("cash", "רשום סגירה ראשונה"))}`;
+  return `<div class="page-heading"><div><h1>קופה ורב־קו</h1></div>${act("cash", "רשום סגירה", "primary", "plus")}</div><p class="muted">רושמים את סגירת היום: קופה ורב־קו, כל סכום בנפרד.</p>${periodPicker(ctx)}<div class="cash-totals"><div class="summary-card"><span>קופה בתקופה</span><strong>${e(money(sum("cashAgorot")))}</strong><small>${rows.filter((r) => r.cashAgorot !== null).length} רישומים</small></div><div class="summary-card"><span>רב־קו בתקופה</span><strong>${e(money(sum("ravKavAgorot")))}</strong><small>${rows.filter((r) => r.ravKavAgorot !== null).length} רישומים</small></div></div>${rows.length ? `<div class="list-heading"><span>${rows.length} ימי רישום</span>${act("cash-export", "ייצוא CSV", "text-button", "download")}</div><div class="cash-list">${rows.map((r) => `<button class="cash-row" data-action="cash-edit" data-id="${e(r.id)}"><strong>${e(displayDate(r.date))}</strong><span><small>קופה</small>${e(money(r.cashAgorot))}</span><span><small>רב־קו</small>${e(money(r.ravKavAgorot))}</span>${icon("arrow")}</button>`).join("")}</div>` : empty("אין עדיין רישומי סגירה בתקופה הזאת", "בסיום היום מזינים כל סכום בשדה שלו.", act("cash", "רשום סגירה ראשונה"))}`;
 }
 export function reportsView(ctx) {
-  const items = filterInvoices(
-      ctx.data.invoices,
-      ctx.filters,
-      ctx.data.suppliers,
-    ),
-    t = totals(items);
-  return `<div class="page-heading"><div><span class="eyebrow">סיכום ועיון</span><h1>דוחות</h1></div>${act("invoice-export", "ייצוא CSV", "secondary", "download")}</div><p class="muted">סיכום לפי תאריך החשבונית. כלי עזר פנימי, אינו דוח רשמי לרשות המסים.</p>${filters(ctx, { status: true })}<div class="report-totals">${[
-    ["לפני מע״מ", t.subtotal],
-    ["מע״מ שנרשם", t.vat],
-    ["כולל מע״מ", t.total],
-    ["סופי לתשלום", t.final],
-  ]
-    .map(
-      ([l, a]) =>
-        `<div class="summary-card"><span>${l}</span><strong>${e(summaryMoney(a))}</strong></div>`,
-    )
-    .join(
-      "",
-    )}</div>${creditNotice(t.invalidCredits)}${t.unknownVat || t.unknownSubtotal ? `<div class="notice warning">הסיכום אינו מלא: ${t.unknownVat} חשבוניות ללא מע״מ ידוע; ${t.unknownSubtotal} ללא סכום לפני מע״מ. שדה חסר אינו אפס.</div>` : ""}<div class="row-actions">${act("print", "הדפס / שמור PDF", "secondary", null)}${act("report-scan", "בדיקה מול רואה החשבון", "text-button", null)}</div><div class="list-heading"><span>${items.length} חשבוניות בתקופה</span></div><div class="invoice-list">${items.length ? invoiceCards(items, ctx) : empty("אין חשבוניות בתקופה הזאת", "בחר חודש אחר או הוסף חשבונית.")}</div>`;
+  const items = filterInvoices(ctx.data.invoices, ctx.filters, ctx.data.suppliers), t = totals(items);
+  const paid = items.filter(i => i.status === "paid"), unpaid = items.filter(i => i.status !== "paid");
+  const supplierMap = new Map(ctx.data.suppliers.map(s => [s.id, s.name]));
+  const supplierIds = [...new Set(items.map(i => i.supplierId))].sort((a, b) => (supplierMap.get(a) || "").localeCompare(supplierMap.get(b) || "", "he"));
+  return `<div class="page-heading"><h1>סיכום חודשי</h1></div><p class="page-intro">כמה נרשם בחשבוניות, מה שולם ומה עוד לתשלום. לפי תאריך החשבונית.</p>${periodPicker(ctx)}${filters(ctx, { status: true, period: false })}
+    <div class="report-overview"><span>${items.length} חשבוניות · ${e(ctx.filters.month ? monthLabel(ctx.filters.month) : `${ctx.filters.from ? displayDate(ctx.filters.from) : "מההתחלה"} — ${ctx.filters.to ? displayDate(ctx.filters.to) : "עד היום"}`)}</span><strong>${e(summaryMoney(t.final))}</strong><small>סכום סופי לאחר הפחתות וזיכויים</small></div>
+    <div class="cash-totals"><div class="summary-card"><span>שולם</span><strong>${e(summaryMoney(totals(paid).final))}</strong><small>${paid.length} חשבוניות</small></div><div class="summary-card"><span>נותר לתשלום</span><strong>${e(summaryMoney(totals(unpaid).final))}</strong><small>${unpaid.length} חשבוניות</small></div></div>
+    ${creditNotice(t.invalidCredits)}
+    <section class="report-section"><h2>פירוט לפי ספק</h2>${items.length ? `<div class="report-suppliers">${supplierIds.map(id => {
+      const rows = items.filter(i => i.supplierId === id), due = rows.filter(i => i.status === "unpaid");
+      return `<button class="report-supplier-row" data-action="report-supplier" data-id="${e(id)}"><span><strong>${e(supplierMap.get(id) || "ספק")}</strong><small>${rows.length} חשבוניות</small></span><span><strong>${e(summaryMoney(totals(rows).final))}</strong><small>${due.length ? "לתשלום: " + e(summaryMoney(totals(due).final)) : "הכול שולם"}</small></span>${icon("arrow")}</button>`;
+    }).join("")}</div>` : '<p class="muted">אין חשבוניות בתקופה הזאת. אפשר לבחור חודש אחר.</p>'}</section>
+    <section class="report-section"><h2>סכומים ומע״מ</h2><dl class="vat-summary"><div><dt>לפני מע״מ</dt><dd>${e(summaryMoney(t.subtotal))}</dd></div><div><dt>מע״מ שנרשם</dt><dd>${e(summaryMoney(t.vat))}</dd></div><div><dt>כולל מע״מ</dt><dd>${e(summaryMoney(t.total))}</dd></div></dl>${t.unknownVat || t.unknownSubtotal ? `<div class="notice warning">הסיכום אינו מלא: ${t.unknownVat} חשבוניות ללא מע״מ ידוע; ${t.unknownSubtotal} ללא סכום לפני מע״מ.</div>` : ""}</section>
+    <section class="report-section report-export"><h2>ייצוא ושמירת הסיכום</h2><p class="muted small">הייצוא כולל את החשבוניות בתקופה שבחרת.</p><div class="row-actions">${act("invoice-export", "הורד לאקסל (CSV)", "secondary", "download")}${act("print", "הדפס / שמור PDF", "secondary", null)}</div><details class="accountant-tools"><summary>בדיקה מול רואה החשבון</summary><p>העלה את הרשימה מרואה החשבון כדי לבדוק אילו חשבוניות חסרות או שונות.</p>${act("report-scan", "העלה רשימה לבדיקה", "secondary", null)}</details></section>`;
 }
 export function settingsView(ctx) {
-  return `<div class="page-heading"><div><span class="eyebrow">המכשיר והנתונים</span><h1>הגדרות וגיבוי</h1></div></div><section class="settings-section"><h2>גיבוי הנתונים</h2><p>הורד גיבוי JSON של הספקים, החשבוניות, התשלומים והסגירות היומיות. קבצי הצילום עצמם נשארים בחנות ואפשר להורידם מכל חשבונית.</p>${act("backup", "הורד גיבוי מלא של הנתונים", "primary", "download")}</section><section class="settings-section"><h2>טיוטות במכשיר</h2><p>טיוטות נשמרות במכשיר הזה. אם תשובת השמירה לא התקבלה, אפשר לבדוק כאן אם הפעולה נשמרה בחנות.</p><div class="row-actions">${
+  return `<div class="page-heading"><div><span class="eyebrow">המכשיר והנתונים</span><h1>הגדרות וגיבוי</h1></div></div><section class="settings-section"><h2>גיבוי הנתונים</h2><p>הורד גיבוי JSON של הספקים, החשבוניות, התשלומים והסגירות היומיות. קבצי הצילום עצמם זמינים במסך צילומי חשבוניות, לפי חודש וספק.</p>${act("backup", "הורד גיבוי מלא של הנתונים", "primary", "download")}</section><section class="settings-section"><h2>טיוטות במכשיר</h2><p>טיוטות נשמרות במכשיר הזה. אם תשובת השמירה לא התקבלה, אפשר לבדוק כאן אם הפעולה נשמרה בחנות.</p><div class="row-actions">${
     [
       ["invoice", "חשבונית"],
       ["supplier", "ספק"],
@@ -175,6 +149,7 @@ export function shell(ctx) {
   const view = {
     invoices: invoicesView,
     suppliers: suppliersView,
+    documents: documentsView,
     cash: cashView,
     reports: reportsView,
     settings: settingsView,
@@ -188,9 +163,9 @@ export function shell(ctx) {
 
   const nav = [
     ["invoices", "חשבוניות", "invoice"],
-    ["suppliers", "ספקים", "suppliers"],
+    ["documents", "צילומים", "image"],
     ["cash", "קופה ורב־קו", "cash"],
-    ["reports", "דוחות", "reports"],
+    ["reports", "סיכום", "reports"],
   ];
-  return `<div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${ctx.route === route ? "active" : ""}" ${ctx.route === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav><button class="settings-link ${ctx.route === "settings" ? "active" : ""}" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></aside><div class="workspace"><header class="topbar"><span>החשבונות של החנות</span><div><span id="connection-status" class="connection">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span><button class="icon-button" data-route="settings" aria-label="הגדרות וגיבוי">${icon("settings")}</button></div></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
+  return `<div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${(ctx.route === "suppliers" ? "invoices" : ctx.route) === route ? "active" : ""}" ${(ctx.route === "suppliers" ? "invoices" : ctx.route) === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav><button class="settings-link ${ctx.route === "settings" ? "active" : ""}" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></aside><div class="workspace"><header class="topbar"><span>החשבונות של החנות</span><div><span id="connection-status" class="connection">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span><button class="icon-button" data-route="settings" aria-label="הגדרות וגיבוי">${icon("settings")}</button></div></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
 }
