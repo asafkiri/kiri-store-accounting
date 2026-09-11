@@ -276,7 +276,7 @@ async function action(type, data = {}) {
       ctx.render();
       break;
     case "invoice-export":
-      download(
+      await download(
         invoiceCsv(
           filterInvoices(ctx.data.invoices, ctx.filters, ctx.data.suppliers),
           ctx.data.suppliers,
@@ -286,7 +286,7 @@ async function action(type, data = {}) {
       );
       break;
     case "cash-export":
-      download(
+      await download(
         cashCsv(
           ctx.data.dailyCash.filter(
             (r) =>
@@ -301,7 +301,7 @@ async function action(type, data = {}) {
       break;
     case "backup": {
       const backup = await ctx.api.request("backup", { timeout: 50_000 });
-      download(
+      await download(
         JSON.stringify(backup, null, 2),
         "kiri-accounting-backup-" + today() + ".json",
         "application/json",
@@ -388,7 +388,7 @@ async function action(type, data = {}) {
           JSON.stringify(d, null, 2),
           "invoice-draft.json",
           "application/json",
-        );
+        ).catch(error => toast(errorText(error), true));
       break;
     }
     case "delete":

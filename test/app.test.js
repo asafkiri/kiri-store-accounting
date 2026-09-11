@@ -28,6 +28,7 @@ async function setup(t, sdk = {}) {
       'export const {initializeAuth,sendCode}=globalThis.appTestSdk; export const onAuthStateChanged=(_auth,fn)=>{globalThis.appAuthCallback=fn;}, signOut=async()=>{}; export {authMessage} from "' +
       resolveAuthPath() +
       '";',
+    "./export.js": "export const invoiceCsv=()=>'',cashCsv=()=>'',download=async(...args)=>globalThis.appTestSdk.download?.(...args);",
     "./api.js":
       "export class Api { request(...args) { return globalThis.appTestSdk.request(...args); } } export class ApiError extends Error {} export const pendingMutation=()=>{};",
     "./drafts.js":
@@ -168,4 +169,18 @@ test("successful sync renders server data even when local draft reads fail", asy
   assert.match(document.body.textContent, /SERVER-OK/);
   assert.match(document.body.textContent, /טיוטות במכשיר/);
   assert.doesNotMatch(document.body.textContent, /InvalidStateError|לא התקבל עדכון מהשרת/);
+});
+
+
+test("async export errors reach the Hebrew action error handler", async t => {
+  await setup(t, {
+    request: async path => path === "me" ? { uid: "owner" } : { full: true, version: 1, invoices: [], suppliers: [], dailyCash: [] },
+    download: async () => { throw new DOMException("NotAllowedError", "NotAllowedError"); },
+  });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="settings"]').click();
+  const button = document.querySelector('[data-action="backup"]');
+  await document.querySelector("#app").onclick({ target: button });
+  assert.match(document.querySelector("#toast").textContent, /הפעולה לא הושלמה/);
+  assert.doesNotMatch(document.querySelector("#toast").textContent, /NotAllowedError/);
 });
