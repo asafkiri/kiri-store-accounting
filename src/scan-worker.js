@@ -269,6 +269,12 @@ export function enhanceImage(image) {
       const lower = Math.floor(index), fraction = index - lower;
       data[i + channel] = tone[lower] * (1 - fraction) + tone[Math.min(lower + 1, tone.length - 1)] * fraction;
     }
+    // Remove a residual cast only from bright, nearly neutral paper. Luminance
+    // is preserved, so this cannot erase pale gray strokes or turn a blue stamp gray.
+    const lum = data[i] * .299 + data[i + 1] * .587 + data[i + 2] * .114;
+    const spread = Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]);
+    const neutral = clamp((lum - 180) / 60, 0, .75) * clamp(1 - spread / 40, 0, 1);
+    for (let channel = 0; channel < 3; channel++) data[i + channel] += (lum - data[i + channel]) * neutral;
   }
   const gray = grayImage(image), blurred = gaussian3(gray, w, h);
   for (let i = 0; i < gray.length; i++) {

@@ -152,6 +152,13 @@ for (const engine of [chromium, webkit]) {
     const page = await scannerPage(t, engine);
     await page.evaluate(async () => {
       window.cropMessages = [];
+      window.cropBlobs = new Map();
+      const createObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = object => {
+        const url = createObjectURL(object);
+        if (object instanceof Blob) window.cropBlobs.set(url, object);
+        return url;
+      };
       const NativeWorker = window.Worker;
       window.Worker = class extends NativeWorker {
         postMessage(message, ...args) {
@@ -182,27 +189,18 @@ for (const engine of [chromium, webkit]) {
     const ratio = await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth / img.naturalHeight);
     assert.ok(Math.abs(ratio - .5) < .001, "reset restores all source edges, including content outside the automatic crop");
     assert.equal(await viewport.evaluate(el => el.scrollTop), 0);
-    // Hash decoded pixels: approving must upload the same processed image shown.
-    const previewHash = await page.evaluate(() => {
-      window.pixelHash = image => {
-        const canvas = document.createElement("canvas"); canvas.width = image.naturalWidth || image.width; canvas.height = image.naturalHeight || image.height;
-        const pen = canvas.getContext("2d"); pen.drawImage(image, 0, 0);
-        const pixels = pen.getImageData(0, 0, canvas.width, canvas.height).data;
-        let hash = 2166136261;
-        for (let i = 0; i < pixels.length; i++) hash = Math.imul(hash ^ pixels[i], 16777619);
-        canvas.width = canvas.height = 1;
-        return hash >>> 0;
-      };
-      return window.pixelHash(document.querySelector("[data-crop-result]"));
+    // Compare the actual JPEG displayed by the image element with the upload.
+    await page.evaluate(async () => {
+      const blob = window.cropBlobs.get(document.querySelector("[data-crop-result]").src);
+      window.confirmedPreviewBytes = new Uint8Array(await blob.arrayBuffer());
     });
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    const saved = await page.evaluate(async () => {
-      const file = window.scanDrafts()[0][1].files[0], img = new Image();
-      img.src = `data:${file.mime};base64,${file.data}`; await img.decode();
-      return { hash: window.pixelHash(img), process: window.cropMessages.find(m => m.type === "process") };
+    const saved = await page.evaluate(() => {
+      const file = window.scanDrafts()[0][1].files[0], bytes = Uint8Array.from(atob(file.data), c => c.charCodeAt(0));
+      return { identical: bytes.length === window.confirmedPreviewBytes.length && bytes.every((value, i) => value === window.confirmedPreviewBytes[i]), process: window.cropMessages.find(m => m.type === "process") };
     });
-    assert.equal(saved.hash, previewHash, "preview and upload must have identical decoded pixels");
+    assert.equal(saved.identical, true, "preview and upload must have identical JPEG bytes");
     assert.deepEqual(saved.process.points, [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }]);
     assert.equal(await page.locator(".crop-modal, .crop-modal-content").count(), 0, "normal scan layout is restored");
     assert.equal(await page.locator(".modal-heading").isVisible(), true);
