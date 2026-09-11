@@ -63,7 +63,7 @@ async function assertWholeCropVisible(page) {
       area: rect(area), image: rect(img), ratio: img.naturalWidth / img.naturalHeight,
       available: [area.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), area.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)],
       scroll: [area.scrollWidth - area.clientWidth, area.scrollHeight - area.clientHeight, area.scrollLeft, area.scrollTop],
-      handles: [...document.querySelectorAll("[data-crop-corner]")].map(handle => {
+      handles: [...document.querySelectorAll("[data-crop-corner]")].filter(handle => handle.offsetParent !== null).map(handle => {
         const r = rect(handle), hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
         return { ...r, reachable: handle.contains(hit) };
       }),
@@ -81,6 +81,12 @@ async function assertWholeCropVisible(page) {
     assert.ok(handle.width >= 48 && handle.height >= 48, "keep large touch targets");
   }
   assert.ok(layout.actions.every(r => inside(r, layout.screen)), "approval actions remain on screen");
+}
+// The result screen has three action buttons; the manual tools open behind "fix by hand".
+async function openManualTools(page) {
+  await page.waitForFunction(() => !document.querySelector("[data-crop-adjust]").disabled);
+  await page.locator("[data-crop-adjust]").press("Enter");
+  await page.waitForFunction(() => document.querySelector(".scan-crop").classList.contains("adjusting") && !document.querySelector("[data-crop-toolbar], .crop-toolbar").hidden);
 }
 
 for (const engine of [chromium, webkit]) {
@@ -357,9 +363,10 @@ for (const engine of [chromium, webkit]) {
       const input = document.querySelector("#camera-file"); input.files = transfer.files; window.pendingPhotoSelection = input.onchange();
     });
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
-    assert.match(await page.locator("[data-crop-status]").textContent(), /לא זוהו גבולות/);
+    assert.match(await page.locator("[data-crop-status]").textContent(), /לא נמצאו גבולות ברורים/);
     const initialUrl = await page.locator("[data-crop-result]").getAttribute("src");
     const initialBytes = await page.evaluate(async () => [...new Uint8Array(await window.cropBlobs.get(document.querySelector("[data-crop-result]").src).arrayBuffer())]);
+    await openManualTools(page);
     await page.locator("[data-crop-straighten]").press("Enter");
     await assertWholeCropVisible(page);
     const corners = await page.evaluate(() => window.manualCorners), box = await page.locator(".crop-source").boundingBox();
@@ -438,6 +445,8 @@ for (const engine of [chromium, webkit]) {
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/scanner-long-${engine.name()}.png`, fullPage: true });
     assert.equal(await page.locator("[data-crop-reset]").count(), 0, "Back replaces Reset");
+    await openManualTools(page);
+    await assertWholeCropVisible(page);
     const bytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
     const initialBytes = await bytes();
     const crop = async key => {
@@ -503,6 +512,8 @@ for (const engine of [chromium, webkit]) {
     const handle = page.locator('[data-crop-corner="0"]');
     assert.equal(await page.locator(".scan-crop img").count(), 1, "one processed image is the crop surface");
     assert.equal(await page.locator("[data-crop-source]").count(), 0, "the unprocessed original is not displayed");
+    await assertWholeCropVisible(page);
+    await openManualTools(page);
     await assertWholeCropVisible(page);
     const before = await page.locator("[data-crop-result]").getAttribute("src");
     const box = await handle.boundingBox(); assert.ok(box.width >= 48 && box.height >= 48);
@@ -582,12 +593,14 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 
-  test(`${engine.name()}: missing boundaries and worker failure keep the full-photo escape usable`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: missing boundaries, a stuck save and a failed worker keep one-tap approval usable`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     await page.evaluate(() => window.openScanner());
     await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
-    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא זוהו גבולות"));
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא נמצאו גבולות ברורים"));
     await assertWholeCropVisible(page);
+    assert.equal(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.filter(h => h.offsetParent !== null).length), 0, "no handles on the result screen");
+    await openManualTools(page);
     assert.deepEqual(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.map(h => [h.style.left, h.style.top])), [["0%", "0%"], ["100%", "0%"], ["100%", "100%"], ["0%", "100%"]]);
     await page.locator("[data-crop-original]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
@@ -596,6 +609,7 @@ for (const engine of [chromium, webkit]) {
       return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[0]);
     });
     assert.equal(equal, true, "without crop must match the existing full-photo preparation exactly");
+    // A save that never completes can still be abandoned from the header.
     await page.evaluate(() => {
       const NativeWorker = window.Worker;
       window.Worker = class extends NativeWorker {
@@ -606,18 +620,71 @@ for (const engine of [chromium, webkit]) {
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("מיישר ושומר"));
-    await page.locator("[data-crop-original]").tap();
+    assert.equal(await page.locator("[data-crop-retake-button]").isEnabled(), true, "retake stays available while saving");
+    await page.locator("[data-crop-cancel]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "cancelling a stuck save keeps no page");
+    // Without a worker the photo is kept as it is with the same approve button.
     await page.evaluate(() => { window.Worker = class { constructor() { throw Error("Worker unavailable"); } }; });
     await page.evaluate(() => window.chooseScanPhoto());
-    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד אינו זמין"));
-    assert.equal(await page.locator("[data-crop-original]").isEnabled(), true);
-    await page.locator("[data-crop-original]").tap();
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("העיבוד לא הצליח"));
+    assert.equal(await page.locator("[data-crop-adjust]").isDisabled(), true, "manual tools need a processed image");
+    assert.equal(await page.locator("[data-crop-accept]").isEnabled(), true);
+    assert.equal(await page.locator("[data-crop-result]").evaluate(img => img.naturalWidth > 0 && !img.classList.contains("processing")), true, "the original photo stays on screen");
+    await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
-    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 3);
+    const kept = await page.evaluate(async () => {
+      const { readFile } = await import("/image-upload.js");
+      return JSON.stringify(await readFile(window.selectedPhoto)) === JSON.stringify(window.scanDrafts()[0][1].files[1]);
+    });
+    assert.equal(kept, true, "approving after a worker failure stores the full photo");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
     assert.equal(await page.locator("#run-scan").isEnabled(), true);
+  });
+
+  test(`${engine.name()}: the result screen offers one approval tap, and manual tools open and close without changing the image`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(() => {
+      window.cropBlobs = new Map(); const createObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = object => { const url = createObjectURL(object); if (object instanceof Blob) window.cropBlobs.set(url, object); return url; };
+    });
+    await page.evaluate(() => window.openScanner());
+    await page.evaluate(() => window.chooseScanPhoto());
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    const visibleActions = () => page.locator(".crop-actions button").evaluateAll(buttons => buttons.filter(b => b.offsetParent !== null).map(b => b.textContent.trim()));
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "תקן ידנית"], "exactly three action buttons");
+    assert.equal(await page.locator(".crop-heading [data-crop-cancel]").isVisible(), true, "cancel stays in the header");
+    assert.equal(await page.locator(".crop-toolbar").isVisible(), false);
+    assert.match(await page.locator("[data-crop-status]").textContent(), /בדוק שכל התעודה נראית/);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/result-screen-${engine.name()}.png`, fullPage: true });
+    const shownBytes = () => page.locator("[data-crop-result]").evaluate(async img => [...new Uint8Array(await window.cropBlobs.get(img.src).arrayBuffer())]);
+    const shown = await page.locator("[data-crop-result]").getAttribute("src"), before = await shownBytes();
+    await openManualTools(page);
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "ללא חיתוך"]);
+    assert.equal(await page.locator(".crop-toolbar").isVisible(), true);
+    assert.equal(await page.locator("[data-crop-corner]").evaluateAll(handles => handles.filter(h => h.offsetParent !== null).length), 4);
+    await assertWholeCropVisible(page);
+    // Trim, then leave the manual screen: the image shown before is restored.
+    await page.locator('[data-crop-corner="0"]').press("Shift+ArrowRight");
+    await page.waitForFunction(shown => document.querySelector("[data-crop-result]").src !== shown && !document.querySelector("[data-crop-accept]").disabled, shown);
+    await page.locator("[data-crop-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop").classList.contains("adjusting") && !document.querySelector("[data-crop-accept]").disabled);
+    assert.deepEqual(await visibleActions(), ["אשר", "צלם שוב", "תקן ידנית"]);
+    assert.deepEqual(await shownBytes(), before, "leaving the manual screen restores the image shown before it");
+    // Cancel from the result screen leaves without storing a page.
+    await page.locator("[data-crop-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy);
+    assert.equal(await page.evaluate(() => window.scanDrafts().length), 0);
+    await page.evaluate(() => window.chooseScanPhoto("gallery-file", "none"));
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא נמצאו גבולות ברורים"));
+    await page.screenshot({ path: `test-artifacts/result-screen-undetected-${engine.name()}.png`, fullPage: true });
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop"));
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "one tap stores the page");
+    assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 
   test(`${engine.name()}: 24MP EXIF capture and canvas fallback cap retained source at 3000px and strip metadata`, { timeout: 60000 }, async t => {
@@ -667,6 +734,282 @@ for (const engine of [chromium, webkit]) {
       assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
       await page.close();
     }
+  });
+
+  // Seeded procedural photographs (test/scanner-fixtures.mjs), each drawn at
+  // 1000px and detected both as a 320px live frame (canvas downscale, as the
+  // camera view does) and through the still path (box downscale and refinement
+  // at 1000px). Tolerances are percent of the long edge; "inward" is how far a
+  // found corner sits inside the true page, where print would be cut off.
+  test(`${engine.name()}: procedural fixtures are found within tolerance at 320px and in the still path, negatives stay null`, { timeout: 180000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
+      const positives = ["beige-texture", "dark-counter", "wood-grain", "white-table-soft-shadow", "cut-off", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
+      const frame = (canvas, maxEdge) => {
+        const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
+        if (scale === 1) return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+        const small = document.createElement("canvas"); small.width = Math.round(canvas.width * scale); small.height = Math.round(canvas.height * scale);
+        const pen = small.getContext("2d", { willReadFrequently: true }); pen.drawImage(canvas, 0, 0, small.width, small.height);
+        return pen.getImageData(0, 0, small.width, small.height);
+      };
+      const rows = [];
+      for (const mode of positives) {
+        const made = window.makeDocumentCanvas(mode, 1000, .85, 1), truth = made.expected || made.corners;
+        for (const [path, image] of [["live", frame(made.canvas, DETECT_EDGE)], ["still", frame(made.canvas, 1000)]]) {
+          const found = detectDocument(image), deviation = found.corners ? window.cornerDeviation(found.corners, truth, image.width, image.height) : null;
+          rows.push({ mode, path, confidence: found.confidence, reason: found.reason, borderSides: found.borderSides,
+            max: deviation && +deviation.max.toFixed(2), inward: deviation && +deviation.maxInward.toFixed(2) });
+        }
+      }
+      const negatives = [];
+      for (const mode of ["none", "circle", "texture-only"]) {
+        const made = window.makeDocumentCanvas(mode, 1000, .85, 1);
+        for (const [path, image] of [["live", frame(made.canvas, DETECT_EDGE)], ["still", frame(made.canvas, 1000)]]) {
+          const found = detectDocument(image);
+          negatives.push({ mode, path, corners: found.corners, confidence: found.confidence, reason: found.reason });
+        }
+      }
+      let textureFalsePositives = 0;
+      for (let seed = 1; seed <= 100; seed++) {
+        if (detectDocument(frame(window.makeDocumentCanvas("texture-only", 1000, .85, seed).canvas, DETECT_EDGE)).corners) textureFalsePositives++;
+      }
+      return { rows, negatives, textureFalsePositives };
+    });
+    for (const row of result.rows) {
+      const label = `${row.mode}/${row.path}: ${JSON.stringify(row)}`;
+      assert.ok(row.max !== null, `document must be found: ${label}`);
+      assert.ok(row.max <= (row.mode === "crumpled" ? 2.5 : 1.5), `corner within tolerance: ${label}`);
+      assert.ok(row.inward <= .5, `no print cut off: ${label}`);
+      assert.ok(row.confidence >= .6, `confidence reaches the auto-capture lock: ${label}`);
+      assert.equal(row.borderSides, row.mode === "cut-off" ? 1 : 0, `frame borders used only where the page leaves the frame: ${label}`);
+    }
+    for (const row of result.negatives) {
+      assert.equal(row.corners, null, `no document: ${JSON.stringify(row)}`);
+      assert.equal(row.confidence, 0, JSON.stringify(row));
+      assert.ok(["no-lines", "fills-frame", "no-supported-quad"].includes(row.reason), JSON.stringify(row));
+    }
+    assert.ok(result.textureFalsePositives <= 1, `texture-only false positives over 100 seeds: ${result.textureFalsePositives}`);
+    t.diagnostic(`${engine.name()} texture-only false positives /100: ${result.textureFalsePositives}`);
+  });
+
+  // Timing is printed for every run; the guards are wide so a busy shared runner
+  // cannot fail CI, while a large regression still does.
+  test(`${engine.name()}: detection time at 320px and in the still path stays within the guards`, { timeout: 120000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const measure = () => page.evaluate(async () => {
+      const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
+      const { canvas } = window.makeDocumentCanvas("beige-texture", 1000, .85, 1);
+      const small = document.createElement("canvas"); small.width = Math.round(canvas.width * DETECT_EDGE / canvas.height); small.height = DETECT_EDGE;
+      small.getContext("2d").drawImage(canvas, 0, 0, small.width, small.height);
+      const live = small.getContext("2d").getImageData(0, 0, small.width, small.height), still = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
+      const time = (image, runs) => {
+        const samples = [];
+        for (let k = 0; k < runs; k++) { const t0 = performance.now(); detectDocument(image); samples.push(performance.now() - t0); }
+        samples.sort((a, b) => a - b);
+        return { median: +samples[samples.length >> 1].toFixed(1), p95: +samples[Math.min(samples.length - 1, Math.floor(samples.length * .95))].toFixed(1) };
+      };
+      detectDocument(live);
+      return { live: time(live, 20), still: time(still, 10) };
+    });
+    const timing = await measure();
+    t.diagnostic(`${engine.name()} detect 320px median ${timing.live.median}ms p95 ${timing.live.p95}ms; still path (1000px) median ${timing.still.median}ms p95 ${timing.still.p95}ms`);
+    assert.ok(timing.live.median <= 60, `320px detection median ${timing.live.median}ms`);
+    assert.ok(timing.still.median <= 300, `still path median ${timing.still.median}ms`);
+    if (engine.name() === "chromium") {
+      // A 4x CPU slowdown approximates a mid-range phone; printed, not asserted.
+      const session = await page.context().newCDPSession(page);
+      await session.send("Emulation.setCPUThrottlingRate", { rate: 4 });
+      const throttled = await measure();
+      await session.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+      t.diagnostic(`chromium 4x CPU throttle: detect 320px median ${throttled.live.median}ms p95 ${throttled.live.p95}ms`);
+    }
+  });
+
+  // The in-app camera is exercised with a fake getUserMedia backed by
+  // canvas.captureStream: a page slides across the frame, then holds still.
+  const fakeCamera = () => {
+    window.liveStreams = []; window.workerLog = []; window.workerCount = 0; window.cameraMode = "page";
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(...args) {
+        super(...args); window.workerCount++;
+        this.addEventListener("message", ({ data }) => {
+          if (data.result && "hintUsed" in data.result) window.workerLog.push({ type: "init-result", hintUsed: data.result.hintUsed, detected: data.result.detected, blob: data.result.blob });
+        });
+      }
+      postMessage(message, ...args) { window.workerLog.push({ type: message.type, hint: Boolean(message.hint) }); super.postMessage(message, ...args); }
+    };
+    const { canvas: paper } = window.makeDocumentCanvas("dark-counter", 1000, .85, 1);
+    const scene = document.createElement("canvas"); scene.width = 1800; scene.height = 2400;
+    const small = document.createElement("canvas"); small.width = 1280; small.height = 720;
+    const pen = scene.getContext("2d"), smallPen = small.getContext("2d");
+    // WebKit only captures frames from a canvas that is painted; keep both in the document, tiny and inert.
+    for (const canvas of [scene, small]) { Object.assign(canvas.style, { position: "fixed", left: "0", top: "0", width: "18px", height: "24px", opacity: ".01", pointerEvents: "none" }); document.body.append(canvas); }
+    window.sceneMoving = true; let step = 0;
+    // Redraw continuously: a captured canvas only produces frames when it is drawn to.
+    setInterval(() => {
+      step++;
+      const dx = window.sceneMoving ? [0, 60, 120, 180][step % 4] - 90 : 0;
+      pen.fillStyle = "#282624"; pen.fillRect(0, 0, scene.width, scene.height);
+      pen.drawImage(paper, dx, 0, scene.width, scene.height);
+      smallPen.fillStyle = "#282624"; smallPen.fillRect(0, 0, small.width, small.height);
+      smallPen.drawImage(paper, 300, -100, 700, 933);
+    }, 66);
+    if (!navigator.mediaDevices) Object.defineProperty(navigator, "mediaDevices", { value: {}, configurable: true });
+    const fakeGetUserMedia = async constraints => {
+      window.lastConstraints = constraints;
+      if (window.cameraMode === "denied") throw new DOMException("Permission denied", "NotAllowedError");
+      const stream = (window.cameraMode === "small" ? small : scene).captureStream(15);
+      window.liveStreams.push(stream);
+      return stream;
+    };
+    // A plain assignment is ignored by engines that expose getUserMedia as a prototype accessor.
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: fakeGetUserMedia, configurable: true, writable: true });
+    return navigator.mediaDevices.getUserMedia === fakeGetUserMedia;
+  };
+  test(`${engine.name()}: the live camera shows the polygon, locks only when still, hands the frame with a hint to the review, and falls back cleanly`, { timeout: 180000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const support = await page.evaluate(async () => {
+      const { liveCameraSupported } = await import("/live-capture.js");
+      return { supported: liveCameraSupported(), secureContext: window.isSecureContext, captureStream: typeof HTMLCanvasElement.prototype.captureStream === "function", videoFrameCallback: "requestVideoFrameCallback" in HTMLVideoElement.prototype };
+    });
+    t.diagnostic(`${engine.name()} live camera support: ${JSON.stringify(support)}`);
+    if (!support.captureStream) { t.skip("canvas.captureStream is not available in this engine"); return; }
+    if (!support.supported) { t.skip("the test page is not a secure context for this engine, so the in-app camera never opens"); return; }
+    await page.evaluate(() => window.openScanner());
+    const patched = await page.evaluate(fakeCamera);
+    t.diagnostic(`${engine.name()} fake getUserMedia installed: ${patched}`);
+    if (!patched && engine.name() === "webkit") { t.skip("getUserMedia cannot be replaced in this engine"); return; }
+    assert.equal(patched, true, "the fake camera replaces getUserMedia");
+    const cameraLabel = page.locator("label:has(#camera-file)");
+    const detectCount = () => page.evaluate(() => window.workerLog.filter(entry => entry.type === "detect").length);
+    const tracksEnded = () => page.evaluate(() => window.liveStreams.every(stream => stream.getTracks().every(track => track.readyState === "ended")));
+    const videoState = () => page.evaluate(() => {
+      const video = document.querySelector("[data-live-video]");
+      return { status: document.querySelector("[data-live-status]")?.textContent, unavailable: document.querySelector("[data-live-unavailable]")?.hidden === false, paused: document.querySelector("[data-live-paused]")?.hidden === false,
+        video: video && { width: video.videoWidth, height: video.videoHeight, readyState: video.readyState, paused: video.paused, hasStream: Boolean(video.srcObject) }, streams: window.liveStreams.length, tracks: window.liveStreams.map(s => s.getTracks().map(track => `${track.readyState}${track.muted ? "/muted" : ""}`)) };
+    });
+    // 1. Moving page: the polygon follows it, nothing is captured.
+    await cameraLabel.tap();
+    await page.waitForSelector(".scan-live");
+    const started = await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800, null, { timeout: 20000 }).then(() => true, () => false);
+    if (!started) {
+      const state = await videoState();
+      t.diagnostic(`${engine.name()} fake camera did not start: ${JSON.stringify(state)}`);
+      // Headless WebKit on Linux may not feed a canvas-captured stream into a video element; the
+      // view's own logic is engine-neutral and is covered by Chromium, so do not fail CI on that.
+      if (engine.name() === "webkit") { await page.locator("[data-live-cancel]").tap(); t.skip("canvas.captureStream did not produce video frames in this engine"); return; }
+      assert.fail(`the in-app camera did not start: ${JSON.stringify(state)}`);
+    }
+    assert.deepEqual(await page.evaluate(() => [window.lastConstraints.video.facingMode.ideal, window.lastConstraints.video.width.ideal]), ["environment", 3840]);
+    await page.waitForFunction(() => !document.querySelector("[data-live-polygon]").hasAttribute("hidden"));
+    await page.waitForFunction(() => window.workerLog.filter(entry => entry.type === "detect").length >= 12);
+    assert.equal(await page.locator(".scan-crop").count(), 0, "no capture while the page moves");
+    const polygon = await page.evaluate(() => {
+      const element = document.querySelector("[data-live-polygon]"), points = element.getAttribute("points").trim().split(/\s+/).map(pair => pair.split(",").map(Number));
+      const area = Math.abs(points.reduce((sum, p, i) => { const q = points[(i + 1) % points.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+      return { hidden: element.hasAttribute("hidden"), display: getComputedStyle(element).display, points, area };
+    });
+    assert.ok(!polygon.hidden && polygon.display !== "none" && polygon.points.length === 4 && polygon.area > 2000 && polygon.points.every(p => p.every(v => v >= 0 && v <= 100)), `the polygon outlines the page: ${JSON.stringify(polygon)}`);
+    assert.equal(await page.locator("[data-live-shutter]").isEnabled(), true);
+    const layout = await page.evaluate(() => {
+      const rect = el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; };
+      return { frame: rect(document.querySelector("[data-live-frame]")), shutter: rect(document.querySelector("[data-live-shutter]")), status: document.querySelector("[data-live-status]").textContent, viewport: [innerWidth, innerHeight] };
+    });
+    assert.ok(layout.frame[2] - layout.frame[0] > 100 && layout.frame[3] - layout.frame[1] > 100, `camera frame is laid out: ${JSON.stringify(layout)}`);
+    assert.ok(layout.shutter[3] <= layout.viewport[1] && layout.shutter[1] >= layout.frame[3] - 1, `shutter below the frame and on screen: ${JSON.stringify(layout)}`);
+    assert.ok(Math.abs((layout.frame[2] - layout.frame[0]) / (layout.frame[3] - layout.frame[1]) - .75) < .02, `frame keeps the 3:4 video proportions: ${JSON.stringify(layout)}`);
+    await mkdir("test-artifacts", { recursive: true });
+    await page.screenshot({ path: `test-artifacts/live-camera-${engine.name()}.png` });
+    // 2. Still page: lock within a few detections, then the review opens with the hint.
+    const before = await detectCount();
+    await page.evaluate(() => { window.sceneMoving = false; });
+    await page.waitForSelector(".scan-crop");
+    assert.ok(await detectCount() - before <= 15, `locks within a few frames after the page holds still (${await detectCount() - before})`);
+    assert.equal(await page.locator(".scan-live").count(), 0, "the live view closes when the review opens");
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    const handover = await page.evaluate(() => ({ workers: window.workerCount, init: window.workerLog.find(entry => entry.type === "init"), result: window.workerLog.find(entry => entry.type === "init-result") }));
+    assert.equal(handover.workers, 1, "the review reuses the live view's worker");
+    assert.equal(handover.init?.hint, true, "the captured frame carries the detection hint");
+    assert.deepEqual([handover.result?.hintUsed, handover.result?.detected], [true, true], JSON.stringify(handover));
+    assert.equal(await tracksEnded(), true, "camera tracks stop once the frame is captured");
+    assert.match(await page.locator("[data-crop-status]").textContent(), /בדוק שכל התעודה נראית/);
+    // 3. Retake returns to the camera; cancelling it keeps no page.
+    await page.locator("[data-crop-retake-button]").tap();
+    await page.waitForSelector(".scan-live");
+    await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    assert.equal(await page.locator(".scan-crop").count(), 0);
+    await page.locator("[data-live-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.equal(await tracksEnded(), true, "cancelling stops the camera");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0]?.[1].files.length ?? 0), 0);
+    // 4. Hiding the tab pauses the camera and stops its tracks; showing it resumes.
+    await page.evaluate(() => { window.sceneMoving = true; });
+    await cameraLabel.tap();
+    await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    const streamsBefore = await page.evaluate(() => window.liveStreams.length);
+    await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => true, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await page.waitForFunction(() => !document.querySelector("[data-live-paused]").hidden);
+    assert.equal(await tracksEnded(), true, "a hidden tab releases the camera");
+    await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
+    await page.waitForFunction(streams => window.liveStreams.length > streams && document.querySelector("[data-live-paused]").hidden && document.querySelector("[data-live-video]").videoWidth === 1800, streamsBefore);
+    // 5. Approval saves the review's own result, byte for byte.
+    await page.evaluate(() => { window.sceneMoving = false; });
+    await page.waitForSelector(".scan-crop");
+    await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+    await page.locator("[data-crop-accept]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy && window.scanDrafts()[0]?.[1].files.length === 1);
+    assert.equal(await page.evaluate(async () => {
+      const saved = window.scanDrafts()[0][1].files[0], blob = window.workerLog.filter(entry => entry.type === "init-result").at(-1).blob;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      return saved.mime === "image/jpeg" && btoa(binary) === saved.data;
+    }), true, "the saved page is the worker's own output");
+    // 6. A stream below 1600px falls back to the phone camera and stays out of the way afterwards.
+    await page.evaluate(() => { window.cameraMode = "small"; });
+    await cameraLabel.tap();
+    await page.waitForFunction(() => !document.querySelector("[data-live-unavailable]")?.hidden);
+    assert.equal(await page.locator("[data-live-fallback]").count(), 1, "the overlay offers the phone camera");
+    assert.equal(await tracksEnded(), true, "the small stream is released");
+    await page.locator("[data-live-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.match(await page.locator("#scan-status").textContent(), /מצלמת הטלפון/);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), cameraLabel.tap()]);
+    assert.ok(chooser, "after a failure the button opens the phone camera natively");
+    assert.equal(await page.locator(".scan-live").count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+    await page.close();
+    // 7. Fresh page: turning the phone to landscape keeps the frame, shutter and
+    // cancel on screen; a denied permission gives the same fallback as above.
+    const denied = await scannerPage(t, engine);
+    await denied.evaluate(() => window.openScanner());
+    await denied.evaluate(fakeCamera);
+    await denied.locator("label:has(#camera-file)").tap();
+    await denied.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+    await denied.setViewportSize({ width: 844, height: 390 });
+    const landscapeLayout = () => denied.evaluate(() => {
+      const rect = el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; };
+      return { frame: rect(document.querySelector("[data-live-frame]")), shutter: rect(document.querySelector("[data-live-shutter]")), cancel: rect(document.querySelector("[data-live-cancel]")), viewport: [innerWidth, innerHeight] };
+    });
+    await denied.waitForFunction(() => innerWidth === 844 && document.querySelector("[data-live-frame]").getBoundingClientRect().height < 390);
+    const landscape = await landscapeLayout();
+    for (const [name, box] of Object.entries({ frame: landscape.frame, shutter: landscape.shutter, cancel: landscape.cancel }))
+      assert.ok(box[0] >= 0 && box[1] >= 0 && box[2] <= landscape.viewport[0] && box[3] <= landscape.viewport[1] && box[2] > box[0] && box[3] > box[1], `${name} on screen in landscape: ${JSON.stringify(landscape)}`);
+    assert.ok(Math.abs((landscape.frame[2] - landscape.frame[0]) / (landscape.frame[3] - landscape.frame[1]) - .75) < .03, `the portrait video keeps its proportions in landscape: ${JSON.stringify(landscape)}`);
+    await denied.screenshot({ path: `test-artifacts/live-camera-landscape-${engine.name()}.png` });
+    await denied.locator("[data-live-cancel]").tap();
+    await denied.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    await denied.setViewportSize(phoneOptions(engine).viewport);
+    await denied.evaluate(() => { window.cameraMode = "denied"; });
+    await denied.locator("label:has(#camera-file)").tap();
+    await denied.waitForFunction(() => !document.querySelector("[data-live-unavailable]")?.hidden);
+    await denied.locator("[data-live-cancel]").tap();
+    await denied.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    const [deniedChooser] = await Promise.all([denied.waitForEvent("filechooser"), denied.locator("label:has(#camera-file)").tap()]);
+    assert.ok(deniedChooser, "a denied permission hands the button to the phone camera");
+    assert.deepEqual(await denied.evaluate(() => window.scannerCspViolations), []);
   });
 }
 
@@ -1035,10 +1378,11 @@ for (const engine of [chromium, webkit]) {
         const selection = input.onchange();
         for (let i = 0; i < 8; i++) {
           const deadline = Date.now() + 15000;
-          while (!document.querySelector("[data-crop-original]")) {
+          while (!document.querySelector("[data-crop-adjust]") || document.querySelector("[data-crop-adjust]").disabled) {
             if (Date.now() > deadline) throw Error("Missing crop view");
             await new Promise(resolve => setTimeout(resolve, 10));
           }
+          document.querySelector("[data-crop-adjust]").click();
           document.querySelector("[data-crop-original]").click();
           while ((drafts.get("scan")?.files.length || 0) <= i) {
             if (Date.now() > deadline) throw Error("Page was not retained");

@@ -59,6 +59,8 @@ export function createBrowserCheckServer() {
     if (
       [
         "/image-upload.js",
+        "/image-worker.js",
+        "/live-capture.js",
         "/drafts.js",
         "/preview.js",
         "/export.js",

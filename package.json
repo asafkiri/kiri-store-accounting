@@ -10,7 +10,8 @@
     "dev": "node scripts/serve.mjs",
     "build": "node scripts/build.mjs",
     "test": "node --test test/*.test.js",
-    "test:browser": "node --test --test-concurrency=1 test/browser.integration.mjs"
+    "test:browser": "node --test --test-concurrency=1 test/browser.integration.mjs",
+    "private-detect": "node scripts/private-detect.mjs"
   },
   "dependencies": {
     "firebase": "12.2.1"
