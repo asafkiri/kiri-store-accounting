@@ -1869,10 +1869,10 @@ for (const engine of [chromium, webkit]) {
     await mkdir('test-artifacts', { recursive: true });
     await page.screenshot({ path: `test-artifacts/warning-edit-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-quick-choice="next"]').click();
-    await page.locator('[data-warning-edit="documentNumber"]').waitFor();
-    assert.equal(data.invoices.some(i => i.documentNumber === 'AMB-21'), false);
-    await page.locator('[data-quick-choice="next"]').click();
+    // The correction answers the note it was opened from: the only note here is
+    // done, so the review continues to the summary instead of back to it.
     await page.locator('.quick-summary-grid').waitFor();
+    assert.equal(data.invoices.some(i => i.documentNumber === 'AMB-21'), false, 'nothing is saved without the final approval');
     assert.match(await page.locator('.quick-summary-grid').innerText(), /AMB-21/);
     await page.locator('.quick-invoice [type="submit"]').click();
     await page.locator('.save-confirmation').waitFor();
