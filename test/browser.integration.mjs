@@ -1535,7 +1535,7 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator('.month-folder,.supplier-folder').count(), 0);
     assert.equal(await supplier.locator('.document-card').count(), 1);
     const documentTitle = await supplier.locator(".document-card-heading > div > strong").boundingBox();
-    const documentMeta = await supplier.locator(".document-card-heading .document-meta").boundingBox();
+    const documentMeta = await supplier.locator(".document-card-heading > div > strong + .document-meta").boundingBox();
     assert.ok(documentMeta.y >= documentTitle.y + documentTitle.height - 1, "invoice number and date occupy separate readable lines");
     await supplier.locator('[data-action="documents"]').click();
     assert.equal(await page.locator('#modal [data-open-document]').count(), 2);
