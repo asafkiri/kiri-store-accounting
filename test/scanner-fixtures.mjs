@@ -304,12 +304,7 @@ export function installScannerFixtures(window = globalThis.window) {
         request: async (path, options) => {
           window.scanRequests.push({ path, body: structuredClone(options?.body) });
           if (path === "documents") return { documents: options.body.files.map((_, i) => ({ id: `attachment-${i}` })) };
-          return { id: "scan-fixture", status: "completed", attachmentIds: ["attachment-0"], result: {
-            supplierName: "אסם", documentNumber: "fixture-1", documentType: "invoice", invoiceDate: "2026-09-11",
-            subtotalAgorot: 338550, vatAgorot: 60941, totalAgorot: 399500, finalAgorot: 399500,
-            deductions: [{ label: "הנחה", amountAgorot: 93728, includedInTotal: true }, { label: "הפרש עיגול", amountAgorot: 9, includedInTotal: true }],
-            uncertainFields: [], warnings: [], needsReview: false,
-          } };
+          throw Error("unexpected request " + path);
         },
         save: async value => { window.invoiceSaves.push(value); return { record: { id: "invoice-fixture" } }; },
       },

@@ -10,11 +10,7 @@ import {
   monthLabel,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
-import {
-  supplierPickerMarkup,
-  bindSupplierPicker,
-  matchSupplier,
-} from "./supplier-picker.js";
+import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
 import { creditSignIssues } from "./credit.js";
 import { isValidTaxId, normalizeTaxId } from "./tax-id.js";
 import { hasDraftContent } from "./draft-activity.js";
@@ -27,8 +23,7 @@ import {
 
 async function removeLinkedScan(ctx, draft) {
   const scan = await ctx.drafts.load("scan");
-  if ((draft.fields.scanJobId && scan?.jobId === draft.fields.scanJobId) ||
-    (scan?.attachmentIds?.length && scan.attachmentIds.every(id => draft.fields.attachmentIds?.includes(id))))
+  if (scan?.attachmentIds?.length && scan.attachmentIds.every(id => draft.fields.attachmentIds?.includes(id)))
     await ctx.drafts.remove("scan");
 }
 
@@ -433,19 +428,6 @@ export function invoiceMutation(draft, values, record = null) {
                 },
               }
             : {}),
-          // Attach the printed identifier only to the supplier this document
-          // was matched to or confirmed against. Choosing another one from the
-          // list is an override: binding the number there would silently
-          // misfile every later invoice from the supplier that printed it.
-          ...(!draft.newSupplier &&
-          !draft.reactivateSupplier &&
-          draft.scan?.result?.supplierTaxIds?.length &&
-          values.supplierId &&
-          [draft.bindSupplierId, draft.matchedSupplierId].includes(
-            values.supplierId,
-          )
-            ? { bindTaxIds: draft.scan.result.supplierTaxIds }
-            : {}),
           documentNumber: values.documentNumber,
           invoiceDate: values.invoiceDate,
           documentType: values.documentType,
@@ -460,8 +442,7 @@ export function invoiceMutation(draft, values, record = null) {
           })),
           notes: values.notes,
           attachmentIds: draft.fields.attachmentIds,
-          source: draft.fields.source,
-          scanJobId: draft.fields.scanJobId,
+          source: "manual",
           reviewConfirmed: values.review === "on",
         },
         draft.version,
@@ -480,54 +461,31 @@ export function invoiceMutation(draft, values, record = null) {
 export async function invoiceForm(
   ctx,
   record = null,
-  scan = null,
   manualAttachments = [],
   options = {},
 ) {
   const key = "invoice",
     old = await ctx.drafts.load(key);
-  let draft = await matchingDraft(
-    ctx,
-    key,
-    old,
-    record,
-    (!scan || old?.scan?.id === scan.id) && !manualAttachments.length,
-  );
+  let draft = await matchingDraft(ctx, key, old, record, !manualAttachments.length);
   if (!draft) {
-    const r = scan?.result;
-    const matched = record ? null : matchSupplier(ctx.data.suppliers, r);
     draft = {
       mode: record ? "edit" : "new",
       recordId: record?.id || crypto.randomUUID(),
       version: record?.version || 0,
-      scan: scan || null,
-      // Remembering who the match proposed keeps a later manual override from
-      // attaching this document's printed identifier to the wrong supplier.
-      matchedSupplierId: matched?.id || null,
       fields: {
-        supplierId: record?.supplierId || matched?.id || "",
-        // A matched supplier shows the name it carries here, not the one the
-        // document printed: ד.מ.ד שיווק is filed as תנובה קפואים.
+        supplierId: record?.supplierId || "",
         supplierName: record
-          ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name ||
-            ""
-          : matched
-            ? matched.name
-            : r?.uncertainFields?.includes("supplierName")
-              ? ""
-              : r?.supplierName || "",
-        documentNumber: record?.documentNumber || r?.documentNumber || "",
-        invoiceDate: record?.invoiceDate || (r ? r.invoiceDate || "" : today()),
-        documentType:
-          record?.documentType || (r ? r.documentType || "" : "invoice"),
-        subtotal: moneyInput(
-          record ? record.subtotalAgorot : r?.subtotalAgorot,
-        ),
-        vat: moneyInput(record ? record.vatAgorot : r?.vatAgorot),
-        total: moneyInput(record ? record.totalAgorot : r?.totalAgorot),
-        final: moneyInput(record ? record.finalAgorot : r?.finalAgorot),
+          ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name || ""
+          : "",
+        documentNumber: record?.documentNumber || "",
+        invoiceDate: record?.invoiceDate || today(),
+        documentType: record?.documentType || "invoice",
+        subtotal: moneyInput(record?.subtotalAgorot),
+        vat: moneyInput(record?.vatAgorot),
+        total: moneyInput(record?.totalAgorot),
+        final: moneyInput(record?.finalAgorot),
         notes: record?.notes || "",
-        deductions: (record?.deductions || r?.deductions || []).map((d) => ({
+        deductions: (record?.deductions || []).map((d) => ({
           label: d.label || "",
           amount: moneyInput(d.amountAgorot),
           included:
@@ -537,42 +495,34 @@ export async function invoiceForm(
                 ? "yes"
                 : "no",
         })),
-        attachmentIds:
-          record?.attachmentIds || scan?.attachmentIds || manualAttachments,
-        source: record?.source || (scan ? "ai" : "manual"),
-        scanJobId: record?.scanJobId || scan?.id || null,
+        attachmentIds: record?.attachmentIds || manualAttachments,
+        source: "manual",
       },
     };
   }
-  const f = draft.fields,
-    r = draft.scan?.result;
-  const uncertain = (k) =>
-    Boolean(r && (r[k] == null || r.uncertainFields?.includes(k)));
-  const read = (k, m = false) =>
-    r ? (r[k] === null ? "לא זוהה" : m ? money(r[k]) : r[k]) : "";
+  const f = draft.fields;
   if (f.supplierName === undefined)
     f.supplierName =
       draft.newSupplier?.name ||
       ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name ||
-      (uncertain("supplierName") ? "" : r?.supplierName || "");
-  // A new invoice is a short run of questions whether it arrived with a scan
-  // or is typed from the paper; a resumed draft stays in the flow it began in.
-  if (!record && !options.fullEditor && (r || options.quick || draft.quick)) return quickInvoiceReview(ctx, draft, {
+      "";
+  // A new invoice is a short run of questions typed from the paper; a resumed
+  // draft stays in the flow it began in. The full form edits saved invoices
+  // and stays behind the questions for the complex case.
+  if (!record && !options.fullEditor && (options.quick || draft.quick)) return quickInvoiceReview(ctx, draft, {
     bindDraft, footer, buildMutation: values => invoiceMutation(draft, values),
-    openEditor: () => invoiceForm(ctx, null, draft.scan, [], { fullEditor: true }),
+    openEditor: () => invoiceForm(ctx, null, [], { fullEditor: true }),
   });
   const root = ctx.dialog(
-    record ? "עריכת חשבונית" : r ? "בדיקת החשבונית שנסרקה" : "הוספת חשבונית",
+    record ? "עריכת חשבונית" : "הוספת חשבונית",
     `${staleNotice(old, record, draft)}<form id="invoice-form">
-    ${r ? `<div class="notice ${r.needsReview ? "warning" : ""}"><strong>${r.needsReview ? "יש שדות שדורשים בדיקה" : "הסריקה מוכנה לבדיקה"}</strong><p>ליד השדות מופיע מה נקרא. הערכים בתיבות הם אלה שיישמרו.</p>${r.warnings.map((w) => `<p>${e(w)}</p>`).join("")}</div>` : ""}
-    ${r && r.documentType && !["invoice", "credit"].includes(r.documentType) ? '<p class="notice warning" role="alert">הסריקה זיהתה מסמך שאינו חשבונית. כאן שומרים חשבוניות וחשבוניות זיכוי בלבד. יש לבדוק את המסמך המקורי לפני שמירה.</p>' : ""}
-    <div class="form-grid">${r ? `<p class="read-value wide">ספק שנקרא: ${e(r.supplierName || "לא זוהה")} · סוג: ${e(types[r.documentType] || "לא זוהה")}</p>` : ""}${supplierPickerMarkup(f, uncertain("supplierName"), read("supplierName"))}
-      ${field("מספר חשבונית", "documentNumber", f.documentNumber, { required: true, read: read("documentNumber"), uncertain: uncertain("documentNumber") })}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true, read: read("invoiceDate"), uncertain: uncertain("invoiceDate") })}
-      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true, uncertain: uncertain("documentType") || Boolean(r && !["invoice", "credit"].includes(r.documentType)), read: r ? types[r.documentType] || "לא זוהה" : "" })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal, { read: read("subtotalAgorot", true), uncertain: uncertain("subtotalAgorot") })}${field("מע״מ כפי שרשום", "vat", f.vat, { read: read("vatAgorot", true), uncertain: uncertain("vatAgorot"), hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
-      ${field("סכום כולל מע״מ", "total", f.total, { required: true, read: read("totalAgorot", true), uncertain: uncertain("totalAgorot"), wide: true })}
+    <div class="form-grid">${supplierPickerMarkup(f)}
+      ${field("מספר חשבונית", "documentNumber", f.documentNumber, { required: true })}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true })}
+      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal)}${field("מע״מ כפי שרשום", "vat", f.vat, { hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
+      ${field("סכום כולל מע״מ", "total", f.total, { required: true, wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
-    <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true, read: read("finalAgorot", true), uncertain: uncertain("finalAgorot") })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
-    <div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך. המספרים המקוריים שנקראו נשארים מוצגים לבדיקה.</div>
+    <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
+    <div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך.</div>
     <div id="arithmetic-note" class="notice warning" hidden></div>
     ${f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : ""}
     <label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>${footer("שמור חשבונית")}</form>`,
@@ -582,7 +532,7 @@ export async function invoiceForm(
     $("#deductions-list", form).innerHTML = f.deductions
       .map(
         (d, i) =>
-          `<div class="deduction-row" data-index="${i}">${field("סיבת ההפחתה", "deduction-label-" + i, d.label, { required: true })}${field("סכום", "deduction-amount-" + i, d.amount, { required: true })}${select("כלולה בסכום המסמך?", "deduction-included-" + i, d.included, { unknown: "יש לבדוק", yes: "כן, כבר כלולה", no: "לא, להפחית בנוסף" })}<button class="icon-button danger" type="button" aria-label="הסר הפחתה" data-remove-deduction="${i}">${icon("close")}</button>${r?.deductions[i] ? `<small class="wide read-value">נקרא: ${e(r.deductions[i].label || "לא זוהה")} · ${e(money(r.deductions[i].amountAgorot))} · ${r.deductions[i].includedInTotal === null ? "לא ידוע אם כלולה" : r.deductions[i].includedInTotal ? "כלולה בסכום" : "נוספת"}</small>` : ""}</div>`,
+          `<div class="deduction-row" data-index="${i}">${field("סיבת ההפחתה", "deduction-label-" + i, d.label, { required: true })}${field("סכום", "deduction-amount-" + i, d.amount, { required: true })}${select("כלולה בסכום המסמך?", "deduction-included-" + i, d.included, { unknown: "יש לבדוק", yes: "כן, כבר כלולה", no: "לא, להפחית בנוסף" })}<button class="icon-button danger" type="button" aria-label="הסר הפחתה" data-remove-deduction="${i}">${icon("close")}</button></div>`,
       )
       .join("");
   };

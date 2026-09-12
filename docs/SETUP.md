@@ -2,7 +2,7 @@
 
 הפרויקט: **kiri-store-accounting**, מספר **292191260602**. השירות הקיים: **kiri-store-accounting-ai-scan**, אזור **us-east1**. כתובת האפליקציה: **https://kiri-store-accounting.web.app**.
 
-אין ליצור project חדש, Cloud Run חדש, מפתח OpenAI חדש או Realtime Database. הדפדפן ייגש לנתונים רק דרך השרת.
+אין ליצור project חדש, Cloud Run חדש או Realtime Database. הדפדפן ייגש לנתונים רק דרך השרת.
 
 ## 1. בדיקת בניית השרת
 
@@ -16,23 +16,20 @@
 
 ## 2. המספר המורשה — נשאר פרטי
 
-האפליקציה אינה מפעילה עוד סריקת AI: הפרטים מוקלדים מהנייר אחרי הצילום. אחרי שגרסה זו באוויר אפשר להסיר את הסוד `OPENAI_API_KEY` מה־revision; השרת ממשיך לעלות בלעדיו ורק נתיבי הסריקה, שאינם בשימוש, מחזירים 503. אין להסיר אותו לפני שהגרסה החדשה פורסמה.
+האפליקציה והשרת אינם משתמשים עוד ב־OpenAI. אפשר להסיר מה־revision את הסוד `OPENAI_API_KEY` ואת `OPENAI_MODEL`; השרת אינו קורא אותם.
 
 1. בתוך שירות Cloud Run הקיים לחץ **Edit & deploy new revision**.
 2. עבור ל־**Containers → Variables & Secrets**.
-3. השאר ללא שינוי את הסוד `OPENAI_API_KEY` שמפנה ל־`OPENAI_API_KEY:latest`.
-4. השאר `OPENAI_MODEL=gpt-5.6-luna`.
-5. הוסף משתנה סביבה **ALLOWED_PHONE_NUMBER**. הזן **רק במסך Google Cloud** את המספר של אבא בפורמט E.164: קידומת המדינה, בלי האפס הראשון ובלי רווחים. אל תשלח אותו לריפו או ל־README.
-6. ניתן במקום ערך רגיל להפנות את המשתנה לסוד ייעודי ב־Secret Manager. זה אופציונלי; אין צורך לשנות את סוד OpenAI.
-7. הוסף/ודא `FIREBASE_PROJECT_ID=kiri-store-accounting` ו־`FIREBASE_STORAGE_BUCKET=kiri-store-accounting.firebasestorage.app`.
-8. הוסף/ודא `NODE_ENV=production`.
-9. `ALLOWED_ORIGIN` יכול להיות `https://kiri-store-accounting.web.app,https://kiri-store-accounting.firebaseapp.com` — זו גם ברירת המחדל בקוד.
-10. `ALLOWED_UID` הוא אופציונלי. השאר ריק אם רוצים לאשר לפי המספר בלבד; אם מוגדר בנוסף, נדרשת התאמה גם ל־UID.
-11. ודא את המשאבים הקיימים: min=0, max=2, concurrency=2, memory=512 MiB, CPU=1, timeout=60 שניות, request-based billing.
-12. לפני Deploy: מספר שאינו בפורמט E.164 או `OPENAI_MODEL` שאינו `gpt-5.6-luna` מונעים מה־revision לעלות. יש לתקן את הערך במסך Variables & Secrets, בלי לפרסם אותו.
-13. לחץ Deploy. בלי allowlist השרת עולה לבדיקת health, אבל חוסם את המערכת ב־503. זו התנהגות מכוונת.
+3. הוסף משתנה סביבה **ALLOWED_PHONE_NUMBER**. הזן **רק במסך Google Cloud** את המספר של אבא בפורמט E.164: קידומת המדינה, בלי האפס הראשון ובלי רווחים. אל תשלח אותו לריפו או ל־README.
+4. ניתן במקום ערך רגיל להפנות את המשתנה לסוד ייעודי ב־Secret Manager. זה אופציונלי.
+5. הוסף/ודא `FIREBASE_PROJECT_ID=kiri-store-accounting` ו־`FIREBASE_STORAGE_BUCKET=kiri-store-accounting.firebasestorage.app`.
+6. הוסף/ודא `NODE_ENV=production`.
+7. `ALLOWED_ORIGIN` יכול להיות `https://kiri-store-accounting.web.app,https://kiri-store-accounting.firebaseapp.com` — זו גם ברירת המחדל בקוד.
+8. `ALLOWED_UID` הוא אופציונלי. השאר ריק אם רוצים לאשר לפי המספר בלבד; אם מוגדר בנוסף, נדרשת התאמה גם ל־UID.
+9. ודא את המשאבים הקיימים: min=0, max=2, concurrency=2, memory=512 MiB, CPU=1, timeout=60 שניות, request-based billing.
+10. לפני Deploy: מספר שאינו בפורמט E.164 מונע מה־revision לעלות. יש לתקן את הערך במסך Variables & Secrets, בלי לפרסם אותו.
+11. לחץ Deploy. בלי allowlist השרת עולה לבדיקת health, אבל חוסם את המערכת ב־503. זו התנהגות מכוונת.
 
-ברירת המחדל: עד 30 סריקות ביום ו־300 בחודש. אפשר לשנות `MAX_SCANS_PER_DAY` / `MAX_SCANS_PER_MONTH`. אלו מגבלות מספר בקשות; אינן מבטיחות חשבון של עד 25 ₪. אין escalation או retry אוטומטי.
 
 ## 3. הרשאות Google Cloud
 
@@ -45,7 +42,6 @@ Service account של ה־revision צריך להישאר:
 - לקרוא ולכתוב ב־Firestore — לדוגמה `Cloud Datastore User` (`roles/datastore.user`).
 - לקרוא משתמשי Firebase Auth לצורך בדיקת ביטול token — לדוגמה `Firebase Authentication Viewer` (`roles/firebaseauth.viewer`), או הרשאה קיימת שמכילה יכולת זו.
 - לקרוא וליצור אובייקטים ב־bucket הקיים — `Storage Object User` (`roles/storage.objectUser`) ברמת bucket מספיקה לפעולות הנדרשות.
-- לקרוא את סוד OpenAI — `Secret Manager Secret Accessor`, שכבר הוגדר לפי תיאור ההקמה.
 
 הוסף רק אם חסרה יכולת בפועל. `firebase-adminsdk` עשוי כבר להחזיק בהרשאות מתאימות.
 
@@ -129,7 +125,6 @@ npx firebase-tools@14.16.0 deploy --project kiri-store-accounting --only hosting
 | health לא עולה | build, Dockerfile, revision Ready, `$PORT`, והגעה ציבורית לשירות |
 | me עובד אבל שמירה נכשלת | הרשאות IAM ל־Firestore, מסד `(default)` וה־service account הפעיל |
 | העלאת מסמך נכשלת | הרשאות bucket, סוג וגודל קובץ; עד 8 עמודים ו־12 מגה |
-| הסריקה אינה זמינה | Secret reference, Secret Accessor, `OPENAI_MODEL` והזמינות בחשבון OpenAI |
 | התנגשות גרסאות / 409 | הטיוטה נשמרת; טען את העדכון מהשרת ובדוק לפני עריכה נוספת |
 
 לוגים נבדקים לפי request ID/קטגוריית השגיאה. אין לשלוח מפתח OpenAI, token או SMS code. קוד השרת אינו מבטיח שספק ה־AI הצליח לקרוא מסמך מסוים; הסקירה האנושית נשארת הכרחית.

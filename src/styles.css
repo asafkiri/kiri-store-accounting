@@ -780,14 +780,6 @@ dialog::backdrop {
   padding: 14px;
   margin: 15px 0;
 }
-.uncertain input {
-  border: 2px solid #c7983e;
-  background: #fffaf0;
-}
-.read-value {
-  font-size: 16px;
-  color: #7e5c29 !important;
-}
 .deductions {
   margin: 24px 0;
 }
@@ -987,8 +979,6 @@ dialog.crop-modal {
 .vat-summary > div { display: flex; justify-content: space-between; gap: 12px; padding: 12px 0; }
 .vat-summary > div + div { border-top: 1px solid var(--line); }
 .vat-summary dd { margin: 0; font-weight: 700; }
-.accountant-tools { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
-.accountant-tools summary { cursor: pointer; min-height: 44px; color: #36506f; }
 .supplier-removal { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 12px; }
 .delete-form button[type=submit] { background: var(--danger); }
 .delete-form [data-discard-draft] { color: #185fb7; }
@@ -1184,13 +1174,6 @@ dialog.crop-modal {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-.compare-row {
-  padding: 16px 0;
-  border-bottom: 1px solid var(--line);
-}
-.compare-row p {
-  font-size: 16px;
 }
 .preview-dialog {
   width: min(1000px, calc(100% - 20px));
@@ -1742,9 +1725,6 @@ dialog.crop-modal {
 .quick-question .field > span { font-size: 15px; }
 .quick-choice { width: 100%; display: flex; flex-direction: column; gap: 3px; justify-content: center; min-height: 52px; padding: 12px; }
 .quick-choice small { font-size: 14px; font-weight: 400; }
-.quick-other { margin-top: 4px; }
-.quick-other > summary { min-height: 44px; color: var(--blue); cursor: pointer; }
-.quick-other .quick-choice, .quick-other .field { margin-top: 8px; }
 .quick-question .supplier-picker { border: 0; padding: 0; background: transparent; }
 .quick-question .supplier-picker p { font-size: 15px; margin: 8px 0; }
 .quick-question .supplier-picker .primary { width: 100%; }
@@ -1811,8 +1791,6 @@ dialog.crop-modal {
 .month-share > strong { color: #653b8c; }
 .month-share p { font-size: .9rem; margin: 6px 0 12px; }
 .month-share .primary { background: #7538a1; width: 100%; }
-.warning-edits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.warning-edits .secondary { padding: 10px 8px; font-size: .9rem; }
 .quick-question .quick-full-editor { width: 100%; }
 .share-dialog { display: grid; gap: 12px; }
 .share-dialog p { margin: 0; }
@@ -1921,7 +1899,7 @@ dialog.crop-modal {
 .quick-total .quick-summary-row > span { width: auto; }
 .quick-payable { gap: 12px; flex-wrap: wrap; padding: 16px; }
 .quick-payable > strong { font-size: 28px; }
-.quick-amount-details, .quick-extras, .quick-deductions, .warning-other { margin: 10px 0; padding-block: 4px; border-block: 1px solid var(--line); font-size: 18px; }
+.quick-amount-details, .quick-extras, .quick-deductions { margin: 10px 0; padding-block: 4px; border-block: 1px solid var(--line); font-size: 18px; }
 .quick-extras[open] { padding-bottom: 18px; }
 .quick-reduction { margin-top: 14px; grid-template-columns: minmax(0, 1fr) 110px; }
 .quick-reduction input, .quick-notes textarea { min-height: 56px; font-size: 19px; }
@@ -1930,11 +1908,6 @@ dialog.crop-modal {
 .quick-notes { display: grid; gap: 8px; }
 .quick-choice { min-height: 64px; }
 .quick-invoice .form-footer > small { font-size: 17px; }
-.warning-edits, .date-candidates { display: grid; grid-template-columns: 1fr; gap: 12px; }
-.warning-edits .secondary { font-size: 19px; min-height: 60px; }
-.date-candidates { margin-block: 8px 16px; }
-.review-position { color: var(--muted); font-size: 18px; }
-.warning-other > .secondary { width: 100%; margin-top: 12px; }
 .paid-color-options { display: flex; flex-wrap: wrap; gap: 12px; }
 .paid-color-options [aria-pressed="true"] { border: 2px solid #185aaa; background: #edf3ff; }
 @media (max-width: 680px) {

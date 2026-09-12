@@ -534,7 +534,7 @@ export async function scanDialog(ctx, options = {}) {
       await uploadDocuments();
       stopWaiting();
       if (!root.isConnected) return;
-      await invoiceForm(ctx, null, null, draft.attachmentIds, { quick: true });
+      await invoiceForm(ctx, null, draft.attachmentIds, { quick: true });
     } catch (error) {
       status.hidden = true;
       showError(error);

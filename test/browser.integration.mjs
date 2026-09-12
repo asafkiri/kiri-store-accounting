@@ -601,7 +601,7 @@ for (const engine of [chromium, webkit]) {
     const saved = await page.evaluate(() => window.invoiceSaves[0].body.data);
     assert.deepEqual(saved.attachmentIds, ["attachment-0"]);
     assert.equal(saved.source, "manual");
-    assert.equal(saved.scanJobId, null);
+    assert.equal("scanJobId" in saved, false, "no reading to point at");
     assert.equal(saved.reviewConfirmed, true);
     assert.equal(saved.totalAgorot, 1000); assert.equal(saved.vatAgorot, 153); assert.equal(saved.subtotalAgorot, 847);
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
@@ -1236,35 +1236,32 @@ for (const engine of [chromium, webkit]) {
           },
         },
       };
-      window.openSupplierReview = (name) =>
-        invoiceForm(ctx, null, {
-          id: crypto.randomUUID(),
-          attachmentIds: [],
-          result: {
-            supplierName: name,
-            documentNumber: crypto.randomUUID(),
-            invoiceDate: "2026-09-10",
-            documentType: "invoice",
-            subtotalAgorot: null,
-            vatAgorot: null,
-            totalAgorot: 1200,
-            finalAgorot: 1200,
-            deductions: [],
-            uncertainFields: [],
-            needsReview: false,
-            warnings: [],
-          },
-        });
+      // The typed questions, opened without a photograph, with the supplier
+      // name typed into the picker exactly as it would be from the paper.
+      window.openSupplierReview = async (name) => {
+        await invoiceForm(ctx, null, [], { quick: true });
+        const input = document.querySelector("[name=supplierName]");
+        input.value = name;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      };
       await window.openSupplierReview("ספק מהצילום");
     });
+    // Choosing the supplier answers the first question; the rest are typed.
+    const answerTheRest = async () => {
+      await page.locator("[name=documentNumber]").fill(crypto.randomUUID().slice(0, 8));
+      await page.locator('[data-quick-choice="next"]').tap();
+      await page.locator("[name=total]").fill("12");
+      await page.locator('[data-quick-choice="next"]').tap();
+      await page.locator('[data-quick-choice="vat-rate"]').tap();
+      await page.locator('[data-quick-choice="next"]').tap();
+      await page.locator('.quick-invoice [type="submit"]').tap();
+    };
     const create = page.locator("[data-supplier-action=create]");
     const box = await create.boundingBox();
     assert.ok(box.height >= 48 && box.width >= 240);
     await create.tap();
     assert.equal(await page.evaluate(() => window.supplierRequests.length), 0);
-    await page.locator(".quick-other > summary").click();
-    await page.locator('[data-quick-choice="vat-unknown"]').tap();
-    await page.locator("[type=submit]").tap();
+    await answerTheRest();
     await page.waitForFunction(() => window.supplierRequests.length === 1);
     assert.match(
       await page.locator("#toast").innerText(),
@@ -1277,15 +1274,11 @@ for (const engine of [chromium, webkit]) {
       0,
     );
     await page.locator("[data-supplier-action=confirm]").tap();
-    await page.locator(".quick-other > summary").click();
-    await page.locator('[data-quick-choice="vat-unknown"]').tap();
-    await page.locator("[type=submit]").tap();
+    await answerTheRest();
     await page.waitForFunction(() => window.supplierRequests.length === 2);
     await page.evaluate(() => window.openSupplierReview("ספק לא פעיל"));
     await page.locator("[data-supplier-action=reactivate]").tap();
-    await page.locator(".quick-other > summary").click();
-    await page.locator('[data-quick-choice="vat-unknown"]').tap();
-    await page.locator("[type=submit]").tap();
+    await answerTheRest();
     await page.waitForFunction(() => window.supplierRequests.length === 3);
     const requests = await page.evaluate(() => window.supplierRequests);
     assert.equal(requests[0].body.data.newSupplier.name, "ספק מהצילום");
@@ -1781,7 +1774,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('.draft-banner[data-key="invoice"]').click();
     await page.locator(".quick-summary-grid").waitFor();
     assert.equal(await page.locator('[name="paymentReduction"]').inputValue(), "100");
-    assert.equal(requests.filter(r => r.path === "/api/v1/scan-invoice").length, 0, "nothing reads the document");
+    assert.equal(requests.some(r => r.path.startsWith("/api/v1/scan")), false, "nothing reads the document");
     await page.locator('.quick-invoice [type="submit"]').click();
     await page.locator('.save-confirmation').waitFor();
     await page.locator('[data-saved-done]').click();
