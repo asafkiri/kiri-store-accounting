@@ -65,11 +65,11 @@ export function cashCsv(items) {
       .join("\r\n")
   );
 }
-export async function download(content, name, type) {
+export async function download(content, name, type, { share = navigator.standalone } = {}) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
   const file = new File([blob], name, { type: blob.type });
   // Share is called from the user's click, before any await, in installed iOS.
-  if (navigator.standalone && navigator.share && navigator.canShare?.({ files: [file] })) {
+  if (share && navigator.share && navigator.canShare?.({ files: [file] })) {
     try { await navigator.share({ files: [file] }); return; }
     catch (error) { if (error?.name === "AbortError") return; }
   }

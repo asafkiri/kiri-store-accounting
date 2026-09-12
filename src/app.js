@@ -1,4 +1,5 @@
 import { previewDocument } from "./preview.js";
+import { shareDocuments } from "./document-sharing.js";
 import {
   initializeAuth,
   onAuthStateChanged,
@@ -36,7 +37,7 @@ import { invoiceCsv, cashCsv, download } from "./export.js";
 const ctx = {
   route: "invoices",
   filters: {},
-  folderState: {},
+  folderPath: {},
   limit: 80,
   data: { suppliers: [], invoices: [], dailyCash: [], settings: [] },
   version: 0,
@@ -174,6 +175,7 @@ ctx.reopen = async (key, id) => {
 };
 function navigate(route) {
   ctx.route = route;
+  ctx.folderPath = {};
   ctx.limit = 80;
   ctx.filters =
     route === "suppliers"
@@ -213,11 +215,7 @@ function bindShell() {
       ctx.limit = 80;
       ctx.render();
     };
-  for (const folder of root.querySelectorAll("[data-folder]"))
-    folder.ontoggle = () => {
-      if (folder.isConnected) ctx.folderState[folder.dataset.folder] = folder.open;
-    };
-  const search = $("#invoice-search") || $("#supplier-search");
+  const search = $("#invoice-search") || $("#supplier-search") || $("#check-search");
   if (search)
     search.oninput = () => {
       ctx.filters.q = search.value;
@@ -238,6 +236,25 @@ function bindShell() {
 async function action(type, data = {}) {
   const record = ctx.data.invoices.find((i) => i.id === data.id);
   switch (type) {
+    case "folder-month":
+      ctx.folderPath = { month: data.value };
+      ctx.limit = 80; ctx.render();
+      window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      return;
+    case "folder-supplier":
+      ctx.folderPath = { ...ctx.folderPath, supplierId: data.value };
+      ctx.limit = 80; ctx.render();
+      window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      return;
+    case "folder-back":
+      ctx.folderPath = ctx.folderPath.supplierId ? { month: ctx.folderPath.month } : {};
+      ctx.limit = 80; ctx.render(); window.scrollTo(0, 0);
+      ($("[data-folder-heading]") || $("#main"))?.focus({ preventScroll: true });
+      return;
+    case "share-month":
+      return shareDocuments(ctx, { month: data.month });
+    case "share-invoice":
+      return shareDocuments(ctx, { invoiceId: data.id });
     case "invoice":
       return invoiceForm(ctx);
     case "scan":
@@ -288,6 +305,7 @@ async function action(type, data = {}) {
       break;
     case "open-unpaid":
       ctx.filters = { status: "unpaid" };
+      ctx.folderPath = {};
       ctx.limit = 80;
       ctx.render();
       break;
@@ -310,6 +328,7 @@ async function action(type, data = {}) {
       const period = { ...ctx.filters };
       navigate("invoices");
       ctx.filters = { ...period, supplierId: data.id };
+      if (period.month) ctx.folderPath = { month: period.month, supplierId: data.id };
       ctx.render();
       break;
     }
@@ -529,7 +548,7 @@ function detail(i) {
     );
   const root = ctx.dialog(
     "חשבונית " + i.documentNumber,
-    `<dl class="details-list">${rows.map(([k, v]) => `<div><dt>${e(k)}</dt><dd>${e(v)}</dd></div>`).join("")}</dl>${i.deductions.length ? `<h3>הפחתות וניכויים</h3>${i.deductions.map((d) => `<p>${e(d.label)} · ${e(money(d.amountAgorot))} · ${d.includedInTotal ? "כלולה בסכום" : "נוספת"}</p>`).join("")}` : ""}${i.notes ? `<div class="notice">${e(i.notes)}</div>` : ""}${i.payment?.notes ? `<p>הערה לתשלום: ${e(i.payment.notes)}</p>` : ""}<section class="attachment-links"><strong>תמונות ומסמכים מצורפים</strong>${i.attachmentIds.length ? i.attachmentIds.map((id, n) => `<button class="secondary" data-open-document="${e(id)}">פתח מסמך ${n + 1}</button>`).join("") : "<p>לא צורפו תמונות או קבצים לחשבונית הזו.</p>"}</section><div class="row-actions"><button class="primary" data-detail-action="pay">${i.status === "paid" ? "ערוך תשלום" : "סמן כשולם"}</button><button class="secondary" data-detail-action="edit">ערוך חשבונית</button>${i.status === "paid" ? '<button class="text-button" data-detail-action="unpay">החזר ללא שולם</button>' : ""}<button class="text-button danger" data-detail-action="delete">מחק חשבונית</button></div>`,
+    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><dl class="details-list">${rows.map(([k, v]) => `<div><dt>${e(k)}</dt><dd>${e(v)}</dd></div>`).join("")}</dl>${i.deductions.length ? `<h3>הפחתות וניכויים</h3>${i.deductions.map((d) => `<p>${e(d.label)} · ${e(money(d.amountAgorot))} · ${d.includedInTotal ? "כלולה בסכום" : "נוספת"}</p>`).join("")}` : ""}${i.notes ? `<div class="notice">${e(i.notes)}</div>` : ""}${i.payment?.notes ? `<p>הערה לתשלום: ${e(i.payment.notes)}</p>` : ""}<section class="attachment-links"><strong>תמונות ומסמכים מצורפים</strong>${i.attachmentIds.length ? '<button class="secondary" data-detail-action="share-invoice">שתף את כל קבצי החשבונית</button>' : ""}${i.attachmentIds.length ? i.attachmentIds.map((id, n) => `<button class="secondary" data-open-document="${e(id)}">פתח מסמך ${n + 1}</button>`).join("") : "<p>לא צורפו תמונות או קבצים לחשבונית הזו.</p>"}</section><div class="row-actions"><button class="primary" data-detail-action="pay">${i.status === "paid" ? "ערוך תשלום" : "סמן כשולם"}</button><button class="secondary" data-detail-action="edit">ערוך חשבונית</button>${i.status === "paid" ? '<button class="text-button" data-detail-action="unpay">החזר ללא שולם</button>' : ""}<button class="text-button danger" data-detail-action="delete">מחק חשבונית</button></div>`,
   );
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
@@ -546,8 +565,10 @@ function detail(i) {
 }
 function documentList(i) {
   const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
-  ctx.dialog("צילומי חשבונית " + i.documentNumber,
-    `<p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${(i.attachmentIds || []).map((id, index) => `<button class="secondary" data-open-document="${e(id)}">${icon("image")} פתח עמוד / קובץ ${index + 1}</button>`).join("")}</div>`);
+  const root = ctx.dialog("צילומי חשבונית " + i.documentNumber,
+    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${(i.attachmentIds || []).map((id, index) => `<button class="secondary" data-open-document="${e(id)}">${icon("image")} פתח עמוד / קובץ ${index + 1}</button>`).join("")}</div><button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button><button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>`);
+  $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
+  $("[data-invoice-details]", root).onclick = () => detail(i);
 }
 function login() {
   codeSession?.clear();

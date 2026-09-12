@@ -1517,7 +1517,7 @@ for (const engine of [chromium, webkit]) {
     assert.ok(scan.y < 200, "primary scanning is immediately available");
     const monthFolders = page.locator(".month-folder");
     assert.equal(await monthFolders.count(), 2);
-    assert.equal(await monthFolders.first().getAttribute("data-folder"), "invoices:" + month);
+    assert.equal(await monthFolders.first().getAttribute("data-value"), month);
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/workspace-${engine.name()}.png`, fullPage: true });
     await page.locator(".scan-primary").click();
@@ -1527,19 +1527,29 @@ for (const engine of [chromium, webkit]) {
     await page.locator("[data-live-cancel]").click();
     await page.locator("[data-close-modal]").click();
     await page.locator('.sidebar [data-route="documents"]').click();
-    const current = page.locator(`[data-folder="photos:${month}"]`);
-    const supplier = current.locator(`[data-folder="photos:${month}:supplier-tnuva"]`);
-    await supplier.locator(":scope > summary").click();
-    assert.equal(await supplier.locator("[data-open-document]").count(), 2);
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    assert.equal(await page.locator('.month-folder,.document-card').count(), 0);
+    await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
+    const supplier = page.locator('.invoice-folders');
+    assert.equal(await page.locator('.month-folder,.supplier-folder').count(), 0);
+    assert.equal(await supplier.locator('.document-card').count(), 1);
     const documentTitle = await supplier.locator(".document-card-heading > div > strong").boundingBox();
     const documentMeta = await supplier.locator(".document-card-heading .document-meta").boundingBox();
     assert.ok(documentMeta.y >= documentTitle.y + documentTitle.height - 1, "invoice number and date occupy separate readable lines");
-    await supplier.locator("[data-open-document]").first().click();
+    await supplier.locator('[data-action="documents"]').click();
+    assert.equal(await page.locator('#modal [data-open-document]').count(), 2);
+    await page.locator('#modal [data-open-document]').first().click();
     await page.locator(".preview-dialog img").waitFor();
     assert.equal(requests.filter(r => r.path.startsWith("/api/v1/documents/")).length, 1);
     assert.ok(await page.locator("[data-preview-download]").isVisible());
     await page.locator("[data-preview-close]").click();
+    await page.locator('[data-close-modal]').first().click();
     await page.screenshot({ path: `test-artifacts/photos-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-action="folder-back"]').click();
+    assert.equal(await page.locator('.supplier-folder').count(), 2);
+    assert.equal(await page.locator('.document-card').count(), 0);
+    await page.locator('[data-action="folder-back"]').click();
+    assert.equal(await page.locator('.month-folder').count(), 2);
     await page.locator('.sidebar [data-route="cash"]').click();
     assert.equal(await page.locator('[name="month"]').inputValue(), month);
     assert.equal(await page.locator('[name="from"]').count(), 0);
@@ -1657,6 +1667,73 @@ for (const engine of [chromium, webkit]) {
     await page.reload();
     await page.locator('.topbar [data-route="settings"]').click();
     assert.match(await page.locator("main").innerText(), /17%/);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: monthly and single invoice sharing, cancel/retry and global check lookup`, { timeout: 60000 }, async t => {
+    const { server, requests, month, previous, data } = workspaceFixture();
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on('pageerror', err => errors.push(err.message));
+    await page.addInitScript(() => {
+      window.shareCalls = []; window.shareMode = 'cancel';
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: ({ files }) => files.length > 0 });
+      Object.defineProperty(navigator, 'share', { configurable: true, value: async ({ files }) => {
+        if (!navigator.userActivation.isActive) throw Error('Missing user activation');
+        window.shareCalls.push(files.map(file => ({ name: file.name, type: file.type, size: file.size })));
+        if (window.shareMode === 'cancel') throw new DOMException('Cancelled', 'AbortError');
+        if (window.shareMode === 'error') throw new DOMException('Unavailable', 'NotAllowedError');
+      } });
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.locator('[data-route="checks"]').click();
+    await page.locator('#check-search').fill('000123');
+    assert.equal(await page.locator('.invoice-card').count(), 1);
+    assert.match(await page.locator('.invoice-card').innerText(), /תנובה/);
+    assert.match(await page.locator('.check-reference').innerText(), /00012345/);
+    await page.locator('[data-action="detail"]').click();
+    assert.match(await page.locator('#modal').innerText(), /00012345/);
+    await page.locator('[data-close-modal]').first().click();
+    await page.locator('.sidebar [data-route="documents"]').click();
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
+    await page.locator('#invoice-search').fill('INV-101');
+    await page.locator('[data-action="share-month"]').click();
+    const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.share-files li').count(), 3, 'all suppliers and pages, regardless of folder/search');
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3);
+    await send.click();
+    assert.equal(await page.locator('[data-share-error]').isVisible(), false, 'cancel is not an error or a download');
+    assert.ok(await page.locator('.share-dialog').isVisible());
+    await page.evaluate(() => { window.shareMode = 'error'; }); await send.click();
+    await page.locator('[data-share-error]').waitFor({ state: 'visible' });
+    assert.ok(await page.locator('[data-share-zip]').isVisible());
+    await page.evaluate(() => { window.shareMode = 'success'; }); await send.click();
+    await page.waitForFunction(() => document.querySelector('[data-share-status]').textContent.startsWith('הוכנו כל'));
+    assert.equal((await page.evaluate(() => window.shareCalls.at(-1))).length, 3);
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3, 'share retry reuses prepared originals');
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const rect = await send.boundingBox(); assert.ok(rect.width <= width && rect.height >= 44);
+    }
+    await page.screenshot({ path: `test-artifacts/share-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-share-close]').click();
+    await page.locator('[data-action="share-invoice"]').click();
+    await page.locator('[data-share-send]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.share-files li').count(), 2);
+    await page.locator('[data-share-close]').click();
+    // Empty filtered directories still expose the parent/back navigation.
+    await page.locator('#invoice-search').fill('missing-invoice');
+    assert.ok(await page.locator('[data-action="folder-back"]').isVisible());
+    await page.locator('[data-action="folder-back"]').click();
+    await page.locator('#invoice-search').fill('');
+    assert.equal(await page.locator('.supplier-folder').count(), 2);
     assert.deepEqual(errors, []);
   });
 }

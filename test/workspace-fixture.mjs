@@ -16,7 +16,7 @@ export function workspaceFixture() {
   const invoice = (id, supplierId, invoiceDate, amount, attachmentIds = [], status = "unpaid") => ({
     id, supplierId, invoiceDate, documentNumber: id, documentType: "invoice", subtotalAgorot: amount,
     vatAgorot: 0, totalAgorot: amount, finalAgorot: amount, attachmentIds, deductions: [], status, version: 1,
-    ...(status === "paid" ? { payment: { method: "check", paymentDate: invoiceDate } } : {}),
+    ...(status === "paid" ? { payment: { method: "check", paymentDate: invoiceDate, checkNumber: id === "INV-099" ? "00012345" : "908070", checkDueDate: "2026-12-01" } } : {}),
   });
   const data = { full: true, version: 1, settings: [], suppliers, invoices: [
     invoice("INV-101", "supplier-tnuva", month + "-08", 125400, ["a".repeat(64), "b".repeat(64)]),
@@ -30,6 +30,10 @@ export function workspaceFixture() {
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const path = req.url.split("?")[0];
+    if (path === "/phone-preview") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end('<!doctype html><html><body style="margin:0;background:#dce3eb"><iframe title="תצוגת טלפון" src="/" style="display:block;width:390px;height:844px;border:0;margin:auto"></iframe></body></html>');
+    }
     if (path === "/") {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.end('<!doctype html><html lang="he" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/workspace/styles.css"><title>Workspace fixture</title><body><div id="app"></div><dialog id="modal" aria-labelledby="modal-title"></dialog><div id="toast"></div><script type="module" src="/workspace/app.js"></script></body></html>');

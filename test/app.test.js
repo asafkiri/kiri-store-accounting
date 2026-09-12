@@ -11,6 +11,7 @@ async function setup(t, sdk = {}) {
   t.after(() => dom.window.close());
   for (const k of ["window", "document", "Event", "FormData"])
     globalThis[k] = dom.window[k];
+  dom.window.scrollTo = () => {};
   dom.window.HTMLDialogElement.prototype.close = function () {
     this.open = false;
   };
@@ -162,10 +163,12 @@ test("successful sync renders server data even when local draft reads fail", asy
     namesError: new DOMException("closed", "InvalidStateError"),
     request: async path => path === "me" ? { uid: "owner" } : {
       full: true, version: 5, suppliers: [], dailyCash: [],
-      invoices: [{ id: "persisted-001", documentNumber: "SERVER-OK", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000 }],
+      invoices: [{ id: "persisted-001", documentNumber: "SERVER-OK", supplierId: "supplier-test", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000 }],
     },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-action="folder-month"]').click();
+  document.querySelector('[data-action="folder-supplier"]').click();
   assert.match(document.body.textContent, /SERVER-OK/);
   assert.match(document.body.textContent, /טיוטות במכשיר/);
   assert.doesNotMatch(document.body.textContent, /InvalidStateError|לא התקבל עדכון מהשרת/);
@@ -194,11 +197,13 @@ test("saved invoice exposes its attachments and opens the linked file through th
       if (path === "documents/" + id) return new Blob(["test photo"], { type: "image/jpeg" });
       return {
         full: true, version: 1, suppliers: [], dailyCash: [],
-        invoices: [{ id: "photo-invoice", documentNumber: "PHOTO-1", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000, deductions: [], attachmentIds: [id] }],
+        invoices: [{ id: "photo-invoice", documentNumber: "PHOTO-1", supplierId: "supplier-test", documentType: "invoice", invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000, deductions: [], attachmentIds: [id] }],
       };
     },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-action="folder-month"]').click();
+  document.querySelector('[data-action="folder-supplier"]').click();
   const card = document.querySelector('[data-action="detail"][data-id="photo-invoice"]');
   assert.match(card.textContent, /מסמך מצורף/);
   card.click();
@@ -211,21 +216,24 @@ test("saved invoice exposes its attachments and opens the linked file through th
   document.querySelector(".preview-dialog").onclose();
 });
 
-test("photo archive opens its file directly without opening invoice details or scanning again", async t => {
+test("photo archive opens month, supplier, invoice and file without scanning again", async t => {
   const id = "b".repeat(64), requests = [];
   await setup(t, {
     request: async (path, options) => {
       requests.push({ path, options });
       if (path === "me") return { uid: "owner" };
       if (path === "documents/" + id) return new Blob(["photo"], { type: "image/png" });
-      return { full: true, version: 1, suppliers: [], dailyCash: [], invoices: [{ id: "archive-invoice", documentNumber: "ARCHIVE", documentType: "invoice", invoiceDate: "2026-09-10", status: "paid", finalAgorot: 100, deductions: [], attachmentIds: [id] }] };
+      return { full: true, version: 1, suppliers: [], dailyCash: [], invoices: [{ id: "archive-invoice", documentNumber: "ARCHIVE", supplierId: "supplier-test", documentType: "invoice", invoiceDate: "2026-09-10", status: "paid", finalAgorot: 100, deductions: [], attachmentIds: [id] }] };
     },
   });
   await globalThis.appAuthCallback({});
   document.querySelector('[data-route="documents"]').click();
+  document.querySelector('[data-action="folder-month"]').click();
+  document.querySelector('[data-action="folder-supplier"]').click();
+  document.querySelector('[data-action="documents"]').click();
   document.querySelector('[data-open-document]').click();
   await tick();
-  assert.equal(document.querySelector("#modal").open, false);
+  assert.equal(document.querySelector("#modal").open, true);
   assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
   assert.equal(requests.filter(r => r.path === "documents/" + id).length, 1);
   assert.equal(requests.some(r => r.path.includes("scan-invoice")), false);
