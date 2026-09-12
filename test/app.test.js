@@ -239,3 +239,23 @@ test("photo archive opens month, supplier, invoice and file without scanning aga
   assert.equal(requests.some(r => r.path.includes("scan-invoice")), false);
   document.querySelector(".preview-dialog").onclose();
 });
+
+test("folder back retains status, while choosing another period leaves the old folder", async t => {
+  await setup(t, { request: async path => path === 'me' ? { uid: 'owner' } : {
+    full: true, version: 1, suppliers: [{ id: 's1', name: 'ספק בדיקה' }], dailyCash: [], invoices: [
+      { id: 'one', supplierId: 's1', documentNumber: 'ONE', invoiceDate: '2026-09-01', status: 'paid', finalAgorot: 100 },
+      { id: 'two', supplierId: 's1', documentNumber: 'TWO', invoiceDate: '2026-08-01', status: 'paid', finalAgorot: 100 },
+    ],
+  } });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-action="status"][data-value="paid"]').click();
+  document.querySelector('[data-action="folder-month"][data-value="2026-09"]').click();
+  document.querySelector('[data-action="folder-supplier"]').click();
+  document.querySelector('[data-action="folder-back"]').click();
+  assert.equal(document.querySelector('[data-action="status"][data-value="paid"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelectorAll('.invoice-card').length, 0);
+  const month = document.querySelector('[name="month"]'); month.value = '2026-08'; month.dispatchEvent(new Event('change'));
+  assert.equal(document.querySelectorAll('.month-folder').length, 1);
+  assert.equal(document.querySelector('.month-folder').dataset.value, '2026-08');
+  assert.equal(document.querySelector('[data-action="folder-back"]'), null);
+});

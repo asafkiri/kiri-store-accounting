@@ -212,6 +212,9 @@ function bindShell() {
         ctx.filters.to = "";
       }
       if (el.name === "from" || el.name === "to") ctx.filters.month = "";
+      // A new period/supplier selection must not be overridden by the folder
+      // that was open when the user changed the filter.
+      if (["month", "from", "to", "supplierId"].includes(el.name)) ctx.folderPath = {};
       ctx.limit = 80;
       ctx.render();
     };

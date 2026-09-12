@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { today } from "../src/format.js";
 
-export function workspaceFixture() {
+export function workspaceFixture({ scanResult = {} } = {}) {
   const month = today().slice(0, 7);
   const date = new Date(month + "-15T12:00:00Z");
   date.setUTCMonth(date.getUTCMonth() - 1);
@@ -75,7 +75,7 @@ export function workspaceFixture() {
       return res.end(JSON.stringify({ id: body.jobId, status: "completed", attachmentIds: body.attachmentIds, result: {
         supplierName: "תנובה", documentNumber: "SCAN-118", invoiceDate: month + "-10", documentType: null,
         subtotalAgorot: null, vatAgorot: null, totalAgorot: 11800, finalAgorot: null, deductions: [],
-        uncertainFields: ["documentType", "vatAgorot", "subtotalAgorot", "finalAgorot"], needsReview: true, warnings: [],
+        uncertainFields: ["documentType", "vatAgorot", "subtotalAgorot", "finalAgorot"], needsReview: true, warnings: [], ...scanResult,
       } }));
     }
     if (req.method === "PUT" && path.startsWith("/api/v1/invoices/")) {

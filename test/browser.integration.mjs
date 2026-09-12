@@ -1529,6 +1529,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('.sidebar [data-route="documents"]').click();
     await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
     assert.equal(await page.locator('.month-folder,.document-card').count(), 0);
+    await page.screenshot({ path: `test-artifacts/suppliers-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
     const supplier = page.locator('.invoice-folders');
     assert.equal(await page.locator('.month-folder,.supplier-folder').count(), 0);
@@ -1735,5 +1736,39 @@ for (const engine of [chromium, webkit]) {
     await page.locator('#invoice-search').fill('');
     assert.equal(await page.locator('.supplier-folder').count(), 2);
     assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: correct an ambiguous number from the warning without another scan`, { timeout: 60000 }, async t => {
+    const { server, requests, data } = workspaceFixture({ scanResult: {
+      documentNumber: 'AMB-2', documentType: 'invoice', subtotalAgorot: 10000, vatAgorot: 1800,
+      totalAgorot: 11800, finalAgorot: 11800, uncertainFields: [],
+      warnings: ['מספר החשבונית אינו חד משמעי. בחלק העליון מופיע AMB-2 ובתחתית AMB-21. יש לבדוק את המסמך.'],
+    } });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await page.locator('.scan-primary').click();
+    await page.locator('[data-live-gallery]').setInputFiles({ name: 'fixture.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% fixture\n%%EOF') });
+    await page.locator('#run-scan').click();
+    await page.locator('[data-warning-edit="documentNumber"]').click();
+    assert.match(await page.locator('.quick-question').innerText(), /AMB-21/);
+    await page.locator('[name="documentNumber"]').fill('AMB-21');
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/warning-edit-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[data-warning-edit="documentNumber"]').waitFor();
+    assert.equal(data.invoices.some(i => i.documentNumber === 'AMB-21'), false);
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('.quick-summary-grid').waitFor();
+    assert.match(await page.locator('.quick-summary-grid').innerText(), /AMB-21/);
+    await page.locator('.quick-invoice [type="submit"]').click();
+    await page.locator('#modal').waitFor({ state: 'hidden' });
+    assert.ok(data.invoices.some(i => i.documentNumber === 'AMB-21'));
+    assert.equal(requests.filter(r => r.path === '/api/v1/scan-invoice').length, 1);
   });
 }
