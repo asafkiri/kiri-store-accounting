@@ -10,8 +10,13 @@ import {
   monthLabel,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
-import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
+import {
+  supplierPickerMarkup,
+  bindSupplierPicker,
+  matchSupplier,
+} from "./supplier-picker.js";
 import { creditSignIssues } from "./credit.js";
+import { isValidTaxId, normalizeTaxId } from "./tax-id.js";
 import { hasDraftContent } from "./draft-activity.js";
 import { quickInvoiceReview } from "./quick-invoice.js";
 import {
@@ -334,12 +339,13 @@ export async function supplierForm(ctx, record = null) {
       contact: record?.contact || "",
       notes: record?.notes || "",
       active: record?.active === false ? "no" : "yes",
+      taxIds: (record?.taxIds || []).join(", "),
     },
   };
   const f = draft.fields;
   const root = ctx.dialog(
     record ? "עריכת ספק" : "הוספת ספק",
-    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">הספק יעבור לסל המחזור ל־30 יום. החשבוניות שלו יישארו בהיסטוריה.</p></section>` : ""}</form>`,
+    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${field("מספרי ח.פ / ע.מ (רשות)", "taxIds", f.taxIds, { wide: true, hint: "לפי המספרים האלה חשבוניות סרוקות משויכות לספק הזה. הם נוספים לבד כשמאשרים סריקה. אפשר להפריד בפסיק." })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">הספק יעבור לסל המחזור ל־30 יום. החשבוניות שלו יישארו בהיסטוריה.</p></section>` : ""}</form>`,
   );
   const form = $("form", root);
   bindDraft(
@@ -356,6 +362,7 @@ export async function supplierForm(ctx, record = null) {
           contact: values.contact,
           notes: values.notes,
           active: values.active === "yes",
+          taxIds: parseTaxIds(values.taxIds),
         },
         draft.version,
       ),
@@ -386,6 +393,19 @@ export async function preferencesForm(ctx) {
     return pendingMutation("settings/accounting", { defaultVatBasisPoints: rate }, draft.version);
   });
 }
+// A wrong identifier would keep sending a supplier's invoices to the wrong
+// place, so the field is editable and its check digit is verified before the
+// save leaves, naming the number that failed rather than the whole field.
+export function parseTaxIds(value) {
+  const ids = [];
+  for (const token of String(value || "").split(/[,;\s]+/).filter(Boolean)) {
+    if (!isValidTaxId(token))
+      throw Error(`מספר ח.פ/ע.מ אינו תקין: ${token}. יש לבדוק את הספרות.`);
+    const id = normalizeTaxId(token);
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
 export function invoiceMutation(draft, values, record = null) {
       if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
         throw Error("יש לבחור סוג מסמך לפי התעודה.");
@@ -398,7 +418,12 @@ export function invoiceMutation(draft, values, record = null) {
         {
           supplierId: values.supplierId,
           ...(draft.newSupplier
-            ? { newSupplier: { name: draft.newSupplier.name } }
+            ? {
+                newSupplier: {
+                  name: draft.newSupplier.name,
+                  taxIds: draft.newSupplier.taxIds || [],
+                },
+              }
             : {}),
           ...(draft.reactivateSupplier
             ? {
@@ -406,6 +431,19 @@ export function invoiceMutation(draft, values, record = null) {
                   expectedVersion: draft.reactivateSupplier.expectedVersion,
                 },
               }
+            : {}),
+          // Attach the printed identifier only to the supplier this document
+          // was matched to or confirmed against. Choosing another one from the
+          // list is an override: binding the number there would silently
+          // misfile every later invoice from the supplier that printed it.
+          ...(!draft.newSupplier &&
+          !draft.reactivateSupplier &&
+          draft.scan?.result?.supplierTaxIds?.length &&
+          values.supplierId &&
+          [draft.bindSupplierId, draft.matchedSupplierId].includes(
+            values.supplierId,
+          )
+            ? { bindTaxIds: draft.scan.result.supplierTaxIds }
             : {}),
           documentNumber: values.documentNumber,
           invoiceDate: values.invoiceDate,
@@ -456,25 +494,27 @@ export async function invoiceForm(
   );
   if (!draft) {
     const r = scan?.result;
+    const matched = record ? null : matchSupplier(ctx.data.suppliers, r);
     draft = {
       mode: record ? "edit" : "new",
       recordId: record?.id || crypto.randomUUID(),
       version: record?.version || 0,
       scan: scan || null,
+      // Remembering who the match proposed keeps a later manual override from
+      // attaching this document's printed identifier to the wrong supplier.
+      matchedSupplierId: matched?.id || null,
       fields: {
-        supplierId:
-          record?.supplierId ||
-          (!r?.uncertainFields?.includes("supplierName") &&
-            ctx.data.suppliers.find(
-              (s) => s.active && !s.deletedAt && s.name === r?.supplierName,
-            )?.id) ||
-          "",
+        supplierId: record?.supplierId || matched?.id || "",
+        // A matched supplier shows the name it carries here, not the one the
+        // document printed: ד.מ.ד שיווק is filed as תנובה קפואים.
         supplierName: record
           ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name ||
             ""
-          : r?.uncertainFields?.includes("supplierName")
-            ? ""
-            : r?.supplierName || "",
+          : matched
+            ? matched.name
+            : r?.uncertainFields?.includes("supplierName")
+              ? ""
+              : r?.supplierName || "",
         documentNumber: record?.documentNumber || r?.documentNumber || "",
         invoiceDate: record?.invoiceDate || (r ? r.invoiceDate || "" : today()),
         documentType:

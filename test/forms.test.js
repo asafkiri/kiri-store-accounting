@@ -523,6 +523,7 @@ test("unknown scanned supplier is editable, stays pending through refresh, and s
   assert.equal(saved[0].path.startsWith("invoices/"), true);
   assert.deepEqual(saved[0].body.data.newSupplier, {
     name: pendingSupplier.name,
+    taxIds: [],
   });
   assert.equal(saved[0].body.data.supplierId, pendingSupplier.id);
   assert.ok(merged.find((r) => r.path === "suppliers/" + pendingSupplier.id));
@@ -602,7 +603,7 @@ test("manual invoice uses the same inline creation flow and never opens another 
   await tick();
   assert.equal(saved.length, 1);
   assert.equal(saved[0].body.data.source, "manual");
-  assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש" });
+  assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש", taxIds: [] });
 });
 
 test("uncertain or missing scanned supplier name starts empty and visibly requires review", async () => {
@@ -935,4 +936,38 @@ test("supplier removal keeps invoice history and manual invoice excludes deliver
   const options = [...document.querySelector('[name="documentType"]').options].map(o => o.value);
   assert.deepEqual(options, ["", "invoice", "credit"]);
   assert.equal(document.querySelector('[name="documentType"]').value, "invoice");
+});
+
+test("a supplier's bound identifiers are visible, survive an edit and reject a bad digit", async () => {
+  const { ctx, saved } = setup();
+  const record = {
+    id: "supplier-globus",
+    version: 1,
+    name: "גלובוס",
+    contact: "",
+    notes: "",
+    active: true,
+    taxIds: ["513036434", "557904679"],
+  };
+  await supplierForm(ctx, record);
+  assert.equal(
+    document.querySelector("[name=taxIds]").value,
+    "513036434, 557904679",
+  );
+  // Renaming carries them along instead of dropping what the matching relies on.
+  fill("name", "גלובוס בע״מ");
+  submit();
+  await tick();
+  assert.deepEqual(saved[0].body.data.taxIds, ["513036434", "557904679"]);
+  assert.equal(saved[0].body.data.name, "גלובוס בע״מ");
+  // A number that fails its check digit is named before anything is sent.
+  await supplierForm(ctx, record);
+  fill("taxIds", "513036435");
+  submit();
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.match(
+    document.querySelector("[data-form-error]").textContent,
+    /513036435/,
+  );
 });

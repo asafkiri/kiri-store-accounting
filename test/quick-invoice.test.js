@@ -74,7 +74,7 @@ test("new supplier is confirmed in one question and only created with the invoic
   assert.equal(document.querySelector(".quick-question"), null);
   assert.equal(writes.length, 0);
   assert.equal(cache.get("invoice").newSupplier.name, "ספק חדש");
-  submit(); await tick(); assert.deepEqual(writes[0].body.data.newSupplier, { name: "ספק חדש" });
+  submit(); await tick(); assert.deepEqual(writes[0].body.data.newSupplier, { name: "ספק חדש", taxIds: [] });
 });
 test("unknown VAT stays unknown and selecting zero VAT is explicit", async () => {
   for (const [action, expected] of [["vat-unknown", null], ["vat-zero", 0]]) {

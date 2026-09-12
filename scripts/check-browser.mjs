@@ -72,6 +72,7 @@ export function createBrowserCheckServer() {
         "/draft-activity.js",
         "/supplier-picker.js",
         "/supplier-name.js",
+        "/tax-id.js",
         "/credit.js",
         "/attempts.js",
         "/ui.js",
