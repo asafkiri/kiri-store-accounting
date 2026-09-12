@@ -62,12 +62,15 @@ const restorePage = state => {
   const { scrollY, ...page } = state;
   Object.assign(ctx, page);
   ctx.render();
-  const place = () => {
-    $("#main")?.focus({ preventScroll: true });
-    window.scrollTo(0, scrollY || 0);
-  };
-  place();
-  window.requestAnimationFrame?.(place);
+  const main = $("#main");
+  main?.focus({ preventScroll: true });
+  window.scrollTo(0, scrollY || 0);
+  window.requestAnimationFrame?.(() => {
+    // A late layout pass must not steal focus from someone already typing,
+    // or restore the scroll position of a page they have since left.
+    if ($("#main") === main && document.activeElement === main)
+      window.scrollTo(0, scrollY || 0);
+  });
 };
 const navigation = createNavigation({
   window, snapshot: pageSnapshot, restore: restorePage,

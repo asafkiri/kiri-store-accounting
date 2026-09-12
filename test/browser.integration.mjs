@@ -1579,7 +1579,9 @@ for (const engine of [chromium, webkit]) {
     await page.reload();
     await workspaceRoute(page, "checks");
     await page.locator("#check-search").fill("00123456");
+    await page.waitForFunction(() => document.querySelectorAll(".invoice-card").length === 1);
     assert.equal(await page.locator(".invoice-card").count(), 1);
+    assert.match(await page.locator(".check-reference").innerText(), /00123456/);
     assert.equal(await page.locator(".badge.paid").evaluate(el => getComputedStyle(el).color), "rgb(155, 32, 40)");
     assert.deepEqual(errors, []);
   });
@@ -1798,6 +1800,7 @@ for (const engine of [chromium, webkit]) {
     await page.goto(`http://127.0.0.1:${server.address().port}`);
     await workspaceRoute(page, "checks");
     await page.locator('#check-search').fill('000123');
+    await page.waitForFunction(() => document.querySelectorAll('.invoice-card').length === 1);
     assert.equal(await page.locator('.invoice-card').count(), 1);
     assert.match(await page.locator('.invoice-card').innerText(), /תנובה/);
     assert.match(await page.locator('.check-reference').innerText(), /00012345/);
