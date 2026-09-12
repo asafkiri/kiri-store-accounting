@@ -11,8 +11,8 @@ import { ApiError } from "../src/api.js";
 import { today, totals } from "../src/format.js";
 // These tests exercise the retained detailed editor; quick intake has its own
 // integration tests for sequential answers, summary approval and recovery.
-const invoiceForm = (ctx, record = null, scan = null, attachments = []) =>
-  openInvoiceForm(ctx, record, scan, attachments, { fullEditor: true });
+const invoiceForm = (ctx, record = null, attachments = []) =>
+  openInvoiceForm(ctx, record, attachments, { fullEditor: true });
 const tick = () => new Promise((r) => setTimeout(r, 20));
 function setup() {
   const dom = new JSDOM(
@@ -86,33 +86,6 @@ test("manual form and recovery preserve values, unknown VAT and explicit review"
   assert.equal(saved[0].body.data.vatAgorot, null);
   assert.equal(saved[0].body.data.reviewConfirmed, true);
   assert.equal(drafts.has("invoice"), false);
-});
-test("AI form presents uncertain fields without saving automatically", async () => {
-  const { ctx, saved } = setup();
-  const scan = {
-    id: "scan-unit-id",
-    attachmentIds: [],
-    result: {
-      supplierName: "ספק בדיקה",
-      documentNumber: "A-2",
-      invoiceDate: "2026-09-10",
-      documentType: "invoice",
-      subtotalAgorot: null,
-      vatAgorot: null,
-      totalAgorot: 999,
-      finalAgorot: null,
-      deductions: [],
-      uncertainFields: ["vatAgorot", "finalAgorot"],
-      needsReview: true,
-      warnings: [],
-    },
-  };
-  await invoiceForm(ctx, null, scan);
-  assert.equal(saved.length, 0);
-  assert.equal(document.querySelector("[name=vat]").value, "");
-  assert.equal(document.querySelector("[name=final]").value, "");
-  assert.ok(document.querySelector("[name=vat]").closest(".uncertain"));
-  assert.match(document.body.textContent, /נקרא/);
 });
 test("network failure locks original mutation, retains draft, and retries same identity", async () => {
   const { ctx, drafts } = setup();
@@ -301,7 +274,6 @@ const existingInvoice = () => ({
   deductions: [],
   attachmentIds: [],
   source: "manual",
-  scanJobId: null,
   notes: "original",
 });
 for (const kind of ["invoice", "supplier"]) {
@@ -391,65 +363,21 @@ test("an ambiguous pending save keeps its exact mutation when a newer record is 
   await invoiceForm(ctx, { ...record, version: 2 });
   assert.deepEqual(drafts.get("invoice").pending, pending);
 });
-test("AI review marks supplier and unknown document type, requiring an explicit document choice", async () => {
-  const { ctx, saved } = setup();
-  await invoiceForm(ctx, null, {
-    id: "unknown-type",
-    attachmentIds: [],
-    result: {
-      supplierName: "ספק בדיקה",
-      documentNumber: "a",
-      invoiceDate: "2026-09-10",
-      documentType: null,
-      subtotalAgorot: null,
-      vatAgorot: null,
-      totalAgorot: 100,
-      finalAgorot: 100,
-      deductions: [],
-      uncertainFields: ["supplierName", "documentType"],
-      needsReview: true,
-      warnings: [],
-    },
-  });
-  const select = document.querySelector("[name=documentType]");
-  assert.equal(select.value, "");
-  assert.equal(select.required, true);
-  assert.ok(select.closest(".uncertain"));
-  assert.ok(document.querySelector("[name=supplierId]").closest(".uncertain"));
-  document.querySelector("[name=review]").checked = true;
-  submit();
-  await tick();
-  assert.equal(saved.length, 0);
-  assert.match(
-    document.querySelector("[data-form-error]").textContent,
-    /סוג מסמך/,
-  );
-});
-
-const supplierScan = (name, uncertainFields = []) => ({
-  id: "new-supplier-scan",
-  attachmentIds: [],
-  result: {
-    supplierName: name,
-    documentNumber: "new-1001",
-    invoiceDate: "2026-09-10",
-    documentType: "invoice",
-    subtotalAgorot: null,
-    vatAgorot: null,
-    totalAgorot: 1200,
-    finalAgorot: 1200,
-    deductions: [],
-    uncertainFields,
-    needsReview: !!uncertainFields.length,
-    warnings: [],
-  },
-});
+// The detailed editor opened by hand, with the supplier name typed into the
+// picker exactly as it would be from the paper.
+const typedSupplier = async (ctx, name) => {
+  await invoiceForm(ctx);
+  fill("supplierName", name);
+  fill("documentNumber", "new-1001");
+  fill("total", "12");
+  fill("final", "12");
+};
 const supplierAction = (name) =>
   document.querySelector(`[data-supplier-action="${name}"]`);
 
 test("changing a pending supplier clears its stale option and choosing an existing one cancels creation", async () => {
   const { ctx, drafts, saved } = setup();
-  await invoiceForm(ctx, null, supplierScan("שם חדש"));
+  await typedSupplier(ctx, "שם חדש");
   supplierAction("create").click();
   await tick();
   const oldId = drafts.get("invoice").newSupplier.id;
@@ -489,7 +417,7 @@ test("failed conflict lookup keeps fields and allows an explicit lookup retry wi
     return existing;
   };
   ctx.mergeRecord = (record) => ctx.data.suppliers.push(record);
-  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  await typedSupplier(ctx, "מרינה");
   supplierAction("create").click();
   fill("notes", "נשאר גם בניתוק");
   document.querySelector("[name=review]").checked = true;
@@ -527,7 +455,7 @@ test("unknown scanned supplier is editable, stays pending through refresh, and s
       ],
     };
   };
-  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  await typedSupplier(ctx, "מרינה");
   assert.match(document.body.textContent, /ספק חדש: מרינה/);
   assert.equal(document.querySelector("[name=supplierName]").value, "מרינה");
   assert.equal(saved.length, 0);
@@ -565,7 +493,7 @@ test("normalized match needs explicit confirmation; rejecting it asks for a dist
   ctx.data.suppliers = [
     { id: "supplier-marina", name: "מרינה בע״מ", active: true, version: 1 },
   ];
-  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  await typedSupplier(ctx, "מרינה");
   assert.equal(document.querySelector("[name=supplierId]").value, "");
   assert.match(document.body.textContent, /זה הספק.*מרינה בע״מ.*שכבר קיים/);
   assert.equal(supplierAction("create"), null);
@@ -587,7 +515,7 @@ test("inactive supplier offers reactivation inside the invoice and does not imme
   ctx.data.suppliers = [
     { id: "supplier-marina", name: "מרינה", active: false, version: 3 },
   ];
-  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  await typedSupplier(ctx, "מרינה");
   assert.equal(document.querySelector("[name=supplierId]").value, "");
   assert.match(document.body.textContent, /סומן כלא פעיל.*להפעיל אותו מחדש/);
   supplierAction("reactivate").click();
@@ -608,7 +536,7 @@ test("inactive supplier offers reactivation inside the invoice and does not imme
 
 test("canceling review leaves no supplier on server, even after the inline confirmation", async () => {
   const { ctx, drafts, saved } = setup();
-  await invoiceForm(ctx, null, supplierScan("חדש לביטול"));
+  await typedSupplier(ctx, "חדש לביטול");
   supplierAction("create").click();
   await tick();
   document.querySelector("[data-discard-draft]").click();
@@ -633,24 +561,6 @@ test("manual invoice uses the same inline creation flow and never opens another 
   assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש", taxIds: [] });
 });
 
-test("uncertain or missing scanned supplier name starts empty and visibly requires review", async () => {
-  for (const name of [null, "ספק בדיקה"]) {
-    const { ctx } = setup();
-    await invoiceForm(ctx, null, supplierScan(name, ["supplierName"]));
-    assert.equal(document.querySelector("[name=supplierName]").value, "");
-    assert.equal(document.querySelector("[name=supplierId]").value, "");
-    assert.ok(
-      document.querySelector("[name=supplierName]").closest(".uncertain"),
-    );
-    assert.match(
-      document.querySelector("[data-supplier-picker]").textContent,
-      /דורש בדיקה/,
-    );
-    fill("supplierName", "שם שהוקלד");
-    assert.ok(supplierAction("create"));
-  }
-});
-
 test("new supplier save after network loss replays the same invoice mutation and supplier ID after reload", async () => {
   const { ctx, drafts } = setup();
   const attempts = [];
@@ -659,7 +569,7 @@ test("new supplier save after network loss replays the same invoice mutation and
     if (attempts.length === 1) throw new ApiError("ניתוק", "NETWORK", 0);
     return { record: { id: p.path.split("/")[1] } };
   };
-  await invoiceForm(ctx, null, supplierScan("ספק לניתוק"));
+  await typedSupplier(ctx, "ספק לניתוק");
   supplierAction("create").click();
   document.querySelector("[name=review]").checked = true;
   submit();
@@ -704,7 +614,7 @@ test("concurrent supplier conflict preserves invoice fields and offers explicit 
     }
     return { record: { id: p.path.split("/")[1] } };
   };
-  await invoiceForm(ctx, null, supplierScan("מרינה"));
+  await typedSupplier(ctx, "מרינה");
   supplierAction("create").click();
   fill("notes", "לא לאבד");
   document.querySelector("[name=review]").checked = true;
@@ -722,20 +632,17 @@ test("concurrent supplier conflict preserves invoice fields and offers explicit 
   assert.notEqual(saved[0].body.mutationId, saved[1].body.mutationId);
 });
 
-test("credit entry accepts magnitudes, preserves printed evidence and stores a negative reviewed amount", async () => {
+test("credit entry accepts magnitudes and stores a negative reviewed amount", async () => {
   const { ctx, saved } = setup();
-  const scan = supplierScan("ספק בדיקה");
-  scan.result.documentType = "credit";
-  await invoiceForm(ctx, null, scan);
+  await typedSupplier(ctx, "ספק בדיקה");
+  fill("documentType", "credit");
+  assert.equal(document.querySelector("[data-credit-notice]").hidden, false);
   assert.match(document.querySelector("[data-credit-notice]").textContent, /כמספר חיובי/);
-  assert.equal(document.querySelector("[name=total]").value, "12.00");
   assert.equal(document.querySelector("[name=total]").inputMode, "decimal");
-  assert.match(document.querySelector("[name=total]").closest("label").textContent, /12/);
   fill("total", "30"); fill("final", "30");
   document.querySelector("[name=review]").checked = true;
   submit(); await tick();
   assert.equal(saved[0].body.data.finalAgorot, -3000);
-  assert.equal(scan.result.totalAgorot, 1200);
   assert.equal(totals([{ ...existingInvoice(), totalAgorot: 10000, finalAgorot: 10000 }, saved[0].body.data]).final, 7000);
   await invoiceForm(ctx, { ...existingInvoice(), documentType: "credit", totalAgorot: -3000, finalAgorot: -3000 });
   assert.equal(document.querySelector("[name=total]").value, "30.00");

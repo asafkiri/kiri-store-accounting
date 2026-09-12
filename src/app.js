@@ -329,7 +329,7 @@ async function action(type, data = {}) {
     case "share-invoice":
       return shareDocuments(ctx, { invoiceId: data.id });
     case "invoice":
-      return invoiceForm(ctx, null, null, [], { quick: true });
+      return invoiceForm(ctx, null, [], { quick: true });
     case "scan":
       return scanDialog(ctx, { openCamera: true });
     case "vat-preferences":

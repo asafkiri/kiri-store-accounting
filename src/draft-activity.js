@@ -5,7 +5,7 @@ export function hasDraftContent(key, draft) {
   if (key === "scan")
     return Boolean(draft.files?.length || draft.attachmentIds?.length);
   const f = draft.fields || {};
-  if (key === "invoice" && draft.mode !== "edit" && !(draft.version > 0) && (draft.scan || f.scanJobId || f.attachmentIds?.length)) return true;
+  if (key === "invoice" && draft.mode !== "edit" && !(draft.version > 0) && f.attachmentIds?.length) return true;
   if (draft.initialFields) return JSON.stringify(f) !== JSON.stringify(draft.initialFields);
   if (key === "invoice") return Boolean(f.supplierId || f.supplierName?.trim() || f.documentNumber?.trim() ||
     [f.subtotal, f.vat, f.total, f.final, f.notes].some(v => String(v ?? "").trim()) || f.deductions?.length);
@@ -21,14 +21,11 @@ export async function actionableDraftNames(drafts, data) {
     const draft = await drafts.load(key);
     values.set(key, draft);
     if (!hasDraftContent(key, draft)) { await drafts.remove(key); values.set(key, null); continue; }
-    if (key === "scan" && data.invoices.some(i =>
-      (draft.jobId && i.scanJobId === draft.jobId) ||
-      (draft.attachmentIds?.length && draft.attachmentIds.every(id => i.attachmentIds?.includes(id))))) {
+    if (key === "scan" && draft.attachmentIds?.length && data.invoices.some(i => draft.attachmentIds.every(id => i.attachmentIds?.includes(id)))) {
       await drafts.remove(key); values.set(key, null);
     }
   }
   const invoice = values.get("invoice"), scan = values.get("scan");
-  const sameScan = invoice && scan && ((scan.jobId && invoice.fields?.scanJobId === scan.jobId) ||
-    (scan.attachmentIds?.length && scan.attachmentIds.every(id => invoice.fields?.attachmentIds?.includes(id))));
+  const sameScan = invoice && scan?.attachmentIds?.length && scan.attachmentIds.every(id => invoice.fields?.attachmentIds?.includes(id));
   return names.filter(key => (!values.has(key) || values.get(key)) && !(key === "scan" && sameScan));
 }

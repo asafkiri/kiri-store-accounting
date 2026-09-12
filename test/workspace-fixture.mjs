@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { today } from "../src/format.js";
 
-export function workspaceFixture({ scanResult = {} } = {}) {
+export function workspaceFixture() {
   const month = today().slice(0, 7);
   const date = new Date(month + "-15T12:00:00Z");
   date.setUTCMonth(date.getUTCMonth() - 1);
@@ -71,13 +71,6 @@ export function workspaceFixture({ scanResult = {} } = {}) {
       return res.end(JSON.stringify({ record }));
     }
     if (req.method === "POST" && path === "/api/v1/documents") return res.end(JSON.stringify({ documents: body.files.map(() => ({ id: "f".repeat(64) })) }));
-    if (req.method === "POST" && path === "/api/v1/scan-invoice") {
-      return res.end(JSON.stringify({ id: body.jobId, status: "completed", attachmentIds: body.attachmentIds, result: {
-        supplierName: "תנובה", documentNumber: "SCAN-118", invoiceDate: month + "-10", documentType: null,
-        subtotalAgorot: null, vatAgorot: null, totalAgorot: 11800, finalAgorot: null, deductions: [],
-        uncertainFields: ["documentType", "vatAgorot", "subtotalAgorot", "finalAgorot"], needsReview: true, warnings: [], ...scanResult,
-      } }));
-    }
     if (req.method === "PUT" && path.startsWith("/api/v1/invoices/")) {
       const id = path.split("/").at(-1), existing = data.invoices.find(i => i.id === id);
       const record = { ...existing, ...body.data, id, version: (existing?.version || 0) + 1, status: existing?.status || "unpaid" };

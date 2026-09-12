@@ -68,8 +68,8 @@ test("a photographed invoice opens the typed questions with the pages attached, 
   assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
   assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
   assert.equal(cache.get("invoice").fields.source, "manual");
-  assert.equal(cache.get("invoice").fields.scanJobId, null);
-  assert.equal(cache.get("invoice").scan, null);
+  assert.equal("scanJobId" in cache.get("invoice").fields, false, "no reading to point at");
+  assert.equal("scan" in cache.get("invoice"), false, "nothing was read");
   assert.ok(document.querySelector("[data-open-document]"), "the photograph stays one tap away");
 });
 test("the upload happens once even when the button is pressed twice, and shows its wait", async () => {

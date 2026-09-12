@@ -40,20 +40,18 @@ export function field(
     placeholder = "",
     hint = "",
     wide = false,
-    read = "",
-    uncertain = false,
   } = {},
 ) {
-  return `<label class="field ${wide ? "wide" : ""} ${uncertain ? "uncertain" : ""}"><span>${e(label)}${required ? ' <span class="required">*</span>' : ""}</span>${read ? `<small class="read-value">נקרא: ${e(read)}</small>` : ""}<input name="${e(name)}" type="${type}" value="${e(value)}" ${required ? "required" : ""} ${type === "text" && /Agorot|amount|total|subtotal|vat|final|cash|ravKav/.test(name) ? 'inputmode="decimal"' : ""} ${type === "date" ? 'min="1900-01-01" max="2200-12-31"' : ""} placeholder="${e(placeholder)}" autocomplete="off">${hint ? `<small>${e(hint)}</small>` : ""}</label>`;
+  return `<label class="field ${wide ? "wide" : ""}"><span>${e(label)}${required ? ' <span class="required">*</span>' : ""}</span><input name="${e(name)}" type="${type}" value="${e(value)}" ${required ? "required" : ""} ${type === "text" && /Agorot|amount|total|subtotal|vat|final|cash|ravKav/.test(name) ? 'inputmode="decimal"' : ""} ${type === "date" ? 'min="1900-01-01" max="2200-12-31"' : ""} placeholder="${e(placeholder)}" autocomplete="off">${hint ? `<small>${e(hint)}</small>` : ""}</label>`;
 }
 export function select(
   label,
   name,
   value,
   options,
-  { wide = false, required = false, uncertain = false, read = "" } = {},
+  { wide = false, required = false } = {},
 ) {
-  return `<label class="field ${wide ? "wide" : ""} ${uncertain ? "uncertain" : ""}"><span>${e(label)}${required ? " *" : ""}</span>${read ? `<small class="read-value">נקרא: ${e(read)}</small>` : ""}<select name="${e(name)}" ${required ? "required" : ""}>${Object.entries(
+  return `<label class="field ${wide ? "wide" : ""}"><span>${e(label)}${required ? " *" : ""}</span><select name="${e(name)}" ${required ? "required" : ""}>${Object.entries(
     options,
   )
     .map(

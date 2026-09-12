@@ -29,26 +29,13 @@ export function validInvoiceDate(value) {
 // changed on the summary, where a credit note is the rare exception.
 export const typedSteps = ["supplierName", "documentNumber", "totalAgorot", "vatAgorot", "invoiceDate"];
 export function invoiceQuestions(draft) {
-  const f = draft.fields, r = draft.scan?.result, confirmed = draft.quick?.confirmed || {};
-  const unsure = key => r?.uncertainFields?.includes(key) && !confirmed[key];
+  const f = draft.fields, confirmed = draft.quick?.confirmed || {};
   const questions = [];
-  if (!r) {
-    for (const key of typedSteps)
-      if (key === "supplierName" ? !f.supplierId || draft.supplierConflict : !confirmed[key]) questions.push(key);
-  } else {
-    if (!f.supplierId || draft.supplierConflict || unsure("supplierName")) questions.push("supplierName");
-    if (!f.documentNumber?.trim() || unsure("documentNumber")) questions.push("documentNumber");
-    if (!validInvoiceDate(f.invoiceDate) || unsure("invoiceDate")) questions.push("invoiceDate");
-    if (!["invoice", "credit"].includes(f.documentType) || unsure("documentType")) questions.push("documentType");
-    if (amountOrNull(f.total) === null || unsure("totalAgorot")) questions.push("totalAgorot");
-    if ((amountOrNull(f.vat) === null && !confirmed.vatAgorot) || unsure("vatAgorot")) questions.push("vatAgorot");
-    if (unsure("subtotalAgorot")) questions.push("subtotalAgorot");
-  }
+  for (const key of typedSteps)
+    if (key === "supplierName" ? !f.supplierId || draft.supplierConflict : !confirmed[key]) questions.push(key);
   f.deductions.forEach((d, i) => {
-    if (!d.label?.trim() || amountOrNull(d.amount) === null || d.included === "unknown" ||
-      (unsure("deductions") && !confirmed["deduction:" + i])) questions.push("deduction:" + i);
+    if (!d.label?.trim() || amountOrNull(d.amount) === null || d.included === "unknown") questions.push("deduction:" + i);
   });
-  if (unsure("finalAgorot")) questions.push("finalAgorot");
   const expected = expectedFinal(draft);
   const actualFinal = amountOrNull(f.final);
   if (expected !== null && actualFinal !== null && (f.documentType === "credit" ? -Math.abs(actualFinal) : actualFinal) !== expected && !confirmed.finalArithmetic)
@@ -56,7 +43,6 @@ export function invoiceQuestions(draft) {
   const subtotal = amountOrNull(f.subtotal), vat = amountOrNull(f.vat), total = amountOrNull(f.total);
   if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) + roundingAgorot(f) !== Math.abs(total) && !confirmed.arithmetic)
     questions.push("arithmetic");
-  if (r?.warnings?.length && !confirmed.warnings) questions.push("warnings");
   return questions;
 }
 export function deriveMissingAmounts(draft) {
@@ -65,7 +51,7 @@ export function deriveMissingAmounts(draft) {
   const rounding = roundingAgorot(f);
   if (amountOrNull(f.subtotal) === null && vat !== null && Math.abs(vat) + rounding <= Math.abs(total) && !draft.quick?.confirmed?.subtotalAgorot) {
     f.subtotal = moneyInput(Math.abs(total) - Math.abs(vat) - rounding);
-    if (draft.quick && draft.scan?.result?.subtotalAgorot == null) draft.quick.confirmed.subtotalAgorot = true;
+    if (draft.quick) draft.quick.confirmed.subtotalAgorot = true;
   }
   if ((amountOrNull(f.final) === null || draft.quick?.finalDerived) && f.deductions.every(d => d.included !== "unknown" && amountOrNull(d.amount) !== null)) {
     const sign = f.documentType === "credit" ? -1 : 1;
@@ -73,7 +59,7 @@ export function deriveMissingAmounts(draft) {
     f.final = moneyInput(sign === -1 ? Math.abs(final) : final);
     if (draft.quick) {
       draft.quick.finalDerived = true;
-      if (draft.scan?.result?.finalAgorot == null) draft.quick.confirmed.finalAgorot = true;
+      draft.quick.confirmed.finalAgorot = true;
       if (draft.quick.paymentBaseFinal !== undefined || draft.quick.paymentReduction) {
         const withoutPayment = sign * Math.abs(total) - f.deductions.filter(d => d.included === "no" && !d.paymentOnly).reduce((s, d) => s + parseMoney(d.amount), 0);
         draft.quick.paymentBaseFinal = moneyInput(sign === -1 ? Math.abs(withoutPayment) : withoutPayment);
