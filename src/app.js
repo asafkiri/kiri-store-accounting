@@ -1,7 +1,7 @@
 import { previewDocument } from "./preview.js";
 import { shareDocuments } from "./document-sharing.js";
 import { createNavigation } from "./navigation.js";
-import { invoiceDetails } from "./invoice-details.js";
+import { invoiceDetails, attachmentRows, retentionNote } from "./invoice-details.js";
 import {
   initializeAuth,
   onAuthStateChanged,
@@ -49,6 +49,9 @@ const ctx = {
   modalBusy: false,
   draftNames: [],
   epoch: 0,
+  // How long the service keeps a photo. The server reports it with every sync;
+  // until then the app makes no promise about deletion dates.
+  retentionDays: 0,
 };
 try { ctx.paidColor = window.localStorage.getItem("ksa-paid-color") === "red" ? "red" : "green"; }
 catch { ctx.paidColor = "green"; }
@@ -175,6 +178,8 @@ ctx.refresh = async (force = false) => {
       timeout: 50_000,
     });
     if (epoch !== ctx.epoch) return;
+    if (Number.isInteger(r.documentRetentionDays))
+      ctx.retentionDays = r.documentRetentionDays;
     if (!r.unchanged) {
       for (const collection of ["suppliers", "invoices", "dailyCash", "settings"]) {
         if (r.full) ctx.data[collection] = r[collection] || [];
@@ -360,7 +365,7 @@ async function action(type, data = {}) {
     case "detail":
       return detail(record);
     case "documents":
-      return documentList(record);
+      return documentList(data.id);
     case "edit":
       return invoiceForm(ctx, record);
     case "refresh":
@@ -602,7 +607,7 @@ async function simpleMutation(actionName, record) {
 }
 function detail(i) {
   const supplier = ctx.data.suppliers.find((s) => s.id === i.supplierId);
-  const root = ctx.dialog("חשבונית " + i.documentNumber, invoiceDetails(i, supplier));
+  const root = ctx.dialog("חשבונית " + i.documentNumber, invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
   root.classList.add("invoice-detail-modal");
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
@@ -617,11 +622,16 @@ function detail(i) {
     }
   });
 }
-function documentList(i) {
+// Always re-read the invoice: a photo deleted from this screen changes it.
+function documentList(invoiceId) {
+  const i = ctx.data.invoices.find(invoice => invoice.id === invoiceId);
+  if (!i) return;
   const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
+  const files = i.attachmentIds || [];
   const root = ctx.dialog("צילומי חשבונית " + i.documentNumber,
-    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${(i.attachmentIds || []).map((id, index) => `<button class="secondary" data-open-document="${e(id)}">${icon("image")} פתח עמוד / קובץ ${index + 1}</button>`).join("")}</div><button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button><button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>`);
-  $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
+    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${retentionNote(ctx.retentionDays)}`);
+  if (files.length)
+    $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
   $("[data-invoice-details]", root).onclick = () => detail(i);
 }
 function login() {
@@ -735,7 +745,58 @@ $("#modal").addEventListener("click", async (ev) => {
   }
   const doc = ev.target.closest("[data-open-document]");
   if (doc) await openDocument(doc);
+  const remove = ev.target.closest("[data-delete-document]");
+  if (remove) await deletePhoto(remove);
 });
+// One page of one invoice. The file itself is deleted from the store, so the
+// question says so; the invoice and its amounts are untouched.
+async function deletePhoto(button) {
+  if (button.disabled || ctx.modalBusy || !ctx.api) return;
+  const invoice = ctx.data.invoices.find(i => i.id === button.dataset.invoice);
+  const documentId = button.dataset.deleteDocument;
+  if (!invoice || !(invoice.attachmentIds || []).includes(documentId)) return;
+  const page = (invoice.attachmentIds || []).length > 1
+    ? "צילום עמוד " + button.dataset.page
+    : "צילום החשבונית";
+  if (!confirm(`למחוק את ${page} של חשבונית ${invoice.documentNumber}? הקובץ יימחק מהאחסון ולא ניתן לשחזר אותו. פרטי החשבונית והתשלום יישארו.`))
+    return;
+  const inDetails = Boolean($(".invoice-detail-modal"));
+  button.disabled = true;
+  ctx.setModalBusy(true);
+  // The mutation ID is kept in the encrypted draft, so a retry after a lost
+  // answer replays the same deletion instead of removing another page.
+  const key = "action-" + invoice.id + "-document-" + documentId;
+  let pending = await ctx.drafts.load(key);
+  pending ||= pendingMutation(
+    "invoices/" + invoice.id + "/documents/" + documentId,
+    null,
+    invoice.version,
+    "DELETE",
+  );
+  try {
+    await ctx.drafts.save(key, pending);
+    const r = await ctx.api.save(pending);
+    ctx.mergeRecord(r.record, "invoices");
+    await ctx.drafts.remove(key);
+    ctx.render();
+    toast(
+      r.fileDeleted
+        ? "הצילום נמחק מהמערכת ומהאחסון"
+        : "הצילום הוסר מהחשבונית. אותו קובץ מצורף גם לחשבונית אחרת, ולכן הוא נשמר שם.",
+    );
+  } catch (err) {
+    if (err.status && err.status < 500 && ![429, 408].includes(err.status))
+      await ctx.drafts.remove(key);
+    toast(errorText(err), true);
+  } finally {
+    ctx.setModalBusy(false);
+    if (button.isConnected) button.disabled = false;
+  }
+  const fresh = ctx.data.invoices.find(i => i.id === invoice.id);
+  if (!fresh) return ctx.closeModal();
+  if (inDetails) detail(fresh);
+  else documentList(fresh.id);
+}
 async function openDocument(doc) {
   if (doc.disabled || !ctx.api) return;
   const api = ctx.api;
