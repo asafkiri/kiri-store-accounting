@@ -215,9 +215,8 @@ export function shell(ctx) {
 
   const nav = [
     ["home", "בית", "home"],
-    ["invoices", "חשבוניות", "invoice"],
     ["more", "עוד אפשרויות", "settings"],
   ];
-  const selected = ["home", "invoices"].includes(ctx.route) ? ctx.route : "more";
+  const selected = ["home", "more"].includes(ctx.route) ? ctx.route : null;
   return `<div class="app-shell" data-section="${e(ctx.route)}" data-paid-color="${e(ctx.paidColor || "green")}"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${selected === route ? "active" : ""}" ${selected === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav></aside><div class="workspace"><header class="topbar">${ctx.route === "home" ? '<span class="topbar-brand">החשבונות של החנות</span>' : `<button class="secondary app-back" data-action="back">חזור</button><button class="secondary" data-route="home">${icon("home")} בית</button>`}<span id="connection-status" class="connection" role="status">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
 }
