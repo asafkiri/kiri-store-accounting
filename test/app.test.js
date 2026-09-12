@@ -40,6 +40,18 @@ async function setup(t, sdk = {}) {
 function resolveAuthPath() {
   return new URL("../src/auth.js", import.meta.url).pathname;
 }
+test("restoring navigation does not steal focus after the user starts searching", async t => {
+  await setup(t);
+  await globalThis.appAuthCallback({});
+  const frames = [];
+  window.requestAnimationFrame = callback => frames.push(callback);
+  document.querySelector('[data-route="more"]').click();
+  document.querySelector('[data-route="checks"]').click();
+  const search = document.querySelector("#check-search");
+  search.focus();
+  for (const callback of frames) callback();
+  assert.equal(document.activeElement, search, "a navigation frame must leave the active search field focused");
+});
 test("startup hides native browser diagnostics", async (t) => {
   await setup(t, {
     initializeAuth: async () => {
