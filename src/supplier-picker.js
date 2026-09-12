@@ -2,6 +2,27 @@ import { field, select, errorText } from "./ui.js";
 import { escapeHtml as e } from "./format.js";
 import { normalizeSupplierName } from "./supplier-name.js";
 
+// The identifier printed on the document binds a supplier on its own, because
+// two suppliers can never hold the same one: "תנובה קפואים" is printed as
+// ד.מ.ד שיווק and shares no word with the name it is filed under, so no name
+// route could ever reach it. A name match stays a proposal the picker asks
+// about, exactly as before — the name is the signal this change exists to stop
+// relying on. Several holders mean the document is ambiguous, so it asks too.
+export function matchSupplier(suppliers, scan) {
+  const available = suppliers.filter((s) => !s.deletedAt && s.active);
+  const printed = scan?.supplierTaxIds || [];
+  const holders = printed.length
+    ? available.filter((s) => (s.taxIds || []).some((id) => printed.includes(id)))
+    : [];
+  if (holders.length) return holders.length === 1 ? holders[0] : null;
+  // With no identifier bound yet the name still binds an identical spelling, as
+  // it always did, and a merely normalized match stays a proposal the picker
+  // asks about. Confirming it is what attaches the identifier, so this fallback
+  // is needed once per supplier and then the number takes over.
+  if (scan?.uncertainFields?.includes("supplierName")) return null;
+  return available.find((s) => s.name === scan?.supplierName) || null;
+}
+
 export function supplierPickerMarkup(fields, uncertain, read) {
   return `<section class="supplier-picker wide" data-supplier-picker aria-label="בחירת ספק">
     ${field("שם ספק לחיפוש או פתיחה", "supplierName", fields.supplierName, { wide: true, uncertain, read })}
@@ -35,6 +56,7 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
     selected.value = "";
     delete draft.newSupplier;
     delete draft.reactivateSupplier;
+    delete draft.bindSupplierId;
     renderOptions("");
   };
   const renderOptions = (id = selected.value) => {
@@ -107,6 +129,9 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
     delete draft.newSupplier;
     delete draft.reactivateSupplier;
     delete draft.supplierConflict;
+    // Picking from the list is a manual override, not a confirmation of what
+    // this document printed, so it never attaches the document's identifier.
+    delete draft.bindSupplierId;
     if (supplier) {
       input.value = supplier.name;
     }
@@ -160,7 +185,13 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
         draft.supplierConflict
       )
         return;
-      draft.newSupplier = { id: crypto.randomUUID(), name };
+      // A supplier opened for this document keeps the identifier printed on it,
+      // so every later invoice from it matches on the number instead of the name.
+      draft.newSupplier = {
+        id: crypto.randomUUID(),
+        name,
+        taxIds: draft.scan?.result?.supplierTaxIds || [],
+      };
       delete draft.reactivateSupplier;
       renderOptions(draft.newSupplier.id);
     } else {
@@ -172,7 +203,11 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
       delete draft.supplierConflict;
       selected.value = supplier.id;
       input.value = supplier.name;
-      if (!supplier.active)
+      // Confirming the proposal is the moment the supplier earns the identifier
+      // printed here: the next invoice then matches on it, whatever name it
+      // carries. Reactivation writes its own supplier change and cannot also.
+      if (supplier.active) draft.bindSupplierId = supplier.id;
+      else
         draft.reactivateSupplier = {
           id: supplier.id,
           expectedVersion: supplier.version,

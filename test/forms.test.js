@@ -523,6 +523,7 @@ test("unknown scanned supplier is editable, stays pending through refresh, and s
   assert.equal(saved[0].path.startsWith("invoices/"), true);
   assert.deepEqual(saved[0].body.data.newSupplier, {
     name: pendingSupplier.name,
+    taxIds: [],
   });
   assert.equal(saved[0].body.data.supplierId, pendingSupplier.id);
   assert.ok(merged.find((r) => r.path === "suppliers/" + pendingSupplier.id));
@@ -602,7 +603,7 @@ test("manual invoice uses the same inline creation flow and never opens another 
   await tick();
   assert.equal(saved.length, 1);
   assert.equal(saved[0].body.data.source, "manual");
-  assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש" });
+  assert.deepEqual(saved[0].body.data.newSupplier, { name: "ספק ידני חדש", taxIds: [] });
 });
 
 test("uncertain or missing scanned supplier name starts empty and visibly requires review", async () => {

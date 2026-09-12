@@ -35,6 +35,7 @@ jobs:
           cmp storage.rules api-rules-check/test/storage.rules
           cmp src/supplier-name.js api-rules-check/src/supplier-name.js
           cmp src/credit.js api-rules-check/src/credit.js
+          cmp src/tax-id.js api-rules-check/src/tax-id.js
       - run: npm ci
       - run: npm test
       - run: npm run build

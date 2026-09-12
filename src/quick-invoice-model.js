@@ -8,6 +8,16 @@ export function vatFromInclusive(totalAgorot, basisPoints) {
   return { vatAgorot: vat, subtotalAgorot: Math.abs(totalAgorot) - vat };
 }
 export const amountOrNull = value => { try { return parseMoney(value, true); } catch { return null; } };
+// The identity every printed invoice satisfies is subtotal + VAT + rounding =
+// total. A supplier may fold the rounding into the VAT base (Mr. ICE) or add it
+// after the VAT (Tnuva); either way it belongs on this side of the equation, and
+// leaving it out puts the derived pre-VAT figure a few agorot off.
+export function roundingAgorot(fields) {
+  const printed = fields.deductions
+    .filter(d => d.included === "yes" && /עיגול|\brounding\b/iu.test(d.label || ""))
+    .reduce((sum, d) => sum + (amountOrNull(d.amount) || 0), 0);
+  return fields.documentType === "credit" ? -printed : printed;
+}
 export function validInvoiceDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && value >= "1900-01-01" && value <= "2200-12-31" &&
     !Number.isNaN(Date.parse(value)) && new Date(value + "T12:00:00Z").toISOString().slice(0, 10) === value;
@@ -33,9 +43,7 @@ export function invoiceQuestions(draft) {
   if (expected !== null && actualFinal !== null && (f.documentType === "credit" ? -Math.abs(actualFinal) : actualFinal) !== expected && !confirmed.finalArithmetic)
     questions.push("finalArithmetic");
   const subtotal = amountOrNull(f.subtotal), vat = amountOrNull(f.vat), total = amountOrNull(f.total);
-  const rounding = f.deductions.filter(d => d.included === "yes" && /עיגול|\brounding\b/iu.test(d.label || ""))
-    .reduce((sum, d) => sum + (amountOrNull(d.amount) || 0), 0);
-  if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) + (f.documentType === "credit" ? -rounding : rounding) !== Math.abs(total) && !confirmed.arithmetic)
+  if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) + roundingAgorot(f) !== Math.abs(total) && !confirmed.arithmetic)
     questions.push("arithmetic");
   if (r.warnings?.length && !confirmed.warnings) questions.push("warnings");
   return questions;
@@ -43,8 +51,9 @@ export function invoiceQuestions(draft) {
 export function deriveMissingAmounts(draft) {
   const f = draft.fields, total = amountOrNull(f.total), vat = amountOrNull(f.vat);
   if (total === null) return;
-  if (amountOrNull(f.subtotal) === null && vat !== null && Math.abs(vat) <= Math.abs(total) && !draft.quick?.confirmed?.subtotalAgorot) {
-    f.subtotal = moneyInput(Math.abs(total) - Math.abs(vat));
+  const rounding = roundingAgorot(f);
+  if (amountOrNull(f.subtotal) === null && vat !== null && Math.abs(vat) + rounding <= Math.abs(total) && !draft.quick?.confirmed?.subtotalAgorot) {
+    f.subtotal = moneyInput(Math.abs(total) - Math.abs(vat) - rounding);
     if (draft.quick && draft.scan?.result?.subtotalAgorot == null) draft.quick.confirmed.subtotalAgorot = true;
   }
   if ((amountOrNull(f.final) === null || draft.quick?.finalDerived) && f.deductions.every(d => d.included !== "unknown" && amountOrNull(d.amount) !== null)) {

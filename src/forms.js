@@ -10,7 +10,11 @@ import {
   monthLabel,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
-import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
+import {
+  supplierPickerMarkup,
+  bindSupplierPicker,
+  matchSupplier,
+} from "./supplier-picker.js";
 import { creditSignIssues } from "./credit.js";
 import { hasDraftContent } from "./draft-activity.js";
 import { quickInvoiceReview } from "./quick-invoice.js";
@@ -398,7 +402,12 @@ export function invoiceMutation(draft, values, record = null) {
         {
           supplierId: values.supplierId,
           ...(draft.newSupplier
-            ? { newSupplier: { name: draft.newSupplier.name } }
+            ? {
+                newSupplier: {
+                  name: draft.newSupplier.name,
+                  taxIds: draft.newSupplier.taxIds || [],
+                },
+              }
             : {}),
           ...(draft.reactivateSupplier
             ? {
@@ -406,6 +415,19 @@ export function invoiceMutation(draft, values, record = null) {
                   expectedVersion: draft.reactivateSupplier.expectedVersion,
                 },
               }
+            : {}),
+          // Attach the printed identifier only to the supplier this document
+          // was matched to or confirmed against. Choosing another one from the
+          // list is an override: binding the number there would silently
+          // misfile every later invoice from the supplier that printed it.
+          ...(!draft.newSupplier &&
+          !draft.reactivateSupplier &&
+          draft.scan?.result?.supplierTaxIds?.length &&
+          values.supplierId &&
+          [draft.bindSupplierId, draft.matchedSupplierId].includes(
+            values.supplierId,
+          )
+            ? { bindTaxIds: draft.scan.result.supplierTaxIds }
             : {}),
           documentNumber: values.documentNumber,
           invoiceDate: values.invoiceDate,
@@ -456,25 +478,27 @@ export async function invoiceForm(
   );
   if (!draft) {
     const r = scan?.result;
+    const matched = record ? null : matchSupplier(ctx.data.suppliers, r);
     draft = {
       mode: record ? "edit" : "new",
       recordId: record?.id || crypto.randomUUID(),
       version: record?.version || 0,
       scan: scan || null,
+      // Remembering who the match proposed keeps a later manual override from
+      // attaching this document's printed identifier to the wrong supplier.
+      matchedSupplierId: matched?.id || null,
       fields: {
-        supplierId:
-          record?.supplierId ||
-          (!r?.uncertainFields?.includes("supplierName") &&
-            ctx.data.suppliers.find(
-              (s) => s.active && !s.deletedAt && s.name === r?.supplierName,
-            )?.id) ||
-          "",
+        supplierId: record?.supplierId || matched?.id || "",
+        // A matched supplier shows the name it carries here, not the one the
+        // document printed: ד.מ.ד שיווק is filed as תנובה קפואים.
         supplierName: record
           ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name ||
             ""
-          : r?.uncertainFields?.includes("supplierName")
-            ? ""
-            : r?.supplierName || "",
+          : matched
+            ? matched.name
+            : r?.uncertainFields?.includes("supplierName")
+              ? ""
+              : r?.supplierName || "",
         documentNumber: record?.documentNumber || r?.documentNumber || "",
         invoiceDate: record?.invoiceDate || (r ? r.invoiceDate || "" : today()),
         documentType:
