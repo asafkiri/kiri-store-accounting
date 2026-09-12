@@ -12,6 +12,11 @@ import { readFile, encodeFile, decodeImage, validateFile } from "./image-upload.
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
 export { readFile } from "./image-upload.js";
+// Cloud Run ends the request itself at 60 seconds, so the browser waits past
+// that deadline instead of stopping ahead of it. Giving up first turns an
+// answer that is still on its way into a warning about the connection, and a
+// scan the server did finish into a second request that costs money.
+const SCAN_REQUEST_TIMEOUT = 70_000;
 
 async function pixelsFromImage(image, maxEdge = Infinity) {
   const width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
@@ -378,7 +383,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       const result = await ctx.api.request("documents", {
         method: "POST",
         body: { files: draft.files },
-        timeout: 50_000,
+        timeout: SCAN_REQUEST_TIMEOUT,
       });
       draft.attachmentIds = result.documents.map(document => document.id);
       await persist();
@@ -554,11 +559,22 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
         {
           method: "POST",
           body: { jobId: draft.jobId, attachmentIds: draft.attachmentIds },
-          timeout: 50_000,
+          timeout: SCAN_REQUEST_TIMEOUT,
         },
       );
       await finish(job);
     } catch (error) {
+      // A missing answer is not a failed scan. The reading often finishes on the
+      // server after the browser stopped waiting, and asking for that job's
+      // result is a free GET, so it is asked for here instead of leaving a
+      // warning about the connection in front of a scan that is already done.
+      // The paid request itself is still never repeated without being asked for.
+      if (error.code === "NETWORK" && draft.jobId) {
+        try {
+          await finish(await ctx.api.request("scan-jobs/" + draft.jobId));
+          return;
+        } catch {}
+      }
       showError(error);
       if (error.status === 409 && error.code === "SCAN_IN_PROGRESS") {
         // A global lease can reject this request before its job exists. GET is free.
