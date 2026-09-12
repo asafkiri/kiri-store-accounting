@@ -391,6 +391,32 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
   };
   const err = $("#scan-error", root),
     status = $("#scan-status", root);
+  // The wait is long enough that a still line of text reads as a stuck screen.
+  // The spinner lives inside the status area, so every plain message elsewhere
+  // clears it by simply replacing the text. Elapsed seconds are aria-hidden: a
+  // screen reader should hear the step, not a count every second.
+  let ticker = null;
+  const stopWaiting = () => {
+    clearInterval(ticker);
+    ticker = null;
+    status.removeAttribute("aria-busy");
+  };
+  const waiting = (text, hint, since = Date.now()) => {
+    stopWaiting();
+    status.hidden = false;
+    status.setAttribute("aria-busy", "true");
+    status.innerHTML =
+      '<span class="scan-wait"><span class="scan-wait-spin" aria-hidden="true"></span><span class="scan-wait-text"><strong></strong><small aria-hidden="true"></small></span></span>';
+    $(".scan-wait-text strong", status).textContent = text + "…";
+    const seconds = $(".scan-wait-text small", status);
+    const tick = () => {
+      if (!seconds.isConnected) return stopWaiting();
+      seconds.textContent = `${Math.round((Date.now() - since) / 1000)} שניות · ${hint}`;
+    };
+    tick();
+    ticker = setInterval(tick, 1000);
+    return since;
+  };
   const showError = (error) => {
     err.hidden = false;
     err.textContent = errorText(error);
@@ -545,15 +571,17 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     busy = true;
     ctx.setModalBusy(true);
     err.hidden = true;
-    status.hidden = false;
-    status.textContent =
-      "מעלה את המסמך וקורא את הפרטים. החשבונית תישמר רק אחרי בדיקה ואישור שלך.";
+    const since = waiting(
+      "מעלה את הצילום",
+      "החשבונית תישמר רק אחרי בדיקה ואישור שלך",
+    );
     paint();
     try {
       await uploadDocuments();
       draft.jobId ||= crypto.randomUUID();
       draft.status = "running";
       await persist();
+      waiting("קורא את החשבונית", "הקריאה יכולה לקחת עד דקה", since);
       const job = await ctx.api.request(
         purpose === "invoice" ? "scan-invoice" : "scan-report",
         {
@@ -561,7 +589,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
           body: { jobId: draft.jobId, attachmentIds: draft.attachmentIds },
           timeout: SCAN_REQUEST_TIMEOUT,
         },
-      );
+      ).finally(stopWaiting);
       await finish(job);
     } catch (error) {
       // A missing answer is not a failed scan. The reading often finishes on the
@@ -570,8 +598,12 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       // warning about the connection in front of a scan that is already done.
       // The paid request itself is still never repeated without being asked for.
       if (error.code === "NETWORK" && draft.jobId) {
+        waiting("בודק אם הסריקה כבר הסתיימה", "בלי סריקה נוספת בתשלום", since);
         try {
-          await finish(await ctx.api.request("scan-jobs/" + draft.jobId));
+          const job = await ctx.api
+            .request("scan-jobs/" + draft.jobId)
+            .finally(stopWaiting);
+          await finish(job);
           return;
         } catch {}
       }
@@ -601,6 +633,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       status.textContent =
         "אם התקבל ניתוק, בדוק קודם את תוצאת הסריקה הקודמת. אין סריקה חוזרת אוטומטית.";
     } finally {
+      stopWaiting();
       busy = false;
       ctx.setModalBusy(false);
       if (root.isConnected) paint();
@@ -609,12 +642,16 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
   $("#check-scan", root).onclick = async () => {
     if (busy) return;
     busy = true;
+    waiting("בודק את תוצאת הסריקה", "בלי סריקה נוספת בתשלום");
     paint();
     try {
-      await finish(await ctx.api.request("scan-jobs/" + draft.jobId));
+      await finish(
+        await ctx.api.request("scan-jobs/" + draft.jobId).finally(stopWaiting),
+      );
     } catch (error) {
       showError(error);
     } finally {
+      stopWaiting();
       busy = false;
       if (root.isConnected) paint();
     }
@@ -633,18 +670,18 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     busy = true;
     ctx.setModalBusy(true);
     err.hidden = true;
-    status.hidden = false;
-    status.textContent =
-      "מעלה את המסמכים להמשך ההקלדה. החשבונית תישמר רק אחרי האישור שלך.";
+    waiting("מעלה את המסמכים להקלדה", "החשבונית תישמר רק אחרי האישור שלך");
     paint();
     try {
       await uploadDocuments();
+      stopWaiting();
       if (!root.isConnected) return;
       await invoiceForm(ctx, null, null, draft.attachmentIds);
     } catch (error) {
       status.hidden = true;
       showError(error);
     } finally {
+      stopWaiting();
       busy = false;
       ctx.setModalBusy(false);
       if (root.isConnected) paint();

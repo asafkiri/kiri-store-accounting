@@ -273,3 +273,38 @@ for (const served of ["completed", "running", "offline"]) {
     assert.equal(error?.hidden ?? true, served !== "offline", "the connection is blamed only when it is at fault");
   });
 }
+
+test("the wait names its step, spins and counts, and leaves nothing spinning when it ends", async () => {
+  const { ctx } = setup({
+    files: [{ name: "page.jpg", mime: "image/jpeg", data: "AAAA" }],
+    attachmentIds: [],
+    jobId: null,
+    status: "editing",
+  });
+  const completed = await ctx.api.request("template");
+  let releaseUpload, releaseScan;
+  ctx.api.request = async (path) =>
+    path === "documents"
+      ? new Promise((r) => { releaseUpload = () => r({ documents: [{ id: "a".repeat(64) }] }); })
+      : new Promise((r) => { releaseScan = () => r({ ...completed, status: "running" }); });
+  await scanDialog(ctx);
+  document.getElementById("run-scan").click();
+  await tick();
+  const status = document.getElementById("scan-status");
+  const step = () => status.querySelector(".scan-wait-text strong")?.textContent;
+  assert.equal(status.hidden, false);
+  assert.equal(status.getAttribute("aria-busy"), "true");
+  assert.ok(status.querySelector(".scan-wait-spin"), "the wait is visibly alive");
+  assert.match(step(), /מעלה את הצילום…/);
+  releaseUpload();
+  await tick();
+  assert.match(step(), /קורא את החשבונית…/, "the step follows the work");
+  const seconds = status.querySelector(".scan-wait-text small");
+  assert.match(seconds.textContent, /שניות/);
+  assert.equal(seconds.getAttribute("aria-hidden"), "true", "a reader hears the step, not a count every second");
+  releaseScan();
+  await tick();
+  assert.equal(status.querySelector(".scan-wait-spin"), null, "nothing keeps spinning after the answer");
+  assert.equal(status.getAttribute("aria-busy"), null);
+  assert.match(status.textContent, /עדיין מתבצעת/);
+});
