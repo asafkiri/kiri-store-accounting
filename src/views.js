@@ -18,6 +18,31 @@ const creditNotice = (count) =>
   count
     ? `<div class="notice warning">יש ${count} זיכויים עם סכומים שאינם שליליים. פתח ותקן אותם כדי להציג סיכום נכון.</div>`
     : "";
+const draftReminders = ctx => [
+  ["scan", "יש סריקה שלא הסתיימה"], ["invoice", "יש חשבונית שלא נשמרה"],
+  ["payment", "יש רישום תשלום שלא הסתיים"], ["cash", "יש סגירת יום שלא נשמרה"],
+].filter(([key]) => ctx.draftNames.includes(key)).map(([key, label]) =>
+  `<button class="draft-banner" data-action="resume-draft" data-key="${key}">${label} · המשך מכאן ${icon("arrow")}</button>`).join("");
+
+export function homeView(ctx) {
+  const entries = [
+    ['data-action="scan"', "צלם חשבונית", "צילום, בדיקה ושמירה", "camera", "home-scan scan-primary"],
+    ['data-route="invoices"', "חשבוניות ותשלומים", "מצא חשבונית וסמן ששילמת", "folder", "home-invoices"],
+    ['data-route="cash"', "קופה ורב־קו", "רישום סגירת היום", "cash", "home-cash"],
+    ['data-route="documents"', "שליחה לרואה החשבון", "כל צילומי החודש יחד", "share", "home-documents"],
+  ];
+  return `<div class="page-heading home-heading"><h1>מה עושים עכשיו?</h1></div><p class="page-intro">בחר פעולה כדי להתחיל</p>
+    ${draftReminders(ctx)}<div class="home-actions">${entries.map(([action, title, description, glyph, cls]) =>
+      `<button class="home-action ${cls}" ${action}><span class="home-action-icon">${icon(glyph)}</span><span><strong>${title}</strong><small>${description}</small></span>${icon("arrow")}</button>`).join("")}</div>`;
+}
+
+export function moreView() {
+  return `<div class="page-heading"><h1>אפשרויות נוספות</h1></div><div class="more-actions">
+    <button class="secondary" data-action="manage-suppliers">${icon("suppliers")} ניהול ספקים</button>
+    <button class="secondary" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>
+    <button class="secondary" data-route="reports">${icon("reports")} סיכומים ודוחות</button>
+    <button class="secondary" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></div>`;
+}
 export function invoiceCards(items, ctx) {
   return (
     items
@@ -45,8 +70,7 @@ export function invoicesView(ctx) {
   const openTotals = totals(allOpen), itemTotals = totals(items);
   return `<div class="page-heading"><div><h1>חשבוניות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
     ${!inFolder ? `<section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>סרוק חשבונית</strong><small>המצלמה נפתחת בלחיצה</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>` : ""}
-    ${ctx.draftNames.includes("scan") ? `<button class="draft-banner" data-action="resume-draft" data-key="scan">יש סריקה שלא הסתיימה · המשך מכאן ${icon("arrow")}</button>` : ""}
-    ${ctx.draftNames.includes("invoice") ? `<button class="draft-banner" data-action="resume-draft" data-key="invoice">יש חשבונית שלא נשמרה · המשך מכאן ${icon("arrow")}</button>` : ""}
+    ${draftReminders(ctx)}
     ${!inFolder ? `<button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button><button class="secondary check-search-link" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>` : ""}
     ${folderLocation(ctx)}
     ${!inFolder ? '<div class="section-label browser-heading"><h2>בחר תיקיית חודש</h2></div>' : ""}
@@ -117,7 +141,7 @@ export function reportsView(ctx) {
     <section class="report-section report-export"><h2>ייצוא ושמירת הסיכום</h2><p class="muted small">הייצוא כולל את החשבוניות בתקופה שבחרת.</p><div class="row-actions">${act("invoice-export", "הורד לאקסל (CSV)", "secondary", "download")}${act("print", "הדפס / שמור PDF", "secondary", null)}</div><details class="accountant-tools"><summary>בדיקה מול רואה החשבון</summary><p>העלה את הרשימה מרואה החשבון כדי לבדוק אילו חשבוניות חסרות או שונות.</p>${act("report-scan", "העלה רשימה לבדיקה", "secondary", null)}</details></section>`;
 }
 export function settingsView(ctx) {
-  return `<div class="page-heading"><div><span class="eyebrow">המכשיר והנתונים</span><h1>הגדרות וגיבוי</h1></div></div><section class="settings-section"><h2>השלמת מע״מ בסריקה</h2><p>ברירת המחדל: <strong>${(ctx.data.settings?.find(s => s.id === "accounting")?.defaultVatBasisPoints ?? 1800) / 100}%</strong>. החישוב מוצע רק כשצריך אישור שלך.</p>${act("vat-preferences", "שנה שיעור מע״מ", "secondary", null)}</section><section class="settings-section"><h2>גיבוי הנתונים</h2><p>הורד גיבוי JSON של הספקים, החשבוניות, התשלומים והסגירות היומיות. קבצי הצילום עצמם זמינים במסך צילומי חשבוניות, לפי חודש וספק.</p>${act("backup", "הורד גיבוי מלא של הנתונים", "primary", "download")}</section><section class="settings-section"><h2>טיוטות במכשיר</h2><p>טיוטות נשמרות במכשיר הזה. אם תשובת השמירה לא התקבלה, אפשר לבדוק כאן אם הפעולה נשמרה בחנות.</p><div class="row-actions">${
+  return `<div class="page-heading"><div><span class="eyebrow">המכשיר והנתונים</span><h1>הגדרות וגיבוי</h1></div></div><section class="settings-section"><h2>השלמת מע״מ בסריקה</h2><p>ברירת המחדל: <strong>${(ctx.data.settings?.find(s => s.id === "accounting")?.defaultVatBasisPoints ?? 1800) / 100}%</strong>. החישוב מוצע רק כשצריך אישור שלך.</p>${act("vat-preferences", "שנה שיעור מע״מ", "secondary", null)}</section><section class="settings-section"><h2>צבע הסימון „שולם”</h2><p>בחר צבע מוכר לך. המילה „שולם” תופיע תמיד לצד הצבע. הבחירה נשמרת במכשיר הזה.</p><div class="paid-color-options" role="group" aria-label="צבע הסימון שולם"><button class="secondary" data-action="paid-color" data-value="green" aria-pressed="${ctx.paidColor !== "red"}">ירוק · שולם</button><button class="secondary" data-action="paid-color" data-value="red" aria-pressed="${ctx.paidColor === "red"}">אדום · כמו באקסל</button></div></section><section class="settings-section"><h2>גיבוי הנתונים</h2><p>הורד גיבוי JSON של הספקים, החשבוניות, התשלומים והסגירות היומיות. קבצי הצילום עצמם זמינים במסך צילומי חשבוניות, לפי חודש וספק.</p>${act("backup", "הורד גיבוי מלא של הנתונים", "primary", "download")}</section><section class="settings-section"><h2>טיוטות במכשיר</h2><p>טיוטות נשמרות במכשיר הזה. אם תשובת השמירה לא התקבלה, אפשר לבדוק כאן אם הפעולה נשמרה בחנות.</p><div class="row-actions">${
     [
       ["invoice", "חשבונית"],
       ["supplier", "ספק"],
@@ -171,6 +195,8 @@ export function settingsView(ctx) {
 }
 export function shell(ctx) {
   const view = {
+    home: homeView,
+    more: moreView,
     invoices: invoicesView,
     checks: checksView,
     suppliers: suppliersView,
@@ -188,10 +214,10 @@ export function shell(ctx) {
         : view(ctx);
 
   const nav = [
+    ["home", "בית", "home"],
     ["invoices", "חשבוניות", "invoice"],
-    ["documents", "צילומים", "image"],
-    ["cash", "קופה ורב־קו", "cash"],
-    ["reports", "סיכום", "reports"],
+    ["more", "עוד אפשרויות", "settings"],
   ];
-  return `<div class="app-shell" data-section="${e(ctx.route)}"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${(["suppliers", "supplier-trash", "checks"].includes(ctx.route) ? "invoices" : ctx.route) === route ? "active" : ""}" ${(["suppliers", "supplier-trash", "checks"].includes(ctx.route) ? "invoices" : ctx.route) === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav><button class="settings-link ${ctx.route === "settings" ? "active" : ""}" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></aside><div class="workspace"><header class="topbar"><span>החשבונות של החנות</span><div><span id="connection-status" class="connection">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span><button class="icon-button" data-route="settings" aria-label="הגדרות וגיבוי">${icon("settings")}</button></div></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
+  const selected = ["home", "invoices"].includes(ctx.route) ? ctx.route : "more";
+  return `<div class="app-shell" data-section="${e(ctx.route)}" data-paid-color="${e(ctx.paidColor || "green")}"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${selected === route ? "active" : ""}" ${selected === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav></aside><div class="workspace"><header class="topbar">${ctx.route === "home" ? '<span class="topbar-brand">החשבונות של החנות</span>' : `<button class="secondary app-back" data-action="back">חזור</button><button class="secondary" data-route="home">${icon("home")} בית</button>`}<span id="connection-status" class="connection" role="status">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
 }

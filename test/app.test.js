@@ -84,6 +84,7 @@ test("archived stale drafts remain readable without changing the current record"
           },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="more"]').click();
   document.querySelector('[data-route="settings"]').click();
   document.querySelector('[data-key="' + key + '"]').click();
   await tick();
@@ -149,7 +150,7 @@ test("initial sync failure renders retry, never a false empty list, then loads a
   await tick();
   assert.match(
     document.getElementById("main").textContent,
-    /אין כרגע חשבוניות פתוחות/,
+    /מה עושים עכשיו/,
   );
   assert.doesNotMatch(
     document.getElementById("main").textContent,
@@ -167,6 +168,7 @@ test("successful sync renders server data even when local draft reads fail", asy
     },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   assert.match(document.body.textContent, /SERVER-OK/);
@@ -181,6 +183,7 @@ test("async export errors reach the Hebrew action error handler", async t => {
     download: async () => { throw new DOMException("NotAllowedError", "NotAllowedError"); },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="more"]').click();
   document.querySelector('[data-route="settings"]').click();
   const button = document.querySelector('[data-action="backup"]');
   await document.querySelector("#app").onclick({ target: button });
@@ -202,6 +205,7 @@ test("saved invoice exposes its attachments and opens the linked file through th
     },
   });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   const card = document.querySelector('[data-action="detail"][data-id="photo-invoice"]');
@@ -228,6 +232,7 @@ test("photo archive opens month, supplier, invoice and file without scanning aga
   });
   await globalThis.appAuthCallback({});
   document.querySelector('[data-route="documents"]').click();
+  document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   document.querySelector('[data-action="documents"]').click();
@@ -248,10 +253,12 @@ test("folder back retains status, while choosing another period leaves the old f
     ],
   } });
   await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="status"][data-value="paid"]').click();
   document.querySelector('[data-action="folder-month"][data-value="2026-09"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   document.querySelector('[data-action="folder-back"]').click();
+  await tick();
   assert.equal(document.querySelector('[data-action="status"][data-value="paid"]').getAttribute('aria-pressed'), 'true');
   assert.equal(document.querySelectorAll('.invoice-card').length, 0);
   const month = document.querySelector('[name="month"]'); month.value = '2026-08'; month.dispatchEvent(new Event('change'));

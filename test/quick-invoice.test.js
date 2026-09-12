@@ -30,6 +30,24 @@ const fill = (name, value) => { const input = document.querySelector(`[name="${n
 const choose = async action => { const button = document.querySelector(`[data-quick-choice="${action}"]`); assert.ok(button, action); button.click(); await tick(); };
 const submit = () => document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
+test("date choices and multiple notes require individual review and a final save", async () => {
+  const { ctx, writes } = setup();
+  const original = scan({ warnings: ["תאריך החשבונית אינו ברור: 10.09.2026 או 12/09/2026", "מספר החשבונית דורש בדיקה"] });
+  await invoiceForm(ctx, null, original);
+  assert.equal(document.querySelectorAll("[data-warning-edit]").length, 1);
+  document.querySelector('[data-warning-edit="invoiceDate"]').click();
+  assert.equal(document.querySelectorAll("[data-date-candidate]").length, 2);
+  document.querySelector('[data-date-candidate="2026-09-12"]').click(); await tick();
+  assert.equal(original.result.invoiceDate, "2026-09-10", "printed source remains unchanged");
+  await choose("next");
+  assert.match(document.querySelector(".review-position").textContent, /2 מתוך 2/);
+  assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'));
+  assert.equal(writes.length, 0);
+  await choose("next"); assert.ok(document.querySelector(".quick-summary-grid"));
+  submit(); await tick();
+  assert.equal(writes.length, 1); assert.equal(writes[0].body.data.invoiceDate, "2026-09-12");
+});
+
 test("inclusive VAT uses exact agorot, configurable rates and never applies the rate to the gross again", () => {
   assert.deepEqual(vatFromInclusive(11800, 1800), { vatAgorot: 1800, subtotalAgorot: 10000 });
   assert.deepEqual(vatFromInclusive(-11700, 1700), { vatAgorot: 1700, subtotalAgorot: 10000 });
