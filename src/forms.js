@@ -555,7 +555,9 @@ export async function invoiceForm(
       draft.newSupplier?.name ||
       ctx.data.suppliers.find((s) => s.id === f.supplierId)?.name ||
       (uncertain("supplierName") ? "" : r?.supplierName || "");
-  if (!record && r && !options.fullEditor) return quickInvoiceReview(ctx, draft, {
+  // A new invoice is a short run of questions whether it arrived with a scan
+  // or is typed from the paper; a resumed draft stays in the flow it began in.
+  if (!record && !options.fullEditor && (r || options.quick || draft.quick)) return quickInvoiceReview(ctx, draft, {
     bindDraft, footer, buildMutation: values => invoiceMutation(draft, values),
     openEditor: () => invoiceForm(ctx, null, draft.scan, [], { fullEditor: true }),
   });

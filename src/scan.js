@@ -1,11 +1,5 @@
-import { $, icon, toast, errorText } from "./ui.js";
-import {
-  escapeHtml as e,
-  money,
-  displayDate,
-  monthRange,
-  today,
-} from "./format.js";
+import { $, icon, errorText } from "./ui.js";
+import { escapeHtml as e } from "./format.js";
 import { invoiceForm } from "./forms.js";
 import { hasDraftContent } from "./draft-activity.js";
 import { readFile, encodeFile, decodeImage, validateFile } from "./image-upload.js";
@@ -13,10 +7,9 @@ import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
 export { readFile } from "./image-upload.js";
 // Cloud Run ends the request itself at 60 seconds, so the browser waits past
-// that deadline instead of stopping ahead of it. Giving up first turns an
-// answer that is still on its way into a warning about the connection, and a
-// scan the server did finish into a second request that costs money.
-const SCAN_REQUEST_TIMEOUT = 70_000;
+// that deadline instead of stopping ahead of it: an upload that is still on
+// its way is not a connection problem.
+const UPLOAD_TIMEOUT = 70_000;
 
 async function pixelsFromImage(image, maxEdge = Infinity) {
   const width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
@@ -359,20 +352,14 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
   });
 }
 
-export async function scanDialog(ctx, purpose = "invoice", options = {}) {
-  const key = purpose === "invoice" ? "scan" : "reportScan";
-  let draft = (await ctx.drafts.load(key)) || {
-    files: [],
-    attachmentIds: [],
-    jobId: null,
-    status: "editing",
-    result: null,
-  };
-  if (options.resume && purpose === "invoice" && draft.result?.status === "completed")
-    return invoiceForm(ctx, null, draft.result);
+// The photograph is the record for the accountant; the details are typed from
+// the paper right after it. Nothing here reads the document.
+export async function scanDialog(ctx, options = {}) {
+  const key = "scan";
+  let draft = (await ctx.drafts.load(key)) || { files: [], attachmentIds: [] };
   const root = ctx.dialog(
-    purpose === "invoice" ? "סריקת חשבונית" : "בדיקה מול רואה החשבון",
-    `<div class="scan-view"><p>${purpose === "invoice" ? "הוסף את העמודים של אותה חשבונית, ואז המשך לפענוח." : "הדוח משמש להשוואה בלבד. הוא אינו מוסיף או משנה חשבוניות."}</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 קבצים לאותה חשבונית. אפשר להגדיל כל צילום לפני שממשיכים.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="run-scan">סרוק ובדוק פרטים</button><button class="secondary" id="check-scan" hidden>בדוק תוצאה של סריקה קודמת</button><button class="text-button" id="new-scan" hidden>התחל סריקה חדשה</button><button class="text-button" id="manual-from-scan">המשך בהקלדה ידנית</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
+    "צילום חשבונית",
+    `<div class="scan-view"><p>צלם את החשבונית. אם יש לה עוד עמודים, הוסף גם אותם; אחר כך ממלאים את הפרטים מהנייר.</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 קבצים לאותה חשבונית. אפשר להגדיל כל צילום לפני שממשיכים.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="fill-details">המשך למילוי הפרטים</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
   );
   let busy = false;
   const persist = () => hasDraftContent(key, draft) ? ctx.drafts.save(key, draft) : ctx.drafts.remove(key);
@@ -383,7 +370,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       const result = await ctx.api.request("documents", {
         method: "POST",
         body: { files: draft.files },
-        timeout: SCAN_REQUEST_TIMEOUT,
+        timeout: UPLOAD_TIMEOUT,
       });
       draft.attachmentIds = result.documents.map(document => document.id);
       await persist();
@@ -422,24 +409,15 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     err.textContent = errorText(error);
   };
   const paint = () => {
-    const locked = busy || Boolean(draft.jobId);
+    const locked = busy;
     for (const input of root.querySelectorAll("input[type=file]"))
       input.disabled = locked;
-    $("#run-scan", root).disabled = locked || !draft.files.length;
-    $("#run-scan", root).textContent = busy
-      ? "הסריקה מתבצעת…"
-      : "סרוק ובדוק פרטים";
-    $("#check-scan", root).hidden = !draft.jobId;
-    $("#check-scan", root).disabled = busy;
-    $("#new-scan", root).hidden = !draft.jobId;
-    $("#new-scan", root).disabled = busy;
     $("#clear-scan", root).disabled = busy;
     $("#clear-scan", root).hidden = !hasDraftContent(key, draft);
-    $("#manual-from-scan", root).hidden = purpose !== "invoice";
-    $("#manual-from-scan", root).disabled = busy;
-    $("#manual-from-scan", root).textContent = draft.files.length || draft.attachmentIds.length
-      ? "המשך ידנית עם המסמכים"
-      : "המשך בהקלדה ידנית";
+    $("#fill-details", root).disabled = busy;
+    $("#fill-details", root).textContent = draft.files.length || draft.attachmentIds.length
+      ? "המשך למילוי הפרטים"
+      : "מלא פרטים בלי צילום";
     $("#file-previews", root).innerHTML = draft.files
       .map(
         (f, i) =>
@@ -447,33 +425,12 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       )
       .join("");
   };
-  const finish = async (job) => {
-    draft.status = job.status;
-    draft.result = job;
-    await persist();
-    if (job.status === "completed") {
-      if (purpose === "invoice") {
-        await invoiceForm(ctx, null, job);
-      } else await showComparison(ctx, job);
-    } else if (job.status === "failed") {
-      status.hidden = false;
-      status.textContent =
-        "הסריקה לא הושלמה. אפשר להתחיל סריקה חדשה או למלא ידנית.";
-    } else {
-      status.hidden = false;
-      status.textContent =
-        "הסריקה עדיין מתבצעת. בעוד רגע אפשר ללחוץ שוב על בדיקת התוצאה.";
-      paint();
-    }
-  };
   // One accepted page enters the draft the same way from every capture path.
   const acceptPage = async prepared => {
     if ([...draft.files, prepared].reduce((n, f) => n + f.data.length * 3 / 4, 0) > 12 * 1024 * 1024)
       throw Error("הקבצים גדולים מ־12 מגה. בחר פחות עמודים.");
     draft.files.push(prepared);
     draft.attachmentIds = [];
-    draft.jobId = null;
-    draft.status = "editing";
     await persist();
     paint();
   };
@@ -489,7 +446,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
   };
   for (const input of root.querySelectorAll(".scan-view input[type=file]"))
     input.onchange = async () => {
-      if (busy || draft.jobId) return;
+      if (busy) return;
       busy = true;
       ctx.setModalBusy(true);
       paint();
@@ -509,7 +466,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
   // label activates the phone camera natively (no scripted input.click()).
   const cameraInput = $("#camera-file", root);
   const captureLive = async () => {
-    if (busy || draft.jobId) return;
+    if (busy) return;
     busy = true;
     ctx.setModalBusy(true);
     paint();
@@ -517,7 +474,7 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     let result;
     try {
       if (draft.files.length >= 8) throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
-      result = await liveCapture(ctx, root, { alternatives: purpose === "invoice" });
+      result = await liveCapture(ctx, root, { alternatives: true });
       if (result?.files) await acceptFiles(result.files);
       while (root.isConnected && result?.file) {
         const prepared = await reviewPhoto(ctx, root, result.file, { worker: result.worker, hint: result.hint, onRetake: !result.unavailable });
@@ -537,10 +494,10 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       ctx.setModalBusy(false);
       if (root.isConnected) paint();
     }
-    if (root.isConnected && result?.manual) $("#manual-from-scan", root).click();
+    if (root.isConnected && result?.manual) $("#fill-details", root).click();
   };
   cameraInput.closest("label").addEventListener("click", ev => {
-    if (busy || draft.jobId || cameraInput.disabled || !liveCameraSupported() || isLiveCameraUnavailable()) return;
+    if (busy || cameraInput.disabled || !liveCameraSupported() || isLiveCameraUnavailable()) return;
     ev.preventDefault();
     void captureLive();
   });
@@ -548,11 +505,9 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     const remove = ev.target.closest("[data-remove-file]"),
       preview = ev.target.closest("[data-preview-file]");
     if (remove) {
-      if (busy || draft.jobId) return;
+      if (busy) return;
       draft.files.splice(Number(remove.dataset.removeFile), 1);
       draft.attachmentIds = [];
-      draft.jobId = null;
-      draft.status = "editing";
       try {
         await persist();
         paint();
@@ -566,117 +521,20 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
       ctx.previewBlob(new Blob([bytes], { type: f.mime }));
     }
   });
-  $("#run-scan", root).onclick = async () => {
-    if (busy || draft.status === "running") return;
-    busy = true;
-    ctx.setModalBusy(true);
-    err.hidden = true;
-    const since = waiting(
-      "מעלה את הצילום",
-      "החשבונית תישמר רק אחרי בדיקה ואישור שלך",
-    );
-    paint();
-    try {
-      await uploadDocuments();
-      draft.jobId ||= crypto.randomUUID();
-      draft.status = "running";
-      await persist();
-      waiting("קורא את החשבונית", "הקריאה יכולה לקחת עד דקה", since);
-      const job = await ctx.api.request(
-        purpose === "invoice" ? "scan-invoice" : "scan-report",
-        {
-          method: "POST",
-          body: { jobId: draft.jobId, attachmentIds: draft.attachmentIds },
-          timeout: SCAN_REQUEST_TIMEOUT,
-        },
-      ).finally(stopWaiting);
-      await finish(job);
-    } catch (error) {
-      // A missing answer is not a failed scan. The reading often finishes on the
-      // server after the browser stopped waiting, and asking for that job's
-      // result is a free GET, so it is asked for here instead of leaving a
-      // warning about the connection in front of a scan that is already done.
-      // The paid request itself is still never repeated without being asked for.
-      if (error.code === "NETWORK" && draft.jobId) {
-        waiting("בודק אם הסריקה כבר הסתיימה", "בלי סריקה נוספת בתשלום", since);
-        try {
-          const job = await ctx.api
-            .request("scan-jobs/" + draft.jobId)
-            .finally(stopWaiting);
-          await finish(job);
-          return;
-        } catch {}
-      }
-      showError(error);
-      if (error.status === 409 && error.code === "SCAN_IN_PROGRESS") {
-        // A global lease can reject this request before its job exists. GET is free.
-        try {
-          await finish(await ctx.api.request("scan-jobs/" + draft.jobId));
-        } catch (lookup) {
-          if (lookup.status === 404) {
-            draft.status = "editing";
-            draft.jobId = null;
-            draft.result = null;
-            await persist();
-            status.textContent = "מתבצעת סריקה אחרת בחנות. נסה בעוד רגע.";
-          } else {
-            status.textContent =
-              "לא התקבלה תשובה. בדוק את תוצאת הסריקה לפני ניסיון נוסף.";
-          }
-        }
-        return;
-      }
-      if (error.status && error.code !== "SCAN_IN_PROGRESS") {
-        draft.status = "failed";
-        await persist();
-      }
-      status.textContent =
-        "אם התקבל ניתוק, בדוק קודם את תוצאת הסריקה הקודמת. אין סריקה חוזרת אוטומטית.";
-    } finally {
-      stopWaiting();
-      busy = false;
-      ctx.setModalBusy(false);
-      if (root.isConnected) paint();
-    }
-  };
-  $("#check-scan", root).onclick = async () => {
-    if (busy) return;
-    busy = true;
-    waiting("בודק את תוצאת הסריקה", "בלי סריקה נוספת בתשלום");
-    paint();
-    try {
-      await finish(
-        await ctx.api.request("scan-jobs/" + draft.jobId).finally(stopWaiting),
-      );
-    } catch (error) {
-      showError(error);
-    } finally {
-      stopWaiting();
-      busy = false;
-      if (root.isConnected) paint();
-    }
-  };
-  $("#new-scan", root).onclick = async () => {
-    if (!confirm("סריקה חדשה שולחת בקשה נוספת ל־AI. להתחיל מחדש?")) return;
-    draft.jobId = null;
-    draft.status = "editing";
-    draft.result = null;
-    await persist();
-    status.hidden = true;
-    paint();
-  };
-  $("#manual-from-scan", root).onclick = async () => {
+  // The photograph goes up once, then the questions open with it attached; a
+  // failed upload keeps the pages here for another try. Nothing is read.
+  $("#fill-details", root).onclick = async () => {
     if (busy || !root.isConnected) return;
     busy = true;
     ctx.setModalBusy(true);
     err.hidden = true;
-    waiting("מעלה את המסמכים להקלדה", "החשבונית תישמר רק אחרי האישור שלך");
+    waiting("מעלה את הצילום", "הפרטים נפתחים מיד אחרי זה");
     paint();
     try {
       await uploadDocuments();
       stopWaiting();
       if (!root.isConnected) return;
-      await invoiceForm(ctx, null, null, draft.attachmentIds);
+      await invoiceForm(ctx, null, null, draft.attachmentIds, { quick: true });
     } catch (error) {
       status.hidden = true;
       showError(error);
@@ -695,40 +553,6 @@ export async function scanDialog(ctx, purpose = "invoice", options = {}) {
     await ctx.drafts.remove(key);
     ctx.closeModal();
   };
-  if (draft.status === "running") {
-    status.hidden = false;
-    status.textContent =
-      "יש סריקה קודמת. בדוק את תוצאתה לפני הפעלת סריקה נוספת.";
-  }
-  if (draft.result?.status === "completed") {
-    status.hidden = false;
-    status.textContent = "יש תוצאה מוכנה. לחץ על בדיקת תוצאה כדי לפתוח אותה.";
-  }
   paint();
-  if (options.openCamera && purpose === "invoice" && !hasDraftContent(key, draft)) void captureLive();
-}
-async function showComparison(ctx, job) {
-  const month = today().slice(0, 7),
-    root = ctx.dialog(
-      "השוואת הדוח לחשבוניות",
-      `<p>בחר את התקופה הכלולה בדוח.</p><form id="compare-form" class="filters"><label class="field"><span>חודש</span><input type="month" name="month" value="${month}" required></label><button type="submit" class="primary">השווה חשבוניות</button></form><div id="comparison"></div>`,
-    );
-  $("form", root).onsubmit = async (ev) => {
-    ev.preventDefault();
-    const button = $("button[type=submit]", root);
-    button.disabled = true;
-    try {
-      const dates = monthRange($("input", root).value),
-        result = await ctx.api.request("reconcile", {
-          method: "POST",
-          body: { jobId: job.id, ...dates },
-        });
-      $("#comparison", root).innerHTML =
-        `<div class="notice"><strong>${result.matchedCount} התאמות מלאות</strong><p>אין שינוי בחשבוניות בחנות. שורה שלא נמצאה בה התאמה דורשת בדיקה.</p></div>${result.warnings.map((w) => `<p class="notice warning">${e(w)}</p>`).join("")}${result.results.map((r) => `<article class="compare-row"><strong>${e(r.row.supplierName || "ספק לא זוהה")} · ${e(r.row.documentNumber || "מספר לא זוהה")}</strong><p>${e(displayDate(r.row.invoiceDate))} · ${e(money(r.row.totalAgorot))}</p><span class="badge ${r.status === "matched" ? "paid" : "unpaid"}">${r.status === "matched" ? "נמצאה התאמה" : "לא נמצאה התאמה — דורש בדיקה"}</span>${r.candidates.map((c) => `<p>אפשרות לבדיקה: חשבונית ${e(c.documentNumber)} · ${e(displayDate(c.invoiceDate))} · ${e(money(c.totalAgorot))}</p>`).join("")}</article>`).join("")}<h3>חשבוניות מהחנות שלא הותאמו בדוח (${result.notInReport.length})</h3>${result.notInReport.map((i) => `<p>חשבונית ${e(i.documentNumber)} · ${e(money(i.totalAgorot))}</p>`).join("")}`;
-    } catch (err) {
-      toast(errorText(err), true);
-    } finally {
-      button.disabled = false;
-    }
-  };
+  if (options.openCamera && !hasDraftContent(key, draft)) void captureLive();
 }
