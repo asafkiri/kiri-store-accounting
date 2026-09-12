@@ -1496,8 +1496,8 @@ for (const engine of [chromium, webkit]) {
 }
 
 async function workspaceRoute(page, route) {
-  if (["home", "invoices", "more"].includes(route)) return page.locator(`.sidebar [data-route="${route}"]`).click();
-  if (["documents", "cash"].includes(route)) {
+  if (["home", "more"].includes(route)) return page.locator(`.sidebar [data-route="${route}"]`).click();
+  if (["invoices", "documents", "cash"].includes(route)) {
     await workspaceRoute(page, "home");
     return page.locator(`.home-actions [data-route="${route}"]`).click();
   }
@@ -1674,7 +1674,8 @@ for (const engine of [chromium, webkit]) {
     await page.screenshot({ path: `test-artifacts/summary-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-action="report-supplier"][data-id="supplier-tnuva"]').click();
     assert.equal(await page.locator(".invoice-card").count(), 1);
-    await page.locator('.sidebar [data-route="invoices"]').click();
+    // Supplier management is reached from the remaining navigation entry.
+    await workspaceRoute(page, "more");
     await page.locator('[data-action="manage-suppliers"]').click();
     await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').click();
     await page.locator("[data-remove-supplier]").click();

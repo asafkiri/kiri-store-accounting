@@ -244,6 +244,8 @@ test("photo archive opens month, supplier, invoice and file without scanning aga
   });
   await globalThis.appAuthCallback({});
   document.querySelector('[data-route="documents"]').click();
+  // Invoices are reached from Home, not from a navigation entry of their own.
+  document.querySelector('[data-route="home"]').click();
   document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();

@@ -116,9 +116,9 @@ test("the invoice and photo archive show only the current folder and retain a ba
   assert.equal(doc.querySelectorAll('.invoice-card').length, 0);
 });
 
-test("the main navigation does not duplicate the invoices entry already offered on Home", () => {
-  const html = shell({
-    route: "home",
+test("the main navigation does not duplicate the invoices entry already offered on Home", async () => {
+  const { JSDOM } = await import("jsdom");
+  const ctx = {
     filters: {},
     folderPath: {},
     limit: 80,
@@ -126,11 +126,12 @@ test("the main navigation does not duplicate the invoices entry already offered 
     draftNames: [],
     lastRefresh: 123,
     syncError: false,
-  });
-  const routes = html.match(/data-route="[^"]+"/g) || [];
-  assert.equal(routes.length, 2);
-  assert.match(html, /data-route="home"/);
-  assert.match(html, /data-route="more"/);
-  assert.doesNotMatch(html, /data-route="invoices"/);
-  assert.doesNotMatch(html, /data-route="invoices" class="active"/);
+  };
+  const render = route => new JSDOM(shell({ ...ctx, route })).window.document;
+  const home = render("home"), nav = home.querySelector('nav[aria-label="ניווט ראשי"]');
+  assert.deepEqual([...nav.querySelectorAll("button")].map(b => b.dataset.route), ["home", "more"]);
+  // The invoices entry belongs to Home, which keeps it reachable in one tap.
+  assert.ok(home.querySelector('#main [data-route="invoices"]'));
+  const invoicesNav = render("invoices").querySelector('nav[aria-label="ניווט ראשי"]');
+  assert.equal(invoicesNav.querySelectorAll("button.active,[aria-current]").length, 0);
 });
