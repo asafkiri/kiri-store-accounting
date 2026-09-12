@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { matchSupplier } from "../src/supplier-picker.js";
+import { parseTaxIds } from "../src/forms.js";
 import {
   deriveMissingAmounts,
   invoiceQuestions,
@@ -130,4 +131,17 @@ test("the vendored tax-id module is the one the server validates against", () =>
   assert.equal(normalizeTaxId("69991651"), "069991651");
   assert.ok(isValidTaxId("0570000745"));
   assert.equal(isValidTaxId("89991651"), false);
+});
+
+test("an identifier typed by hand is checked before the save leaves", () => {
+  assert.deepEqual(parseTaxIds(""), []);
+  assert.deepEqual(parseTaxIds("  "), []);
+  // Separators, a dropped leading zero and a repeat all normalize to one set.
+  assert.deepEqual(
+    parseTaxIds("513036434, 58323544  557904679\n513036434"),
+    ["513036434", "058323544", "557904679"],
+  );
+  // The number Mr. ICE prints for the store fails its own check digit.
+  assert.throws(() => parseTaxIds("89991651"), /89991651/);
+  assert.throws(() => parseTaxIds("513036434, 274076"), /274076/);
 });

@@ -16,6 +16,7 @@ import {
   matchSupplier,
 } from "./supplier-picker.js";
 import { creditSignIssues } from "./credit.js";
+import { isValidTaxId, normalizeTaxId } from "./tax-id.js";
 import { hasDraftContent } from "./draft-activity.js";
 import { quickInvoiceReview } from "./quick-invoice.js";
 import {
@@ -338,12 +339,13 @@ export async function supplierForm(ctx, record = null) {
       contact: record?.contact || "",
       notes: record?.notes || "",
       active: record?.active === false ? "no" : "yes",
+      taxIds: (record?.taxIds || []).join(", "),
     },
   };
   const f = draft.fields;
   const root = ctx.dialog(
     record ? "עריכת ספק" : "הוספת ספק",
-    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">הספק יעבור לסל המחזור ל־30 יום. החשבוניות שלו יישארו בהיסטוריה.</p></section>` : ""}</form>`,
+    `${staleNotice(old, record, draft)}<form id="supplier-form"><div class="form-grid">${field("שם הספק", "name", f.name, { required: true, wide: true })}${field("פרטי קשר (רשות)", "contact", f.contact, { wide: true })}${field("מספרי ח.פ / ע.מ (רשות)", "taxIds", f.taxIds, { wide: true, hint: "לפי המספרים האלה חשבוניות סרוקות משויכות לספק הזה. הם נוספים לבד כשמאשרים סריקה. אפשר להפריד בפסיק." })}${textArea("notes", f.notes, "הערות")}${select("מצב ספק", "active", f.active, { yes: "פעיל", no: "לא פעיל — נשאר בהיסטוריה" }, { wide: true })}</div>${footer("שמור ספק", record ? "בטל את שינויי הטיוטה" : "מחק טיוטה")}${record ? `<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-supplier>מחק ספק מהחנות</button><p class="small muted">הספק יעבור לסל המחזור ל־30 יום. החשבוניות שלו יישארו בהיסטוריה.</p></section>` : ""}</form>`,
   );
   const form = $("form", root);
   bindDraft(
@@ -360,6 +362,7 @@ export async function supplierForm(ctx, record = null) {
           contact: values.contact,
           notes: values.notes,
           active: values.active === "yes",
+          taxIds: parseTaxIds(values.taxIds),
         },
         draft.version,
       ),
@@ -389,6 +392,19 @@ export async function preferencesForm(ctx) {
     if (rate < 0 || rate > 10000) throw Error("יש לבחור שיעור בין 0 ל־100 אחוזים.");
     return pendingMutation("settings/accounting", { defaultVatBasisPoints: rate }, draft.version);
   });
+}
+// A wrong identifier would keep sending a supplier's invoices to the wrong
+// place, so the field is editable and its check digit is verified before the
+// save leaves, naming the number that failed rather than the whole field.
+export function parseTaxIds(value) {
+  const ids = [];
+  for (const token of String(value || "").split(/[,;\s]+/).filter(Boolean)) {
+    if (!isValidTaxId(token))
+      throw Error(`מספר ח.פ/ע.מ אינו תקין: ${token}. יש לבדוק את הספרות.`);
+    const id = normalizeTaxId(token);
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 export function invoiceMutation(draft, values, record = null) {
       if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
