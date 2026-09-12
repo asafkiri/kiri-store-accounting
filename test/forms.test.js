@@ -147,6 +147,7 @@ test("cheque form sends handover and due dates separately", async () => {
     finalAgorot: 500,
     status: "unpaid",
   });
+  document.querySelector('[data-payment-method="check"]').click();
   fill("paymentDate", "2026-09-10");
   fill("checkDueDate", "2026-09-30");
   submit();
@@ -154,6 +155,32 @@ test("cheque form sends handover and due dates separately", async () => {
   assert.equal(saved[0].body.payment.paymentDate, "2026-09-10");
   assert.equal(saved[0].body.payment.checkDueDate, "2026-09-30");
   assert.equal(saved[0].body.payment.method, "check");
+});
+test("payment choices keep the draft on Back and a lost response reuses the same mutation", async () => {
+  const { ctx, drafts } = setup(), attempts = [], confirmations = [];
+  ctx.api.save = async pending => {
+    attempts.push(structuredClone(pending));
+    if (attempts.length === 1) throw new ApiError("אין חיבור לרשת");
+    return { record: { id: "invoice-pay", status: "paid", version: 2, payment: pending.body.payment } };
+  };
+  ctx.showSaved = (kind, record) => confirmations.push({ kind, record });
+  const record = { id: "invoice-pay", supplierId: "supplier-001", version: 1, documentNumber: "PAY-1", finalAgorot: 11800, status: "unpaid" };
+  await paymentForm(ctx, record);
+  document.querySelector('[data-payment-method="check"]').click();
+  fill("checkNumber", "000234");
+  ctx.modalBack();
+  assert.equal(document.querySelector("[data-payment-methods]").hidden, false);
+  document.querySelector('[data-payment-method="check"]').click();
+  assert.equal(document.querySelector('[name="checkNumber"]').value, "000234");
+  submit(); await tick();
+  assert.equal(confirmations.length, 0);
+  assert.ok(drafts.get("payment").pending);
+  await paymentForm(ctx, record);
+  assert.equal(document.querySelector('[type="submit"]').hidden, false);
+  submit(); await tick();
+  assert.deepEqual(attempts[0], attempts[1]);
+  assert.equal(confirmations.length, 1); assert.equal(confirmations[0].kind, "payment");
+  assert.equal(drafts.has("payment"), false);
 });
 test("daily cash form records two independent amounts", async () => {
   const { ctx, saved } = setup();

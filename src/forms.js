@@ -256,10 +256,11 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         ctx.mergeRecord(related.record, related.path);
       ctx.mergeRecord(result.record, draft.pending.path);
       disposed = true;
-      ctx.closeModal();
       ctx.setModalBusy(false);
+      if (ctx.showSaved && ["invoice", "payment", "cash"].includes(key)) ctx.showSaved(key, result.record);
+      else ctx.closeModal();
       ctx.render();
-      toast(
+      if (!ctx.showSaved || !["invoice", "payment", "cash"].includes(key)) toast(
         result.supplierAction === "created"
           ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר לערוך אותו דרך ניהול ספקים.`
           : key === "supplier" && draft.operation === "delete" ? "הספק הועבר לסל המחזור · ניתן לשחזר במשך 30 יום"
@@ -689,7 +690,7 @@ export async function invoiceForm(
     } catch {}
   });
 }
-export async function paymentForm(ctx, record) {
+export async function paymentForm(ctx, record, { onBack = null } = {}) {
   const key = "payment",
     old = await ctx.drafts.load(key);
   if (old && old.recordId !== record.id)
@@ -712,18 +713,57 @@ export async function paymentForm(ctx, record) {
           },
         };
   const f = draft.fields;
+  const supplier = ctx.data.suppliers.find(s => s.id === record.supplierId)?.name || "הספק";
   const root = ctx.dialog(
     "סימון חשבונית כשולמה",
-    `<form><div class="payment-amount"><span>חשבונית ${e(record.documentNumber)}</span><strong>${e(money(record.finalAgorot))}</strong></div><div class="form-grid">${select("אמצעי תשלום", "method", f.method, methods, { wide: true })}${field("תאריך תשלום / מסירת צ׳ק", "paymentDate", f.paymentDate, { type: "date", required: true, wide: true })}<div class="notice wide" id="check-notice">בצ׳ק: זה היום שבו מסרת את הצ׳ק לספק.</div><div id="check-fields" class="form-grid wide">${field("מספר צ׳ק (רשות)", "checkNumber", f.checkNumber)}${field("מועד פירעון (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${textArea("notes", f.notes, "הערה לתשלום (רשות)")}</div>${footer(record.status === "paid" ? "עדכן פרטי תשלום" : "אשר תשלום")}</form>`,
+    `<form class="payment-form"><div class="payment-amount"><span><strong>${e(supplier)}</strong> · חשבונית ${e(record.documentNumber)}</span><strong>${e(money(record.finalAgorot))}</strong></div>
+      <input type="hidden" name="method" value="${e(f.method)}">
+      <section data-payment-methods><h3>איך שילמת?</h3><div class="payment-methods">${Object.entries(methods).map(([value, label]) => `<button type="button" class="secondary" data-payment-method="${value}" aria-pressed="${value === f.method}">${e(label)}</button>`).join("")}</div></section>
+      <section data-payment-details><div class="payment-selected"><strong data-selected-method></strong><button type="button" class="text-button" data-change-method>שנה אמצעי תשלום</button></div>
+      <div class="form-grid">${field("באיזה יום מסרת את הצ׳ק?", "paymentDate", f.paymentDate, { type: "date", required: true, wide: true })}
+      <div class="notice wide" id="check-notice">תאריך המסירה לספק נשמר כתאריך התשלום.</div><div id="check-fields" class="wide">${field("מספר צ׳ק (רשות)", "checkNumber", f.checkNumber)}</div>
+      <details class="payment-optional wide" ${f.checkDueDate || f.notes ? "open" : ""}><summary>פרטים נוספים (רשות)</summary><div data-check-due>${field("מועד פירעון הצ׳ק (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${textArea("notes", f.notes, "הערה לתשלום (רשות)")}</details></div></section>
+      ${footer(record.status === "paid" ? "עדכן פרטי תשלום" : "אשר תשלום", "בטל את רישום התשלום")}</form>`,
   );
   const form = $("form", root),
     update = () => {
       const check = form.elements.method.value === "check";
       $("#check-fields", form).hidden = !check;
       $("#check-notice", form).hidden = !check;
+      $("[data-check-due]", form).hidden = !check;
+      form.elements.paymentDate.closest("label").querySelector("span").textContent = check ? "באיזה יום מסרת את הצ׳ק?" : "באיזה יום שילמת?";
+      $("[data-selected-method]", form).textContent = methods[form.elements.method.value];
+      form.querySelectorAll("[data-payment-method]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.paymentMethod === form.elements.method.value)));
+      const choosing = !draft.paymentDetails && !draft.restored && record.status !== "paid" && !draft.pending;
+      $("[data-payment-methods]", form).hidden = !choosing;
+      $("[data-payment-details]", form).hidden = choosing;
+      $("[type=submit]", form).hidden = choosing;
     };
   update();
   form.elements.method.addEventListener("change", update);
+  form.querySelectorAll("[data-payment-method]").forEach(b => {
+    b.onclick = () => {
+      if (draft.pending || b.disabled) return;
+      form.elements.method.value = b.dataset.paymentMethod;
+      draft.paymentDetails = true;
+      form.dispatchEvent(new Event("input", { bubbles: true }));
+      update();
+      $("[data-payment-details]", form).scrollIntoView?.({ block: "nearest" });
+    };
+  });
+  $("[data-change-method]", form).onclick = () => {
+    if (draft.pending) return;
+    $("[data-payment-methods]", form).hidden = false;
+    $("[data-payment-details]", form).hidden = true;
+    $("[type=submit]", form).hidden = true;
+  };
+  ctx.modalBack = () => {
+    if (ctx.modalBusy) return;
+    if (draft.pending) { ctx.closeModal(); return; }
+    if (!$("[data-payment-details]", form).hidden) $("[data-change-method]", form).click();
+    else if (onBack) onBack();
+    else ctx.closeModal();
+  };
   bindDraft(
     ctx,
     form,

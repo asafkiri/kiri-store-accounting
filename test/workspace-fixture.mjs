@@ -79,7 +79,24 @@ export function workspaceFixture({ scanResult = {} } = {}) {
       } }));
     }
     if (req.method === "PUT" && path.startsWith("/api/v1/invoices/")) {
-      const record = { ...body.data, id: path.split("/").at(-1), version: 1, status: "unpaid" }; data.invoices.push(record); data.version++;
+      const id = path.split("/").at(-1), existing = data.invoices.find(i => i.id === id);
+      const record = { ...existing, ...body.data, id, version: (existing?.version || 0) + 1, status: existing?.status || "unpaid" };
+      if (existing) data.invoices[data.invoices.indexOf(existing)] = record; else data.invoices.push(record);
+      data.version++;
+      return res.end(JSON.stringify({ record }));
+    }
+    if (req.method === "POST" && /^\/api\/v1\/invoices\/[^/]+\/(pay|unpay)$/.test(path)) {
+      const record = data.invoices.find(i => i.id === path.split("/").at(-2));
+      const pay = path.endsWith("/pay");
+      Object.assign(record, { status: pay ? "paid" : "unpaid", payment: pay ? body.payment : null, version: record.version + 1 });
+      data.version++;
+      return res.end(JSON.stringify({ record }));
+    }
+    if (req.method === "PUT" && path.startsWith("/api/v1/daily-cash/")) {
+      const id = path.split("/").at(-1), old = data.dailyCash.find(r => r.id === id);
+      const record = { ...body.data, id, version: (old?.version || 0) + 1 };
+      if (old) data.dailyCash[data.dailyCash.indexOf(old)] = record; else data.dailyCash.push(record);
+      data.version++;
       return res.end(JSON.stringify({ record }));
     }
     if (req.method === "PUT" && path === "/api/v1/settings/accounting") {

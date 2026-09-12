@@ -2,6 +2,7 @@ import { $, field, icon, errorText } from "./ui.js";
 import { escapeHtml as e, money, moneyInput, parseMoney, displayDate, types } from "./format.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
 import { invoiceQuestions, deriveMissingAmounts, amountOrNull, validInvoiceDate, vatFromInclusive, expectedFinal } from "./quick-invoice-model.js";
+import { reviewFields, warningFields, warningDates } from "./review-actions.js";
 
 // The full edit form remains available for saved invoices. New scans use one
 // unresolved detail at a time and share the same durable mutation/retry binding.
@@ -19,16 +20,16 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const collect = () => f;
   const choice = (action, text, primary = false, hint = "") => `<button type="button" class="${primary ? "primary" : "secondary"} quick-choice" data-quick-choice="${e(action)}"><strong>${e(text)}</strong>${hint ? `<small>${e(hint)}</small>` : ""}</button>`;
   const input = (label, name, value, type = "text") => field(label, name, value, { type, wide: true });
-  const row = (key, label, value) => `<button type="button" class="quick-summary-row" data-edit-question="${key}" aria-label="שנה ${e(label)}"><span>${e(label)}</span><strong>${e(value)}</strong></button>`;
+  const row = (key, label, value) => `<button type="button" class="quick-summary-row" data-edit-question="${key}" aria-label="שנה ${e(label)}"><span>${e(label)} <small class="edit-caption">תקן</small></span><strong>${e(value)}</strong></button>`;
   const signed = value => value === null ? null : f.documentType === "credit" ? -Math.abs(value) : value;
   const photo = () => f.attachmentIds?.length ? `<button type="button" class="text-button quick-photo" data-open-document="${e(f.attachmentIds[0])}" data-safe-action>${icon("image")} הצג חשבונית</button>` : "";
-  const warningText = () => (read.warnings || []).map(w => `<p class="notice warning">${e(w)}</p>`).join("");
-  const warningEdits = () => `<p>איזה פרט צריך לתקן?</p><div class="warning-edits">${[
-    ["documentNumber", "מספר חשבונית"], ["supplierName", "ספק"], ["invoiceDate", "תאריך"],
-    ["subtotalAgorot", "לפני מע״מ"], ["vatAgorot", "מע״מ"], ["totalAgorot", "סכום כולל"],
-    ["finalAgorot", "סופי לתשלום"], ["documentType", "סוג חשבונית"],
-    ...f.deductions.map((d, i) => ["deduction:" + i, d.label || "הפחתה"]),
-  ].map(([key, label]) => `<button type="button" class="secondary" data-warning-edit="${e(key)}">תקן ${e(label)}</button>`).join("")}</div>`;
+  const warning = () => read.warnings?.[Math.min(q.warningIndex || 0, (read.warnings?.length || 1) - 1)] || "";
+  const warningText = () => `<p class="notice warning">${e(warning())}</p>`;
+  const warningEdits = () => {
+    const relevant = warningFields(warning(), draft);
+    return `<div class="warning-edits">${relevant.map(([key, label]) => `<button type="button" class="secondary" data-warning-edit="${e(key)}">תקן ${e(label)}</button>`).join("")}</div>
+      <details class="warning-other" ${relevant.length ? "" : "open"}><summary>${relevant.length ? "תיקון פרט אחר" : "בחר פרט לתיקון"}</summary><label class="field"><span>איזה פרט צריך לתקן?</span><select name="warningField"><option value="">בחר פרט</option>${reviewFields(draft).map(([key, label]) => `<option value="${e(key)}">${e(label)}</option>`).join("")}</select></label><button type="button" class="secondary" data-warning-other>פתח לתיקון</button></details>`;
+  };
   const adjustment = () => {
     const reduction = parseMoney(q.paymentReduction || "0");
     if (reduction < 0) throw Error("יש להזין הפחתה של אפס או יותר.");
@@ -42,6 +43,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     deriveMissingAmounts(draft);
     const questions = invoiceQuestions(draft);
     current = draft.pending || draft.cancelPending || draft.conflict ? null : q.editing || questions[0];
+    ctx.modalBack = q.editing ? () => { delete q.editing; delete q.warningEditing; render(); } : null;
     submit.hidden = Boolean(current);
     $("[data-discard-draft]", form).textContent = "בטל את קליטת החשבונית";
     if (!current) {
@@ -50,11 +52,12 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         <div class="quick-summary-grid">
         ${row("supplierName", "ספק", f.supplierName)}${row("documentType", "סוג", types[f.documentType])}
         ${row("documentNumber", "מספר חשבונית", f.documentNumber)}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
-        ${row("subtotalAgorot", "לפני מע״מ", money(signed(amountOrNull(f.subtotal))))}${row("vatAgorot", "מע״מ", money(signed(amountOrNull(f.vat))))}
         </div><div class="quick-total">${row("totalAgorot", "סכום החשבונית", money(signed(amountOrNull(f.total))))}</div>
+        <details class="quick-amount-details"><summary>מע״מ ופירוט הסכומים</summary>${row("subtotalAgorot", "לפני מע״מ", money(signed(amountOrNull(f.subtotal))))}${row("vatAgorot", "מע״מ", money(signed(amountOrNull(f.vat))))}</details>
         ${f.deductions.filter(d => !d.paymentOnly).length ? `<details class="quick-deductions"><summary>הפחתות במסמך (${f.deductions.filter(d => !d.paymentOnly).length})</summary>${f.deductions.map((d, i) => d.paymentOnly ? "" : row("deduction:" + i, d.label, money(amountOrNull(d.amount)) + (d.included === "yes" ? " · כלולה" : " · נוספת"))).join("")}</details>` : ""}
-        <div class="quick-reduction"><label for="payment-reduction">הפחתה מהתשלום <small>בלי שינוי במע״מ</small></label><input id="payment-reduction" name="paymentReduction" inputmode="decimal" value="${e(q.paymentReduction || "")}" placeholder="0.00" aria-label="הפחתה מהתשלום בשקלים"></div>
+        <details class="quick-extras" ${q.paymentReduction || f.notes ? "open" : ""}><summary>הפחתה מהתשלום או הערה (רשות)</summary><div class="quick-reduction"><label for="payment-reduction">הפחתה מהתשלום <small>בלי שינוי במע״מ</small></label><input id="payment-reduction" name="paymentReduction" inputmode="decimal" value="${e(q.paymentReduction || "")}" placeholder="0.00" aria-label="הפחתה מהתשלום בשקלים"></div>
         <label class="quick-notes"><span>הערה לחשבונית</span><textarea name="notes" rows="1" maxlength="4000" placeholder="רשות">${e(f.notes)}</textarea></label>
+        </details>
         <div class="quick-payable"><span>${f.documentType === "credit" ? "סכום הזיכוי" : "לתשלום"}</span><strong data-quick-final>${e(money(signed(amountOrNull(f.final))))}</strong><button type="button" class="text-button" data-edit-question="finalAgorot">שנה</button></div>
         ${q.confirmed.arithmetic ? '<p class="small warning">נשמרים הסכומים שאישרת, למרות הפער בחיבור המע״מ.</p>' : ""}`;
       $("[name=notes]", form).oninput = ev => { f.notes = ev.target.value; };
@@ -68,6 +71,10 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       let body = "", footerButton = true;
       const fieldName = { documentNumber: "documentNumber", invoiceDate: "invoiceDate", totalAgorot: "total", subtotalAgorot: "subtotal", finalAgorot: "final" }[current];
       if (fieldName) body = input("הסכום או הפרט שרשום בחשבונית", fieldName, f[fieldName], current === "invoiceDate" ? "date" : "text");
+      if (current === "invoiceDate" && q.warningEditing) {
+        const dates = warningDates(warning());
+        if (dates.length > 1) body = `<p>בחר את תאריך החשבונית שמופיע בצילום:</p><div class="date-candidates">${dates.map(date => `<button type="button" class="secondary" data-date-candidate="${date}">${e(displayDate(date))}</button>`).join("")}</div><p>אפשר גם להקליד תאריך:</p>` + body;
+      }
       if (current === "supplierName") body = supplierPickerMarkup(f, false, "");
       if (current === "documentType") {
         body = (read.documentType && !["invoice", "credit"].includes(read.documentType) ? '<p class="notice warning">המסמך זוהה כתעודת משלוח או קבלה. יש לוודא שזו אכן חשבונית לפני שבוחרים.</p>' : "") + choice("invoice", "חשבונית", true) + choice("credit", "חשבונית זיכוי");
@@ -92,7 +99,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           choice("arithmetic-keep", "בדקתי — כך רשום בחשבונית", true) + choice("arithmetic-vat", "תקן את המע״מ") + choice("arithmetic-total", "תקן את הסכום הכולל");
         footerButton = false;
       }
-      if (current === "warnings") body = warningText() + warningEdits();
+      if (current === "warnings") body = `<p class="review-position">הערה ${(q.warningIndex || 0) + 1} מתוך ${read.warnings.length}</p>` + warningText() + warningEdits();
       if (current === "finalArithmetic") {
         body = `<p>הסכום הסופי הוא ${e(money(signed(amountOrNull(f.final))))}. לפי סכום החשבונית וההפחתות מתקבל ${e(money(expectedFinal(draft)))}.</p>` +
           choice("final-calculate", "חשב לפי הסכום וההפחתות", true) + choice("final-keep", "בדקתי — השאר את הסכום הסופי");
@@ -174,6 +181,10 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         q.finalDerived = true;
         delete q.paymentBaseFinal;
       }
+      if (key === "warnings" && (q.warningIndex || 0) + 1 < read.warnings.length) {
+        q.warningIndex = (q.warningIndex || 0) + 1;
+        await binding.persist(true); render(); return;
+      }
       q.confirmed[key] = true; delete q.editing; delete q.warningEditing;
       deriveMissingAmounts(draft);
       await binding.persist(true);
@@ -196,6 +207,15 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     if (current) { ev.preventDefault(); ev.stopImmediatePropagation(); void answer("next"); }
   }, true);
   form.addEventListener("click", ev => {
+    const other = ev.target.closest("[data-warning-other]"), date = ev.target.closest("[data-date-candidate]");
+    if (other && !draft.pending) {
+      if (!form.elements.warningField.value) { showError("בחר את הפרט שצריך לתקן."); return; }
+      q.editing = form.elements.warningField.value; q.warningEditing = true; render(); return;
+    }
+    if (date && !draft.pending) {
+      f.invoiceDate = date.dataset.dateCandidate; form.elements.invoiceDate.value = f.invoiceDate;
+      void answer("next"); return;
+    }
     const choice = ev.target.closest("[data-quick-choice]"), edit = ev.target.closest("[data-edit-question]");
     if (choice) void answer(choice.dataset.quickChoice);
     const warningEdit = ev.target.closest("[data-warning-edit]");

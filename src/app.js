@@ -1,5 +1,7 @@
 import { previewDocument } from "./preview.js";
 import { shareDocuments } from "./document-sharing.js";
+import { createNavigation } from "./navigation.js";
+import { invoiceDetails } from "./invoice-details.js";
 import {
   initializeAuth,
   onAuthStateChanged,
@@ -21,6 +23,7 @@ import {
   types,
   filterInvoices,
   monthRange,
+  monthLabel,
 } from "./format.js";
 import { shell } from "./views.js";
 import {
@@ -35,7 +38,7 @@ import {
 import { scanDialog } from "./scan.js";
 import { invoiceCsv, cashCsv, download } from "./export.js";
 const ctx = {
-  route: "invoices",
+  route: "home",
   filters: {},
   folderPath: {},
   limit: 80,
@@ -47,13 +50,43 @@ const ctx = {
   draftNames: [],
   epoch: 0,
 };
+try { ctx.paidColor = window.localStorage.getItem("ksa-paid-color") === "red" ? "red" : "green"; }
+catch { ctx.paidColor = "green"; }
+document.documentElement.dataset.paidColor = ctx.paidColor;
+const sizeDialogs = () => document.documentElement.style.setProperty("--app-visible-height", `${window.visualViewport?.height || window.innerHeight}px`);
+window.visualViewport?.addEventListener("resize", sizeDialogs);
+sizeDialogs();
+const routePositions = new Map();
+const pageSnapshot = () => ({ route: ctx.route, filters: ctx.filters, folderPath: ctx.folderPath, limit: ctx.limit, scrollY: window.scrollY });
+const restorePage = state => {
+  const { scrollY, ...page } = state;
+  Object.assign(ctx, page);
+  ctx.render();
+  const place = () => {
+    $("#main")?.focus({ preventScroll: true });
+    window.scrollTo(0, scrollY || 0);
+  };
+  place();
+  window.requestAnimationFrame?.(place);
+};
+const navigation = createNavigation({
+  window, snapshot: pageSnapshot, restore: restorePage,
+  blocked: () => ctx.modalBusy,
+  dismissOverlay: () => {
+    const preview = $(".preview-dialog[open]");
+    if (preview) { preview.close(); return true; }
+    if ($("#modal").open) { ctx.backModal(); return true; }
+    return false;
+  },
+});
 let auth,
   unsubscribe,
   codeSession,
   loginBusy = false;
 ctx.dialog = (title, body) => {
+  ctx.modalBack = null;
   const modal = $("#modal");
-  modal.innerHTML = `<div class="modal-content"><header class="modal-heading"><h2 id="modal-title">${e(title)}</h2><button class="icon-button" data-close-modal aria-label="סגור">${icon("close")}</button></header>${body}</div>`;
+  modal.innerHTML = `<div class="modal-content"><header class="modal-heading"><div class="modal-navigation"><button class="secondary" data-close-modal>חזור</button><button class="secondary" data-modal-home>${icon("home")} בית</button></div><h2 id="modal-title">${e(title)}</h2></header>${body}</div>`;
   if (!modal.open) modal.showModal();
   modal.scrollTop = 0;
   setTimeout(
@@ -67,13 +100,38 @@ ctx.dialog = (title, body) => {
 };
 ctx.setModalBusy = (value) => {
   ctx.modalBusy = value;
-  const b = $("[data-close-modal]");
-  if (b) b.disabled = value;
+  document.querySelectorAll("#modal [data-close-modal],#modal [data-modal-home]").forEach(b => { b.disabled = value; });
 };
 ctx.closeModal = () => {
+  ctx.modalBack = null;
   $("#modal").close();
   ctx.modalBusy = false;
   void ctx.updateDraftNames().then(() => ctx.render());
+};
+ctx.backModal = () => {
+  if (ctx.modalBusy) return;
+  if (ctx.modalBack) ctx.modalBack();
+  else ctx.closeModal();
+};
+ctx.showSaved = (key, record) => {
+  const supplier = ctx.data.suppliers.find(s => s.id === record.supplierId)?.name || "הספק";
+  const title = key === "invoice" ? `החשבונית של ${supplier} נשמרה` : key === "payment" ? "התשלום נרשם" : "סגירת היום נשמרה";
+  const description = key === "cash" ? `קופה ורב־קו · ${displayDate(record.date)}`
+    : `חשבונית ${record.documentNumber} · ${money(record.finalAgorot)} · ${key === "invoice" ? monthLabel(record.invoiceDate?.slice(0, 7)) : supplier}`;
+  const root = ctx.dialog("השמירה הסתיימה", `<section class="save-confirmation" role="status"><span class="saved-mark">${icon("check")}</span><h3>${e(title)}</h3><p>${e(description)}</p>${key === "payment" ? '<p class="badge paid">שולם</p>' : ""}</section><div class="saved-actions"><button class="primary" data-saved-done>סיום וחזרה</button>${key === "invoice" ? '<button class="secondary" data-saved-scan>צלם חשבונית נוספת</button>' : ""}<button class="secondary" data-saved-edit>${key === "payment" ? "תיקון פרטי התשלום" : key === "cash" ? "תיקון סכומי הסגירה" : "תיקון פרטי החשבונית"}</button>${key === "payment" ? '<button class="text-button" data-saved-unpay>טעיתי — החשבונית לא שולמה</button>' : ""}</div>`);
+  $("[data-saved-done]", root).onclick = () => ctx.closeModal();
+  const run = async (button, fn) => {
+    if (button.disabled) return;
+    button.disabled = true;
+    try { await fn(); }
+    catch (err) { toast(errorText(err), true); }
+    finally { button.disabled = false; }
+  };
+  $("[data-saved-edit]", root).onclick = ev => run(ev.currentTarget, () => ctx.reopen(key, record.id));
+  const scan = $("[data-saved-scan]", root);
+  if (scan) scan.onclick = () => run(scan, () => scanDialog(ctx, "invoice", { openCamera: true }));
+  const unpay = $("[data-saved-unpay]", root);
+  if (unpay) unpay.onclick = () => run(unpay, () => action("unpay", { id: record.id }));
 };
 ctx.previewBlob = previewDocument;
 ctx.updateDraftNames = async () => {
@@ -173,18 +231,15 @@ ctx.reopen = async (key, id) => {
     );
   if (key === "payment" && record) return paymentForm(ctx, record);
 };
-function navigate(route) {
-  ctx.route = route;
-  ctx.folderPath = {};
-  ctx.limit = 80;
-  ctx.filters =
-    route === "suppliers"
-      ? { activeOnly: true }
-      : ["cash", "reports"].includes(route)
-        ? { month: today().slice(0, 7) }
-        : {};
-  ctx.render();
-  window.scrollTo(0, 0);
+function navigate(route, { reset = false } = {}) {
+  if (ctx.modalBusy) return;
+  routePositions.set(ctx.route, structuredClone(pageSnapshot()));
+  navigation.visit(() => {
+    const saved = !reset && route !== ctx.route && routePositions.get(route);
+    const state = saved || { route, folderPath: {}, limit: 80, scrollY: 0,
+      filters: route === "suppliers" ? { activeOnly: true } : ["cash", "reports"].includes(route) ? { month: today().slice(0, 7) } : {} };
+    restorePage(state);
+  });
 }
 function bindShell() {
   const root = $("#app");
@@ -239,21 +294,33 @@ function bindShell() {
 async function action(type, data = {}) {
   const record = ctx.data.invoices.find((i) => i.id === data.id);
   switch (type) {
+    case "back":
+      return navigation.back(() => navigate("home"));
     case "folder-month":
-      ctx.folderPath = { month: data.value };
-      ctx.limit = 80; ctx.render();
-      window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      navigation.visit(() => {
+        ctx.folderPath = { month: data.value };
+        ctx.limit = 80; ctx.render();
+        window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      });
       return;
     case "folder-supplier":
-      ctx.folderPath = { ...ctx.folderPath, supplierId: data.value };
-      ctx.limit = 80; ctx.render();
-      window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      navigation.visit(() => {
+        ctx.folderPath = { ...ctx.folderPath, supplierId: data.value };
+        ctx.limit = 80; ctx.render();
+        window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+      });
       return;
     case "folder-back":
-      ctx.folderPath = ctx.folderPath.supplierId ? { month: ctx.folderPath.month } : {};
-      ctx.limit = 80; ctx.render(); window.scrollTo(0, 0);
-      ($("[data-folder-heading]") || $("#main"))?.focus({ preventScroll: true });
+      navigation.back(() => {
+        ctx.folderPath = ctx.folderPath.supplierId ? { month: ctx.folderPath.month } : {};
+        ctx.render();
+      });
       return;
+    case "paid-color":
+      ctx.paidColor = data.value === "red" ? "red" : "green";
+      try { window.localStorage.setItem("ksa-paid-color", ctx.paidColor); } catch { /* Current session remains usable. */ }
+      document.documentElement.dataset.paidColor = ctx.paidColor;
+      return ctx.render();
     case "share-month":
       return shareDocuments(ctx, { month: data.month });
     case "share-invoice":
@@ -288,7 +355,7 @@ async function action(type, data = {}) {
         ctx.data.dailyCash.find((r) => r.id === data.id),
       );
     case "pay":
-      return paymentForm(ctx, record);
+      return paymentForm(ctx, record, { onBack: $(".invoice-detail-modal") ? () => detail(ctx.data.invoices.find(i => i.id === record.id)) : null });
     case "detail":
       return detail(record);
     case "documents":
@@ -307,6 +374,7 @@ async function action(type, data = {}) {
       ctx.render();
       break;
     case "open-unpaid":
+      navigation.remember();
       ctx.filters = { status: "unpaid" };
       ctx.folderPath = {};
       ctx.limit = 80;
@@ -329,14 +397,17 @@ async function action(type, data = {}) {
       break;
     case "report-supplier": {
       const period = { ...ctx.filters };
-      navigate("invoices");
-      ctx.filters = { ...period, supplierId: data.id };
-      if (period.month) ctx.folderPath = { month: period.month, supplierId: data.id };
+      navigate("invoices", { reset: true });
+      ctx.filters = { ...period };
+      if (period.month) {
+        await action("folder-month", { value: period.month });
+        await action("folder-supplier", { value: data.id });
+      } else ctx.filters.supplierId = data.id;
       ctx.render();
       break;
     }
     case "supplier-invoices":
-      navigate("invoices");
+      navigate("invoices", { reset: true });
       ctx.filters.supplierId = data.id;
       ctx.render();
       break;
@@ -503,6 +574,9 @@ function draftDetails(fields) {
     .join("")}</dl>`;
 }
 async function simpleMutation(actionName, record) {
+  if (ctx.modalBusy) return;
+  ctx.setModalBusy(true);
+  try {
   const key = "action-" + record.id + "-" + actionName;
   let pending = await ctx.drafts.load(key);
   pending ||= pendingMutation(
@@ -524,35 +598,12 @@ async function simpleMutation(actionName, record) {
       await ctx.drafts.remove(key);
     throw err;
   }
+  } finally { ctx.setModalBusy(false); }
 }
 function detail(i) {
   const supplier = ctx.data.suppliers.find((s) => s.id === i.supplierId);
-  const rows = [
-    ["ספק", supplier?.name],
-    ["סוג", types[i.documentType]],
-    ["מספר מסמך", i.documentNumber],
-    ["תאריך החשבונית", displayDate(i.invoiceDate)],
-    ["לפני מע״מ", money(i.subtotalAgorot)],
-    ["מע״מ", money(i.vatAgorot)],
-    ["כולל מע״מ", money(i.totalAgorot)],
-    ["סופי לתשלום", money(i.finalAgorot)],
-    ["מצב", i.status === "paid" ? "שולם" : "לא שולם"],
-  ];
-  if (i.payment)
-    rows.push(
-      ["אמצעי תשלום", methods[i.payment.method]],
-      ["תאריך תשלום / מסירת צ׳ק", displayDate(i.payment.paymentDate)],
-      ...(i.payment.method === "check"
-        ? [
-            ["מספר צ׳ק", i.payment.checkNumber || "לא הוזן"],
-            ["תאריך פירעון צ׳ק", displayDate(i.payment.checkDueDate)],
-          ]
-        : []),
-    );
-  const root = ctx.dialog(
-    "חשבונית " + i.documentNumber,
-    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><dl class="details-list">${rows.map(([k, v]) => `<div><dt>${e(k)}</dt><dd>${e(v)}</dd></div>`).join("")}</dl>${i.deductions.length ? `<h3>הפחתות וניכויים</h3>${i.deductions.map((d) => `<p>${e(d.label)} · ${e(money(d.amountAgorot))} · ${d.includedInTotal ? "כלולה בסכום" : "נוספת"}</p>`).join("")}` : ""}${i.notes ? `<div class="notice">${e(i.notes)}</div>` : ""}${i.payment?.notes ? `<p>הערה לתשלום: ${e(i.payment.notes)}</p>` : ""}<section class="attachment-links"><strong>תמונות ומסמכים מצורפים</strong>${i.attachmentIds.length ? '<button class="secondary" data-detail-action="share-invoice">שתף את כל קבצי החשבונית</button>' : ""}${i.attachmentIds.length ? i.attachmentIds.map((id, n) => `<button class="secondary" data-open-document="${e(id)}">פתח מסמך ${n + 1}</button>`).join("") : "<p>לא צורפו תמונות או קבצים לחשבונית הזו.</p>"}</section><div class="row-actions"><button class="primary" data-detail-action="pay">${i.status === "paid" ? "ערוך תשלום" : "סמן כשולם"}</button><button class="secondary" data-detail-action="edit">ערוך חשבונית</button>${i.status === "paid" ? '<button class="text-button" data-detail-action="unpay">החזר ללא שולם</button>' : ""}<button class="text-button danger" data-detail-action="delete">מחק חשבונית</button></div>`,
-  );
+  const root = ctx.dialog("חשבונית " + i.documentNumber, invoiceDetails(i, supplier));
+  root.classList.add("invoice-detail-modal");
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
     if (!b) return;
@@ -632,6 +683,8 @@ async function startup() {
       ctx.syncError = false;
       ctx.draftWarning = "";
       ctx.data = { suppliers: [], invoices: [], dailyCash: [], settings: [] };
+      ctx.route = "home"; ctx.filters = {}; ctx.folderPath = {}; ctx.limit = 80;
+      routePositions.clear();
       ctx.closeModal();
       $("#modal").innerHTML = "";
       if (!user) {
@@ -646,6 +699,7 @@ async function startup() {
         if (epoch !== ctx.epoch) return;
         ctx.api = api;
         ctx.drafts = new Drafts(me.uid);
+        navigation.reset();
         await ctx.drafts.open();
         await ctx.updateDraftNames();
         ctx.render();
@@ -662,7 +716,10 @@ async function startup() {
   }
 }
 $("#modal").addEventListener("cancel", (ev) => {
-  if (ctx.modalBusy) ev.preventDefault();
+  if (ctx.modalBusy || ctx.modalBack) {
+    ev.preventDefault();
+    if (!ctx.modalBusy) ctx.backModal();
+  }
 });
 $("#modal").addEventListener("close", () => {
   if ($("#modal").open) return;
@@ -671,7 +728,11 @@ $("#modal").addEventListener("close", () => {
 });
 $("#modal").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-close-modal]") && !ctx.modalBusy)
+    ctx.backModal();
+  if (ev.target.closest("[data-modal-home]") && !ctx.modalBusy) {
     ctx.closeModal();
+    navigate("home");
+  }
   const doc = ev.target.closest("[data-open-document]");
   if (doc) await openDocument(doc);
 });
