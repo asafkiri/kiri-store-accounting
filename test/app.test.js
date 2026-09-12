@@ -317,7 +317,7 @@ async function photoWorkspace(t, { fileDeleted = true, failWith = null } = {}) {
 test("deleting a photo calls the versioned file endpoint and refreshes the photo list", async t => {
   const { pages, requests, modal } = await photoWorkspace(t);
   assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
-  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית שנה/);
+  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
   modal.querySelector(`[data-delete-document="${pages[0]}"]`).click();
   await tick();
   const call = requests.find(r => r.method === "DELETE");
@@ -358,5 +358,5 @@ test("declining the confirmation deletes nothing, and invoice details offers the
   modal.querySelector("[data-invoice-details]").click();
   assert.match(modal.textContent, /תמונות ומסמכים מצורפים/);
   assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
-  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית שנה/);
+  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
 });

@@ -15,9 +15,15 @@ export function attachmentRows(invoice, label) {
 }
 export function retentionNote(days) {
   if (!days) return "";
-  const period =
-    days === 365 ? "שנה" : days % 365 === 0 ? days / 365 + " שנים" : days + " ימים";
-  return `<p class="muted small">כל צילום נמחק מהמערכת ומהאחסון אוטומטית ${e(period)} מיום העלאתו. פרטי החשבונית נשארים.</p>`;
+  const years = days % 365 === 0 ? days / 365 : 0;
+  const period = !years
+    ? days + " ימים"
+    : years === 1
+      ? "שנה"
+      : years === 2
+        ? "שנתיים"
+        : years + " שנים";
+  return `<p class="muted small">כל צילום נמחק מהמערכת ומהאחסון אוטומטית כעבור ${e(period)} מיום העלאתו. פרטי החשבונית נשארים.</p>`;
 }
 
 export function invoiceDetails(invoice, supplier, { retentionDays = 0 } = {}) {

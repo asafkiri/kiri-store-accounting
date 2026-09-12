@@ -18,7 +18,7 @@ export function workspaceFixture() {
     vatAgorot: 0, totalAgorot: amount, finalAgorot: amount, attachmentIds, deductions: [], status, version: 1,
     ...(status === "paid" ? { payment: { method: "check", paymentDate: invoiceDate, checkNumber: id === "INV-099" ? "00012345" : "908070", checkDueDate: "2026-12-01" } } : {}),
   });
-  const data = { full: true, version: 1, settings: [], documentRetentionDays: 365, suppliers, invoices: [
+  const data = { full: true, version: 1, settings: [], documentRetentionDays: 2920, suppliers, invoices: [
     invoice("INV-101", "supplier-tnuva", month + "-08", 125400, ["a".repeat(64), "b".repeat(64)]),
     invoice("INV-102", "supplier-marina", month + "-05", 46000, ["c".repeat(64)], "paid"),
     invoice("INV-099", "supplier-tnuva", previous + "-20", 94000, ["d".repeat(64)], "paid"),

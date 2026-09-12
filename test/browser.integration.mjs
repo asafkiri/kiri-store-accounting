@@ -1657,7 +1657,7 @@ for (const engine of [chromium, webkit]) {
     assert.ok(nextOpen.y >= deleteBox.y + deleteBox.height - 1, "the next page starts below the previous page's delete button");
     assert.ok(deleteBox.height >= 44, "the delete button stays a comfortable tap target");
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "no horizontal overflow");
-    assert.match(await page.locator("#modal").innerText(), /נמחק מהמערכת ומהאחסון אוטומטית שנה/);
+    assert.match(await page.locator("#modal").innerText(), /נמחק מהמערכת ומהאחסון אוטומטית כעבור 8 שנים/);
     page.once("dialog", dialog => dialog.dismiss());
     await photoRow.locator("[data-delete-document]").click();
     assert.equal(requests.filter(r => r.method === "DELETE" && r.path.includes("/documents/")).length, 0, "a dismissed question deletes nothing");
