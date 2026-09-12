@@ -238,3 +238,38 @@ for (const existing of [false, true, "offline"]) {
     assert.deepEqual(cache.get("scan").attachmentIds, ["a".repeat(64)]);
   });
 }
+
+// The browser gave up on a Tnuva invoice the server had already read, and the
+// screen asked to check the connection in front of a finished scan.
+for (const served of ["completed", "running", "offline"]) {
+  test(`a scan with no answer is looked up for free before the connection is blamed (${served})`, async () => {
+    const { ctx, cache, calls } = setup({
+      files: [{ name: "page.jpg", mime: "image/jpeg", data: "AAAA" }],
+      attachmentIds: ["a".repeat(64)],
+      jobId: null,
+      status: "editing",
+    });
+    const completed = await ctx.api.request("template");
+    calls.length = 0;
+    ctx.api.request = async (path) => {
+      calls.push(path);
+      if (path === "scan-invoice")
+        throw new ApiError("אין כרגע אישור מהשרת.", "NETWORK", 0);
+      if (served === "offline") throw new ApiError("ניתוק", "NETWORK", 0);
+      return { ...completed, id: cache.get("scan").jobId, status: served };
+    };
+    await scanDialog(ctx);
+    document.getElementById("run-scan").click();
+    await tick();
+    assert.equal(calls.length, 2, "exactly one free lookup, never another paid scan");
+    assert.equal(calls[0], "scan-invoice");
+    assert.match(calls[1], /^scan-jobs\//);
+    assert.equal(
+      Boolean(document.getElementById("invoice-form")),
+      served === "completed",
+      "a finished reading opens for review instead of showing an error",
+    );
+    const error = document.getElementById("scan-error");
+    assert.equal(error?.hidden ?? true, served !== "offline", "the connection is blamed only when it is at fault");
+  });
+}
