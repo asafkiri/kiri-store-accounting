@@ -22,6 +22,13 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const row = (key, label, value) => `<button type="button" class="quick-summary-row" data-edit-question="${key}" aria-label="שנה ${e(label)}"><span>${e(label)}</span><strong>${e(value)}</strong></button>`;
   const signed = value => value === null ? null : f.documentType === "credit" ? -Math.abs(value) : value;
   const photo = () => f.attachmentIds?.length ? `<button type="button" class="text-button quick-photo" data-open-document="${e(f.attachmentIds[0])}" data-safe-action>${icon("image")} הצג חשבונית</button>` : "";
+  const warningText = () => (read.warnings || []).map(w => `<p class="notice warning">${e(w)}</p>`).join("");
+  const warningEdits = () => `<p>איזה פרט צריך לתקן?</p><div class="warning-edits">${[
+    ["documentNumber", "מספר חשבונית"], ["supplierName", "ספק"], ["invoiceDate", "תאריך"],
+    ["subtotalAgorot", "לפני מע״מ"], ["vatAgorot", "מע״מ"], ["totalAgorot", "סכום כולל"],
+    ["finalAgorot", "סופי לתשלום"], ["documentType", "סוג חשבונית"],
+    ...f.deductions.map((d, i) => ["deduction:" + i, d.label || "הפחתה"]),
+  ].map(([key, label]) => `<button type="button" class="secondary" data-warning-edit="${e(key)}">תקן ${e(label)}</button>`).join("")}</div>`;
   const adjustment = () => {
     const reduction = parseMoney(q.paymentReduction || "0");
     if (reduction < 0) throw Error("יש להזין הפחתה של אפס או יותר.");
@@ -85,13 +92,13 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           choice("arithmetic-keep", "בדקתי — כך רשום בחשבונית", true) + choice("arithmetic-vat", "תקן את המע״מ") + choice("arithmetic-total", "תקן את הסכום הכולל");
         footerButton = false;
       }
-      if (current === "warnings") body = (read.warnings || []).map(w => `<p class="notice warning">${e(w)}</p>`).join("");
+      if (current === "warnings") body = warningText() + warningEdits();
       if (current === "finalArithmetic") {
         body = `<p>הסכום הסופי הוא ${e(money(signed(amountOrNull(f.final))))}. לפי סכום החשבונית וההפחתות מתקבל ${e(money(expectedFinal(draft)))}.</p>` +
           choice("final-calculate", "חשב לפי הסכום וההפחתות", true) + choice("final-keep", "בדקתי — השאר את הסכום הסופי");
         footerButton = false;
       }
-      content.innerHTML = `<div class="quick-progress"><span>${q.editing ? "שינוי פרט" : `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}`}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${body}${footerButton ? choice("next", current === "warnings" ? "בדקתי, המשך" : "אשר והמשך", true) : ""}${q.editing ? '<button type="button" class="text-button" data-quick-choice="back-summary">חזרה לסיכום</button>' : ""}</section>`;
+      content.innerHTML = `<div class="quick-progress"><span>${q.editing ? "שינוי פרט" : `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}`}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${q.warningEditing ? warningText() : ""}${body}${footerButton ? choice("next", current === "warnings" ? "בדקתי את ההערות, המשך" : "אשר והמשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${q.warningEditing ? "חזרה להערות" : questions.length ? "חזרה לבדיקה" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
       if (current === "supplierName") supplierPicker = bindSupplierPicker(ctx, form, draft, {
         collect: () => { f.supplierId = form.elements.supplierId.value; f.supplierName = form.elements.supplierName.value; return f; },
         persist: () => binding?.persist(),
@@ -111,7 +118,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     advancing = true; error.hidden = true;
     const key = current;
     try {
-      if (action === "back-summary") { delete q.editing; render(); return; }
+      if (action === "back-summary") { delete q.editing; delete q.warningEditing; render(); return; }
       if (action.startsWith("arithmetic-") && action !== "arithmetic-keep") {
         q.editing = action === "arithmetic-vat" ? "vatAgorot" : "totalAgorot"; render(); return;
       }
@@ -167,7 +174,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         q.finalDerived = true;
         delete q.paymentBaseFinal;
       }
-      q.confirmed[key] = true; delete q.editing;
+      q.confirmed[key] = true; delete q.editing; delete q.warningEditing;
       deriveMissingAmounts(draft);
       await binding.persist(true);
       if (form.isConnected) render();
@@ -191,6 +198,11 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   form.addEventListener("click", ev => {
     const choice = ev.target.closest("[data-quick-choice]"), edit = ev.target.closest("[data-edit-question]");
     if (choice) void answer(choice.dataset.quickChoice);
+    const warningEdit = ev.target.closest("[data-warning-edit]");
+    if (warningEdit && !draft.pending) {
+      q.editing = warningEdit.dataset.warningEdit; q.warningEditing = true;
+      error.hidden = true; render();
+    }
     if (edit && !draft.pending) { q.editing = edit.dataset.editQuestion; error.hidden = true; render(); }
     if (ev.target.closest("[data-full-invoice]") && !draft.pending)
       void binding.persist(true).then(openEditor).catch(showError);

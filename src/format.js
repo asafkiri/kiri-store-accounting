@@ -81,7 +81,7 @@ export function filterInvoices(items, f, suppliers) {
         (!f.status || i.status === f.status) &&
         (!f.method || i.payment?.method === f.method) &&
         (!q ||
-          [names.get(i.supplierId), i.documentNumber, i.notes]
+          [names.get(i.supplierId), i.documentNumber, i.notes, i.payment?.method === "check" ? i.payment.checkNumber : ""]
             .join(" ")
             .toLocaleLowerCase("he")
             .includes(q)),
@@ -118,4 +118,3 @@ export function monthLabel(value) {
   return new Intl.DateTimeFormat("he-IL", { month: "long", year: "numeric", timeZone: "UTC" })
     .format(new Date(value + "-01T12:00:00Z"));
 }
-

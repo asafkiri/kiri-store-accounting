@@ -82,7 +82,7 @@ test("invoice, supplier and monthly summaries subtract signed credits and flag l
   }
 });
 
-test("the invoice and photo archive group by month then supplier, and search reveals closed folders", async () => {
+test("the invoice and photo archive show only the current folder and retain a back button", async () => {
   const { JSDOM } = await import("jsdom");
   const { documentsView } = await import("../src/views.js");
   const ctx = { route: "invoices", filters: {}, limit: 80, draftNames: [], data: {
@@ -93,21 +93,25 @@ test("the invoice and photo archive group by month then supplier, and search rev
       { id: "i3", supplierId: "s1", invoiceDate: "2026-08-10", documentType: "invoice", documentNumber: "3", status: "paid", finalAgorot: 300, attachmentIds: ["photo-c"] },
     ],
   } };
-  const dom = new JSDOM(invoicesView(ctx));
-  const months = [...dom.window.document.querySelectorAll(".month-folder")];
-  assert.deepEqual(months.map(m => m.dataset.folder), ["invoices:2026-09", "invoices:2026-08"]);
-  assert.equal(months[0].querySelectorAll(".supplier-folder").length, 2);
-  assert.equal(months[0].querySelectorAll(".invoice-card").length, 2);
-  assert.equal(months[1].querySelectorAll(".invoice-card").length, 1);
-  dom.window.close();
-  const photos = new JSDOM(documentsView(ctx));
-  assert.equal(photos.window.document.querySelectorAll(".document-card").length, 2);
-  assert.deepEqual([...photos.window.document.querySelectorAll("[data-open-document]")].map(b => b.dataset.openDocument), ["photo-a", "photo-b", "photo-c"]);
-  photos.window.close();
-  ctx.filters.q = "ספק א";
-  ctx.folderState = { "invoices:2026-09": false, "invoices:2026-09:s1": false };
-  const searched = new JSDOM(invoicesView(ctx));
-  assert.equal(searched.window.document.querySelector('[data-folder="invoices:2026-09:s1"]').open, true);
-  assert.equal(searched.window.document.querySelectorAll(".invoice-card").length, 2);
-  searched.window.close();
+  const render = (view = invoicesView) => new JSDOM(view(ctx)).window.document;
+  let doc = render();
+  assert.deepEqual([...doc.querySelectorAll('.month-folder')].map(b => b.dataset.value), ["2026-09", "2026-08"]);
+  assert.equal(doc.querySelectorAll('.invoice-card,.supplier-folder,details.month-folder').length, 0);
+  ctx.folderPath = { month: "2026-09" }; doc = render();
+  assert.equal(doc.querySelectorAll('.supplier-folder').length, 2);
+  assert.equal(doc.querySelectorAll('.invoice-card,.month-folder').length, 0);
+  assert.match(doc.querySelector('[data-action="folder-back"]').textContent, /חזרה לחודשים/);
+  ctx.folderPath.supplierId = "s1"; doc = render();
+  assert.equal(doc.querySelectorAll('.invoice-card').length, 1);
+  assert.equal(doc.querySelectorAll('.supplier-folder,.month-folder').length, 0);
+  assert.match(doc.querySelector('[data-action="folder-back"]').textContent, /חזרה לספקים/);
+  doc = render(documentsView);
+  assert.equal(doc.querySelectorAll('.document-card').length, 1);
+  assert.equal(doc.querySelector('[data-action="documents"]').dataset.id, "i1");
+  assert.ok(doc.querySelector('[data-action="share-invoice"]'));
+  // Sharing the month must still include other suppliers when viewing one.
+  assert.equal(doc.querySelector('[data-action="share-month"]').dataset.month, "2026-09");
+  ctx.folderPath = {}; ctx.filters.q = "ספק א"; doc = render();
+  assert.equal(doc.querySelectorAll('.month-folder').length, 2);
+  assert.equal(doc.querySelectorAll('.invoice-card').length, 0);
 });

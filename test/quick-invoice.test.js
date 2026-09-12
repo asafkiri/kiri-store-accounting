@@ -128,3 +128,31 @@ test("a separately recorded included rounding line does not create a false VAT q
   assert.equal(writes[0].body.data.vatAgorot, 60941);
   assert.equal(writes[0].body.data.finalAgorot, 399500);
 });
+
+test("a warning-only ambiguous invoice number can be corrected, resumed and explicitly acknowledged", async () => {
+  const { ctx, writes, cache } = setup();
+  const original = scan({ documentNumber: "59912_2", warnings: ["מספר החשבונית אינו חד משמעי: 59912_2 או 59912_21. נדרש אימות אנושי."] });
+  await invoiceForm(ctx, null, original);
+  document.querySelector('[data-warning-edit="documentNumber"]').click();
+  assert.match(document.querySelector('.quick-question').textContent, /59912_21/);
+  fill("documentNumber", "59912_21"); await choose("next");
+  assert.equal(cache.get("invoice").fields.documentNumber, "59912_21");
+  assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'), "return to unacknowledged warning");
+  await invoiceForm(ctx);
+  assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'));
+  assert.equal(writes.length, 0);
+  await choose("next"); submit(); await tick();
+  assert.equal(writes[0].body.data.documentNumber, "59912_21");
+  assert.equal(original.result.documentNumber, "59912_2", "retain the original scan as evidence");
+});
+
+test("warning correction can change another field without bypassing the arithmetic review", async () => {
+  const { ctx, writes } = setup();
+  await invoiceForm(ctx, null, scan({ warnings: ['בדוק את הסכום הכולל <script>bad()</script>'] }));
+  assert.equal(document.querySelector('script'), null);
+  document.querySelector('[data-warning-edit="totalAgorot"]').click();
+  fill('total', '119.00'); await choose('next');
+  assert.ok(document.querySelector('.quick-question'));
+  assert.equal(document.querySelector('[type="submit"]').hidden, true);
+  assert.equal(writes.length, 0);
+});
