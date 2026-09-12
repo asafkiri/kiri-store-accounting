@@ -114,4 +114,20 @@ test("the invoice and photo archive show only the current folder and retain a ba
   ctx.folderPath = {}; ctx.filters.q = "ספק א"; doc = render();
   assert.equal(doc.querySelectorAll('.month-folder').length, 2);
   assert.equal(doc.querySelectorAll('.invoice-card').length, 0);
+});\n
+test("the main navigation does not duplicate the invoices entry already offered on Home", () => {
+  const html = shell({
+    route: "home",
+    filters: {},
+    folderPath: {},
+    limit: 80,
+    data: { invoices: [], suppliers: [], dailyCash: [] },
+    draftNames: [],
+    lastRefresh: 123,
+    syncError: false,
+  });
+  const labels = [...html.matchAll(/<button data-route="([^"]+)"[^>]*><svg[\\s\\S]*?<span>([^<]+)<\\/span><\\/button>/g)]
+    .map(([, route, label]) => [route, label]);
+  assert.deepEqual(labels, [["home", "בית"], ["more", "עוד אפשרויות"]]);
+  assert.doesNotMatch(html, /data-route="invoices" class="active"/);
 });
