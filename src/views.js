@@ -19,14 +19,14 @@ const creditNotice = (count) =>
     ? `<div class="notice warning">יש ${count} זיכויים עם סכומים שאינם שליליים. פתח ותקן אותם כדי להציג סיכום נכון.</div>`
     : "";
 const draftReminders = ctx => [
-  ["scan", "יש סריקה שלא הסתיימה"], ["invoice", "יש חשבונית שלא נשמרה"],
+  ["scan", "יש צילום שלא הושלם"], ["invoice", "יש חשבונית שלא נשמרה"],
   ["payment", "יש רישום תשלום שלא הסתיים"], ["cash", "יש סגירת יום שלא נשמרה"],
 ].filter(([key]) => ctx.draftNames.includes(key)).map(([key, label]) =>
   `<button class="draft-banner" data-action="resume-draft" data-key="${key}">${label} · המשך מכאן ${icon("arrow")}</button>`).join("");
 
 export function homeView(ctx) {
   const entries = [
-    ['data-action="scan"', "צלם חשבונית", "צילום, בדיקה ושמירה", "camera", "home-scan scan-primary"],
+    ['data-action="scan"', "צלם חשבונית", "צילום ומילוי הפרטים", "camera", "home-scan scan-primary"],
     ['data-route="invoices"', "חשבוניות ותשלומים", "מצא חשבונית וסמן ששילמת", "folder", "home-invoices"],
     ['data-route="cash"', "קופה ורב־קו", "רישום סגירת היום", "cash", "home-cash"],
     ['data-route="documents"', "שליחה לרואה החשבון", "כל צילומי החודש יחד", "share", "home-documents"],
@@ -69,7 +69,7 @@ export function invoicesView(ctx) {
   const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
   const openTotals = totals(allOpen), itemTotals = totals(items);
   return `<div class="page-heading"><div><h1>חשבוניות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
-    ${!inFolder ? `<section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>סרוק חשבונית</strong><small>המצלמה נפתחת בלחיצה</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>` : ""}
+    ${!inFolder ? `<section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>צלם חשבונית</strong><small>המצלמה נפתחת בלחיצה</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>` : ""}
     ${draftReminders(ctx)}
     ${!inFolder ? `<button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button><button class="secondary check-search-link" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>` : ""}
     ${folderLocation(ctx)}
@@ -96,7 +96,7 @@ export function documentsView(ctx) {
   const path = ctx.folderPath || {};
   const items = filterInvoices(ctx.data.invoices, { ...ctx.filters, ...(path.month ? { month: path.month } : {}), ...(path.supplierId ? { supplierId: path.supplierId } : {}) }, ctx.data.suppliers).filter(i => i.attachmentIds?.length);
   const monthInvoices = path.month ? ctx.data.invoices.filter(i => !i.deletedAt && i.invoiceDate?.startsWith(path.month) && i.attachmentIds?.length) : [];
-  return `<div class="page-heading"><h1>צילומי חשבוניות</h1>${!path.month ? act("scan", "סרוק", "secondary", "camera") : ""}</div>
+  return `<div class="page-heading"><h1>צילומי חשבוניות</h1>${!path.month ? act("scan", "צלם", "secondary", "camera") : ""}</div>
     ${folderLocation(ctx)}${!path.month ? '<p class="page-intro">בחר חודש, אחר כך ספק וחשבונית. מתוך החודש אפשר לשתף את כל הצילומים עם רואה החשבון.</p>' : ""}
     ${path.month && monthInvoices.length ? `<section class="month-share"><strong>שליחה לרואה החשבון</strong><p>${monthInvoices.length} חשבוניות עם צילומים · כל הספקים בחודש ${e(monthLabel(path.month))}</p>${act("share-month", "שתף את כל צילומי החודש", "primary", "share", `data-month="${e(path.month)}"`)}</section>` : ""}
     ${searchBox(ctx, "invoice-search", "חפש ספק או מספר חשבונית")}<div class="list-heading"><span>${items.length} חשבוניות עם צילומים בתצוגה</span></div>
@@ -138,7 +138,7 @@ export function reportsView(ctx) {
       return `<button class="report-supplier-row" data-action="report-supplier" data-id="${e(id)}"><span><strong>${e(supplierMap.get(id) || "ספק")}</strong><small>${rows.length} חשבוניות</small></span><span><strong>${e(summaryMoney(totals(rows).final))}</strong><small>${due.length ? "לתשלום: " + e(summaryMoney(totals(due).final)) : "הכול שולם"}</small></span>${icon("arrow")}</button>`;
     }).join("")}</div>` : '<p class="muted">אין חשבוניות בתקופה הזאת. אפשר לבחור חודש אחר.</p>'}</section>
     <section class="report-section"><h2>סכומים ומע״מ</h2><dl class="vat-summary"><div><dt>לפני מע״מ</dt><dd>${e(summaryMoney(t.subtotal))}</dd></div><div><dt>מע״מ שנרשם</dt><dd>${e(summaryMoney(t.vat))}</dd></div><div><dt>כולל מע״מ</dt><dd>${e(summaryMoney(t.total))}</dd></div></dl>${t.unknownVat || t.unknownSubtotal ? `<div class="notice warning">הסיכום אינו מלא: ${t.unknownVat} חשבוניות ללא מע״מ ידוע; ${t.unknownSubtotal} ללא סכום לפני מע״מ.</div>` : ""}</section>
-    <section class="report-section report-export"><h2>ייצוא ושמירת הסיכום</h2><p class="muted small">הייצוא כולל את החשבוניות בתקופה שבחרת.</p><div class="row-actions">${act("invoice-export", "הורד לאקסל (CSV)", "secondary", "download")}${act("print", "הדפס / שמור PDF", "secondary", null)}</div><details class="accountant-tools"><summary>בדיקה מול רואה החשבון</summary><p>העלה את הרשימה מרואה החשבון כדי לבדוק אילו חשבוניות חסרות או שונות.</p>${act("report-scan", "העלה רשימה לבדיקה", "secondary", null)}</details></section>`;
+    <section class="report-section report-export"><h2>ייצוא ושמירת הסיכום</h2><p class="muted small">הייצוא כולל את החשבוניות בתקופה שבחרת.</p><div class="row-actions">${act("invoice-export", "הורד לאקסל (CSV)", "secondary", "download")}${act("print", "הדפס / שמור PDF", "secondary", null)}</div></section>`;
 }
 export function settingsView(ctx) {
   return `<div class="page-heading"><div><span class="eyebrow">המכשיר והנתונים</span><h1>הגדרות וגיבוי</h1></div></div><section class="settings-section"><h2>השלמת מע״מ בסריקה</h2><p>ברירת המחדל: <strong>${(ctx.data.settings?.find(s => s.id === "accounting")?.defaultVatBasisPoints ?? 1800) / 100}%</strong>. החישוב מוצע רק כשצריך אישור שלך.</p>${act("vat-preferences", "שנה שיעור מע״מ", "secondary", null)}</section><section class="settings-section"><h2>צבע הסימון „שולם”</h2><p>בחר צבע מוכר לך. המילה „שולם” תופיע תמיד לצד הצבע. הבחירה נשמרת במכשיר הזה.</p><div class="paid-color-options" role="group" aria-label="צבע הסימון שולם"><button class="secondary" data-action="paid-color" data-value="green" aria-pressed="${ctx.paidColor !== "red"}">ירוק · שולם</button><button class="secondary" data-action="paid-color" data-value="red" aria-pressed="${ctx.paidColor === "red"}">אדום · כמו באקסל</button></div></section><section class="settings-section"><h2>גיבוי הנתונים</h2><p>הורד גיבוי JSON של הספקים, החשבוניות, התשלומים והסגירות היומיות. קבצי הצילום עצמם זמינים במסך צילומי חשבוניות, לפי חודש וספק.</p>${act("backup", "הורד גיבוי מלא של הנתונים", "primary", "download")}</section><section class="settings-section"><h2>טיוטות במכשיר</h2><p>טיוטות נשמרות במכשיר הזה. אם תשובת השמירה לא התקבלה, אפשר לבדוק כאן אם הפעולה נשמרה בחנות.</p><div class="row-actions">${
@@ -147,8 +147,7 @@ export function settingsView(ctx) {
       ["supplier", "ספק"],
       ["payment", "תשלום"],
       ["cash", "סגירה יומית"],
-      ["scan", "סריקת חשבונית"],
-      ["reportScan", "סריקת דוח"],
+      ["scan", "צילום חשבונית"],
       ["preferences", "הגדרת מע״מ"],
     ]
       .filter(([key]) => ctx.draftNames.includes(key))

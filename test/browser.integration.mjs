@@ -551,20 +551,20 @@ for (const engine of [chromium, webkit]) {
     assert.equal(photo.mime, "image/jpeg");
     assert.ok(Math.max(photo.width, photo.height) >= 2000 && Math.max(photo.width, photo.height) <= 2500, "retain available resolution without enlarging a trimmed source");
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
-    await page.locator("#run-scan").tap();
+    await page.locator("#fill-details").tap();
     await page.waitForSelector("#invoice-form");
-    assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents", "scan-invoice"]);
-    await page.locator(".quick-summary-grid").waitFor();
-    assert.equal(await page.locator('.quick-invoice [type="submit"]').isVisible(), true);
-    assert.match(await page.locator('.quick-invoice [type="submit"]').innerText(), /אשר ושמור/);
+    assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents"], "the pages go up once and nothing reads them");
+    await page.locator(".quick-question").waitFor();
+    assert.match(await page.locator(".quick-question h3").innerText(), /מי הספק/);
+    assert.match(await page.locator(".quick-progress").innerText(), /שאלה 1 מתוך 5/);
+    assert.equal(await page.locator('.quick-invoice [type="submit"]').isVisible(), false, "no save before the questions");
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
-    assert.match(await page.locator("[data-quick-final]").innerText(), /3,995\.00/);
     assert.deepEqual(errors, []);
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
     console.log(`${engine.name()}: locally cropped 12MP photo -> ${photo.width}x${photo.height}, ${photo.bytes} bytes; touch/review PASS`);
   });
 
-  test(`${engine.name()}: approved photo survives manual entry and explicit invoice save without AI`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: approved photo survives the typed questions and an explicit invoice save without AI`, { timeout: 60000 }, async t => {
     const page = await scannerPage(t, engine);
     const errors = []; page.on("pageerror", error => errors.push(error.message));
     await page.evaluate(() => window.openScanner());
@@ -572,25 +572,38 @@ for (const engine of [chromium, webkit]) {
     await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop") && !window.scanBusy);
-    await page.locator("#manual-from-scan").tap();
+    await page.locator("#fill-details").tap();
     await page.waitForSelector("#invoice-form");
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
     assert.ok(await page.evaluate(() => JSON.stringify(window.scanRequests[0].body.files) === JSON.stringify(window.scanDrafts().find(([key]) => key === "scan")[1].files)));
-    assert.equal(await page.locator("[data-open-document]").count(), 1);
-    assert.equal(await page.locator("[name=review]").isChecked(), false);
+    assert.equal(await page.locator("[data-open-document]").count(), 1, "the photograph stays one tap away");
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
+    // The same five questions in the same order, typed from the paper.
+    const question = () => page.locator(".quick-question h3").innerText();
+    assert.match(await question(), /מי הספק/);
     await page.locator("[name=supplierName]").fill("אסם");
+    await page.locator('[data-quick-choice="next"]').tap();
+    assert.match(await question(), /מספר החשבונית/);
     await page.locator("[name=documentNumber]").fill("MANUAL-PHOTO-1");
+    await page.locator('[data-quick-choice="next"]').tap();
+    assert.match(await question(), /הסכום כולל מע״מ/);
     await page.locator("[name=total]").fill("10");
-    await page.locator("[name=final]").fill("10");
-    await page.locator("[name=review]").check();
-    await page.locator("#invoice-form button[type=submit]").tap();
+    await page.locator('[data-quick-choice="next"]').tap();
+    assert.match(await question(), /כמה מע״מ/);
+    await page.locator("[name=vat]").fill("1.53");
+    await page.locator('[data-quick-choice="vat-manual"]').tap();
+    assert.match(await question(), /תאריך החשבונית/);
+    await page.locator('[data-quick-choice="next"]').tap();
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0, "the summary is not a save");
+    await page.locator('.quick-invoice [type="submit"]').tap();
     await page.waitForFunction(() => window.invoiceSaves.length === 1);
     const saved = await page.evaluate(() => window.invoiceSaves[0].body.data);
     assert.deepEqual(saved.attachmentIds, ["attachment-0"]);
     assert.equal(saved.source, "manual");
     assert.equal(saved.scanJobId, null);
     assert.equal(saved.reviewConfirmed, true);
+    assert.equal(saved.totalAgorot, 1000); assert.equal(saved.vatAgorot, 153); assert.equal(saved.subtotalAgorot, 847);
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
     assert.deepEqual(errors, []);
     assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
@@ -643,7 +656,7 @@ for (const engine of [chromium, webkit]) {
     assert.equal(kept, true, "approving after a worker failure stores the full photo");
     assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 2);
     assert.equal(await page.evaluate(() => window.scanRequests.length), 0);
-    assert.equal(await page.locator("#run-scan").isEnabled(), true);
+    assert.equal(await page.locator("#fill-details").isEnabled(), true);
   });
 
   test(`${engine.name()}: the result screen offers one approval tap, and manual tools open and close without changing the image`, { timeout: 60000 }, async t => {
@@ -1704,7 +1717,7 @@ for (const engine of [chromium, webkit]) {
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`${engine.name()}: direct camera, PDF intake, short questions, compact approval and real draft reminders`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: direct camera, PDF intake, typed questions, compact approval and real draft reminders`, { timeout: 60000 }, async t => {
     const { server, requests, data } = workspaceFixture();
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     let browser;
@@ -1726,11 +1739,21 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator(".scan-view").isVisible(), false);
     await page.locator("[data-live-gallery]").setInputFiles({ name: "invoice.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n% synthetic fixture\n%%EOF") });
     await page.locator(".pdf-preview").waitFor();
-    await page.locator("#run-scan").click();
-    await page.locator('[data-quick-choice="invoice"]').click();
+    await page.locator("#fill-details").click();
+    await page.locator(".quick-question").waitFor();
+    assert.match(await page.locator("#modal").innerText(), /פרטי החשבונית/, "typed entry is not a review");
+    await page.locator("[name=supplierName]").fill("תנובה");
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator("[name=documentNumber]").fill("TYPED-118");
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator("[name=total]").fill("118");
+    await page.locator('[data-quick-choice="next"]').click();
     await page.locator('[data-quick-choice="vat-rate"]').waitFor();
-    assert.match(await page.locator('[data-quick-choice="vat-rate"]').innerText(), /18%/);
+    assert.match(await page.locator('[data-quick-choice="vat-rate"]').innerText(), /18%[\s\S]*18\.00/, "the shortcut shows the amount it would give");
+    assert.equal(await page.locator("[name=vat]").count(), 1, "the VAT is a box to type into");
     await page.locator('[data-quick-choice="vat-rate"]').click();
+    assert.equal(await page.locator("[name=invoiceDate]").inputValue(), await page.evaluate(() => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" })), "today is offered");
+    await page.locator('[data-quick-choice="next"]').click();
     await page.locator(".quick-summary-grid").waitFor();
     assert.equal(await page.locator(".quick-question").count(), 0);
     for (const width of [360, 390]) {
@@ -1758,13 +1781,13 @@ for (const engine of [chromium, webkit]) {
     await page.locator('.draft-banner[data-key="invoice"]').click();
     await page.locator(".quick-summary-grid").waitFor();
     assert.equal(await page.locator('[name="paymentReduction"]').inputValue(), "100");
-    assert.equal(requests.filter(r => r.path === "/api/v1/scan-invoice").length, 1);
+    assert.equal(requests.filter(r => r.path === "/api/v1/scan-invoice").length, 0, "nothing reads the document");
     await page.locator('.quick-invoice [type="submit"]').click();
     await page.locator('.save-confirmation').waitFor();
     await page.locator('[data-saved-done]').click();
     await page.locator("#modal").waitFor({ state: "hidden" });
     await page.waitForFunction(() => !document.querySelector(".draft-banner"));
-    const saved = data.invoices.find(i => i.documentNumber === "SCAN-118");
+    const saved = data.invoices.find(i => i.documentNumber === "TYPED-118");
     assert.equal(saved.finalAgorot, 1800); assert.equal(saved.vatAgorot, 1800); assert.equal(saved.totalAgorot, 11800);
     assert.equal(saved.attachmentIds.length, 1);
     await workspaceRoute(page, "settings");
@@ -1844,41 +1867,5 @@ for (const engine of [chromium, webkit]) {
     await page.locator('#invoice-search').fill('');
     assert.equal(await page.locator('.supplier-folder').count(), 2);
     assert.deepEqual(errors, []);
-  });
-}
-
-for (const engine of [chromium, webkit]) {
-  test(`${engine.name()}: correct an ambiguous number from the warning without another scan`, { timeout: 60000 }, async t => {
-    const { server, requests, data } = workspaceFixture({ scanResult: {
-      documentNumber: 'AMB-2', documentType: 'invoice', subtotalAgorot: 10000, vatAgorot: 1800,
-      totalAgorot: 11800, finalAgorot: 11800, uncertainFields: [],
-      warnings: ['מספר החשבונית אינו חד משמעי. בחלק העליון מופיע AMB-2 ובתחתית AMB-21. יש לבדוק את המסמך.'],
-    } });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    let browser;
-    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
-    browser = await engine.launch();
-    const page = await browser.newPage(phoneOptions(engine));
-    await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.locator('.scan-primary').click();
-    await page.locator('[data-live-gallery]').setInputFiles({ name: 'fixture.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n% fixture\n%%EOF') });
-    await page.locator('#run-scan').click();
-    await page.locator('[data-warning-edit="documentNumber"]').click();
-    assert.match(await page.locator('.quick-question').innerText(), /AMB-21/);
-    await page.locator('[name="documentNumber"]').fill('AMB-21');
-    await mkdir('test-artifacts', { recursive: true });
-    await page.screenshot({ path: `test-artifacts/warning-edit-${engine.name()}.png`, fullPage: true });
-    await page.locator('[data-quick-choice="next"]').click();
-    // The correction answers the note it was opened from: the only note here is
-    // done, so the review continues to the summary instead of back to it.
-    await page.locator('.quick-summary-grid').waitFor();
-    assert.equal(data.invoices.some(i => i.documentNumber === 'AMB-21'), false, 'nothing is saved without the final approval');
-    assert.match(await page.locator('.quick-summary-grid').innerText(), /AMB-21/);
-    await page.locator('.quick-invoice [type="submit"]').click();
-    await page.locator('.save-confirmation').waitFor();
-    await page.locator('[data-saved-done]').click();
-    await page.locator('#modal').waitFor({ state: 'hidden' });
-    assert.ok(data.invoices.some(i => i.documentNumber === 'AMB-21'));
-    assert.equal(requests.filter(r => r.path === '/api/v1/scan-invoice').length, 1);
   });
 }

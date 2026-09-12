@@ -2,8 +2,8 @@
 export function hasDraftContent(key, draft) {
   if (!draft) return false;
   if (draft.pending || draft.cancelPending || draft.conflict) return true;
-  if (["scan", "reportScan"].includes(key))
-    return Boolean(draft.files?.length || draft.attachmentIds?.length || draft.jobId || draft.result);
+  if (key === "scan")
+    return Boolean(draft.files?.length || draft.attachmentIds?.length);
   const f = draft.fields || {};
   if (key === "invoice" && draft.mode !== "edit" && !(draft.version > 0) && (draft.scan || f.scanJobId || f.attachmentIds?.length)) return true;
   if (draft.initialFields) return JSON.stringify(f) !== JSON.stringify(draft.initialFields);
@@ -17,7 +17,7 @@ export function hasDraftContent(key, draft) {
 export async function actionableDraftNames(drafts, data) {
   const names = await drafts.names(), values = new Map();
   for (const key of names) {
-    if (!["invoice", "scan", "reportScan", "supplier", "cash", "payment", "preferences"].includes(key)) continue;
+    if (!["invoice", "scan", "supplier", "cash", "payment", "preferences"].includes(key)) continue;
     const draft = await drafts.load(key);
     values.set(key, draft);
     if (!hasDraftContent(key, draft)) { await drafts.remove(key); values.set(key, null); continue; }

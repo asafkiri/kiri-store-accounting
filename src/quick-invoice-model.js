@@ -22,17 +22,28 @@ export function validInvoiceDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value || "") && value >= "1900-01-01" && value <= "2200-12-31" &&
     !Number.isNaN(Date.parse(value)) && new Date(value + "T12:00:00Z").toISOString().slice(0, 10) === value;
 }
+// Typed from the paper, an invoice is the same few details in the same order
+// every time, so the form is a habit rather than a puzzle. A step stays until
+// it is answered: a value the form arrived with, today's date, is confirmed
+// rather than assumed. The document type is not asked; it is an invoice unless
+// changed on the summary, where a credit note is the rare exception.
+export const typedSteps = ["supplierName", "documentNumber", "totalAgorot", "vatAgorot", "invoiceDate"];
 export function invoiceQuestions(draft) {
-  const f = draft.fields, r = draft.scan?.result || {}, confirmed = draft.quick?.confirmed || {};
-  const unsure = key => r.uncertainFields?.includes(key) && !confirmed[key];
+  const f = draft.fields, r = draft.scan?.result, confirmed = draft.quick?.confirmed || {};
+  const unsure = key => r?.uncertainFields?.includes(key) && !confirmed[key];
   const questions = [];
-  if (!f.supplierId || draft.supplierConflict || unsure("supplierName")) questions.push("supplierName");
-  if (!f.documentNumber?.trim() || unsure("documentNumber")) questions.push("documentNumber");
-  if (!validInvoiceDate(f.invoiceDate) || unsure("invoiceDate")) questions.push("invoiceDate");
-  if (!["invoice", "credit"].includes(f.documentType) || unsure("documentType")) questions.push("documentType");
-  if (amountOrNull(f.total) === null || unsure("totalAgorot")) questions.push("totalAgorot");
-  if ((amountOrNull(f.vat) === null && !confirmed.vatAgorot) || unsure("vatAgorot")) questions.push("vatAgorot");
-  if (unsure("subtotalAgorot")) questions.push("subtotalAgorot");
+  if (!r) {
+    for (const key of typedSteps)
+      if (key === "supplierName" ? !f.supplierId || draft.supplierConflict : !confirmed[key]) questions.push(key);
+  } else {
+    if (!f.supplierId || draft.supplierConflict || unsure("supplierName")) questions.push("supplierName");
+    if (!f.documentNumber?.trim() || unsure("documentNumber")) questions.push("documentNumber");
+    if (!validInvoiceDate(f.invoiceDate) || unsure("invoiceDate")) questions.push("invoiceDate");
+    if (!["invoice", "credit"].includes(f.documentType) || unsure("documentType")) questions.push("documentType");
+    if (amountOrNull(f.total) === null || unsure("totalAgorot")) questions.push("totalAgorot");
+    if ((amountOrNull(f.vat) === null && !confirmed.vatAgorot) || unsure("vatAgorot")) questions.push("vatAgorot");
+    if (unsure("subtotalAgorot")) questions.push("subtotalAgorot");
+  }
   f.deductions.forEach((d, i) => {
     if (!d.label?.trim() || amountOrNull(d.amount) === null || d.included === "unknown" ||
       (unsure("deductions") && !confirmed["deduction:" + i])) questions.push("deduction:" + i);
@@ -45,7 +56,7 @@ export function invoiceQuestions(draft) {
   const subtotal = amountOrNull(f.subtotal), vat = amountOrNull(f.vat), total = amountOrNull(f.total);
   if (subtotal !== null && vat !== null && total !== null && Math.abs(subtotal) + Math.abs(vat) + roundingAgorot(f) !== Math.abs(total) && !confirmed.arithmetic)
     questions.push("arithmetic");
-  if (r.warnings?.length && !confirmed.warnings) questions.push("warnings");
+  if (r?.warnings?.length && !confirmed.warnings) questions.push("warnings");
   return questions;
 }
 export function deriveMissingAmounts(draft) {

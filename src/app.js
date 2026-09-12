@@ -132,7 +132,7 @@ ctx.showSaved = (key, record) => {
   };
   $("[data-saved-edit]", root).onclick = ev => run(ev.currentTarget, () => ctx.reopen(key, record.id));
   const scan = $("[data-saved-scan]", root);
-  if (scan) scan.onclick = () => run(scan, () => scanDialog(ctx, "invoice", { openCamera: true }));
+  if (scan) scan.onclick = () => run(scan, () => scanDialog(ctx, { openCamera: true }));
   const unpay = $("[data-saved-unpay]", root);
   if (unpay) unpay.onclick = () => run(unpay, () => action("unpay", { id: record.id }));
 };
@@ -329,11 +329,9 @@ async function action(type, data = {}) {
     case "share-invoice":
       return shareDocuments(ctx, { invoiceId: data.id });
     case "invoice":
-      return invoiceForm(ctx);
+      return invoiceForm(ctx, null, null, [], { quick: true });
     case "scan":
-      return scanDialog(ctx, "invoice", { openCamera: true });
-    case "report-scan":
-      return scanDialog(ctx, "report");
+      return scanDialog(ctx, { openCamera: true });
     case "vat-preferences":
       return preferencesForm(ctx);
     case "supplier-restore":
@@ -473,8 +471,7 @@ async function action(type, data = {}) {
       break;
     case "resume-draft": {
       const d = await ctx.drafts.load(data.key);
-      if (data.key === "scan" || data.key === "reportScan")
-        return scanDialog(ctx, data.key === "scan" ? "invoice" : "report", { resume: true });
+      if (data.key === "scan") return scanDialog(ctx, { resume: true });
       return ctx.reopen(data.key, d?.recordId);
     }
     case "check-cancelled": {

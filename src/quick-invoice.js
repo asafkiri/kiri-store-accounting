@@ -1,7 +1,7 @@
 import { $, field, icon, errorText } from "./ui.js";
 import { escapeHtml as e, money, moneyInput, parseMoney, displayDate, types } from "./format.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
-import { invoiceQuestions, deriveMissingAmounts, amountOrNull, validInvoiceDate, vatFromInclusive, expectedFinal } from "./quick-invoice-model.js";
+import { invoiceQuestions, typedSteps, deriveMissingAmounts, amountOrNull, validInvoiceDate, vatFromInclusive, expectedFinal } from "./quick-invoice-model.js";
 import { reviewFields, warningFields, warningDates } from "./review-actions.js";
 
 // The full edit form remains available for saved invoices. New scans use one
@@ -11,7 +11,11 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const q = draft.quick, f = draft.fields, read = draft.scan?.result || {};
   q.confirmed ||= {};
   const rate = ctx.data.settings?.find(s => s.id === "accounting")?.defaultVatBasisPoints ?? 1800;
-  const root = ctx.dialog("בדיקת החשבונית", `<form class="quick-invoice" id="invoice-form"><div data-quick-content></div>${footer("אשר ושמור חשבונית")}</form>`);
+  // Typed from the paper there is nothing to check against, only details to
+  // give, and the screens say so: a plain label per field, the step out of the
+  // total, and the VAT as a box to type into with the rate as a shortcut.
+  const typed = !draft.scan;
+  const root = ctx.dialog(typed ? "פרטי החשבונית" : "בדיקת החשבונית", `<form class="quick-invoice" id="invoice-form"><div data-quick-content></div>${footer("אשר ושמור חשבונית")}</form>`);
   root.classList.add("quick-modal-content");
   const form = $("form", root), content = $("[data-quick-content]", form);
   let binding, current, supplierPicker, advancing = false;
@@ -78,7 +82,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       const titles = { supplierName: "מי הספק?", documentNumber: "מה מספר החשבונית?", invoiceDate: "מה תאריך החשבונית?", documentType: "איזו חשבונית זאת?", totalAgorot: "מה הסכום כולל מע״מ?", vatAgorot: "כמה מע״מ יש בחשבונית?", subtotalAgorot: "מה הסכום לפני מע״מ?", finalAgorot: "מה הסכום הסופי לתשלום?", arithmetic: "הסכומים אינם מסתכמים", warnings: "עוד דבר לבדיקה", finalArithmetic: "מה הסכום לתשלום?" };
       let body = "", footerButton = true;
       const fieldName = { documentNumber: "documentNumber", invoiceDate: "invoiceDate", totalAgorot: "total", subtotalAgorot: "subtotal", finalAgorot: "final" }[current];
-      if (fieldName) body = input("הסכום או הפרט שרשום בחשבונית", fieldName, f[fieldName], current === "invoiceDate" ? "date" : "text");
+      const typedLabel = { documentNumber: "מספר החשבונית", invoiceDate: "תאריך החשבונית", totalAgorot: "הסכום כולל מע״מ", subtotalAgorot: "הסכום לפני מע״מ", finalAgorot: "הסכום לתשלום" }[current];
+      if (fieldName) body = input(typed ? typedLabel : "הסכום או הפרט שרשום בחשבונית", fieldName, f[fieldName], current === "invoiceDate" ? "date" : "text");
+      if (typed && current === "invoiceDate" && !q.editing) body = '<p class="muted">מולא תאריך היום. אם בחשבונית רשום תאריך אחר, שנה אותו.</p>' + body;
       if (current === "invoiceDate" && q.warningEditing) {
         const dates = warningDates(warning());
         if (dates.length > 1) body = `<p>בחר את תאריך החשבונית שמופיע בצילום:</p><div class="date-candidates">${dates.map(date => `<button type="button" class="secondary" data-date-candidate="${date}">${e(displayDate(date))}</button>`).join("")}</div><p>אפשר גם להקליד תאריך:</p>` + body;
@@ -90,10 +96,12 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       }
       if (current === "vatAgorot") {
         const calculated = amountOrNull(f.total) === null ? null : vatFromInclusive(parseMoney(f.total), rate);
-        body = `<p class="muted">${read.vatAgorot == null ? "המע״מ לא נקלט." : "צריך לאשר את המע״מ שנקרא."}</p>` +
-          (amountOrNull(f.vat) !== null ? choice("vat-read", "הסכום שנקרא נכון: " + money(Math.abs(parseMoney(f.vat))), true) : "") +
-          choice("vat-rate", `חשב לפי ${rate / 100}%`, amountOrNull(f.vat) === null, calculated ? `${money(calculated.vatAgorot)} מתוך הסכום הכולל` : "") +
-          choice("vat-zero", "אין מע״מ · 0%") + `<details class="quick-other"><summary>סכום אחר או מע״מ לא ידוע</summary>${input("סכום המע״מ", "vat", f.vat)}${choice("vat-manual", "אשר סכום")}${choice("vat-unknown", "לא ידוע כרגע")}</details>`;
+        const byRate = choice("vat-rate", `חשב לפי ${rate / 100}%`, !typed && amountOrNull(f.vat) === null, calculated ? `${money(calculated.vatAgorot)} מתוך הסכום הכולל` : "");
+        body = typed
+          ? input("המע״מ כפי שרשום בחשבונית", "vat", f.vat) + choice("vat-manual", "אשר סכום", true) + byRate + choice("vat-zero", "אין מע״מ · 0%")
+          : `<p class="muted">${read.vatAgorot == null ? "המע״מ לא נקלט." : "צריך לאשר את המע״מ שנקרא."}</p>` +
+            (amountOrNull(f.vat) !== null ? choice("vat-read", "הסכום שנקרא נכון: " + money(Math.abs(parseMoney(f.vat))), true) : "") + byRate +
+            choice("vat-zero", "אין מע״מ · 0%") + `<details class="quick-other"><summary>סכום אחר או מע״מ לא ידוע</summary>${input("סכום המע״מ", "vat", f.vat)}${choice("vat-manual", "אשר סכום")}${choice("vat-unknown", "לא ידוע כרגע")}</details>`;
         footerButton = false;
       }
       if (current.startsWith("deduction:")) {
@@ -113,7 +121,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           choice("final-calculate", "חשב לפי הסכום וההפחתות", true) + choice("final-keep", "בדקתי — השאר את הסכום הסופי");
         footerButton = false;
       }
-      content.innerHTML = `<div class="quick-progress"><span>${q.editing ? "שינוי פרט" : `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}`}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${q.warningEditing ? warningText() : ""}${body}${footerButton ? choice("next", current !== "warnings" ? "אשר והמשך" : (q.warningIndex || 0) + 1 < read.warnings.length ? "בדקתי, להערה הבאה" : "בדקתי את ההערות, המשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${q.warningEditing ? "חזרה להערות" : questions.length ? "חזרה לבדיקה" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
+      const left = questions.filter(k => typedSteps.includes(k)).length;
+      const progress = q.editing ? "שינוי פרט" : !typed ? `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}` : left ? `שאלה ${typedSteps.length - left + 1} מתוך ${typedSteps.length}` : "בדיקה נוספת";
+      content.innerHTML = `<div class="quick-progress"><span>${progress}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${q.warningEditing ? warningText() : ""}${body}${footerButton ? choice("next", current !== "warnings" ? "אשר והמשך" : (q.warningIndex || 0) + 1 < read.warnings.length ? "בדקתי, להערה הבאה" : "בדקתי את ההערות, המשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${q.warningEditing ? "חזרה להערות" : questions.length ? "חזרה לבדיקה" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
       if (current === "supplierName") supplierPicker = bindSupplierPicker(ctx, form, draft, {
         collect: () => { f.supplierId = form.elements.supplierId.value; f.supplierName = form.elements.supplierName.value; return f; },
         persist: () => binding?.persist(),
@@ -161,6 +171,10 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         delete q.confirmed.finalArithmetic;
       }
       if (key === "vatAgorot") {
+        // Enter in the typed box confirms what was typed.
+        if (action === "next" && form.elements.vat?.value.trim()) action = "vat-manual";
+        if (action === "vat-manual" && typed && amountOrNull(f.total) !== null && parseMoney(form.elements.vat.value) > Math.abs(parseMoney(f.total)))
+          throw Error("המע״מ גדול מהסכום הכולל. בדוק את שני הסכומים.");
         if (["vat-rate", "vat-zero"].includes(action)) {
           const values = vatFromInclusive(parseMoney(f.total), action === "vat-zero" ? 0 : rate);
           f.vat = moneyInput(values.vatAgorot);
@@ -171,7 +185,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           }
         } else if (action === "vat-unknown") f.vat = "";
         else if (action === "vat-manual") f.vat = moneyInput(Math.abs(parseMoney(form.elements.vat.value)));
-        else if (action !== "vat-read") throw Error("יש לבחור אפשרות למע״מ.");
+        else if (action !== "vat-read") throw Error(typed ? "הקלד את המע״מ שרשום בחשבונית, או בחר חישוב לפי האחוז." : "יש לבחור אפשרות למע״מ.");
         delete q.confirmed.arithmetic;
       }
       if (key.startsWith("deduction:")) {
