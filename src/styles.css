@@ -891,6 +891,22 @@ dialog.crop-modal {
   animation: crop-spin .8s linear infinite;
 }
 @keyframes crop-spin { to { transform: rotate(360deg); } }
+/* Reading an invoice can take most of a minute. One unchanging line of text for
+   that long reads as a screen that stopped responding, so the wait shows the
+   same spinner as the crop screen, what is happening, and for how long. */
+.scan-wait { display: flex; align-items: center; gap: 12px; }
+.scan-wait-spin {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 3px solid #c9d9ec;
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: crop-spin .9s linear infinite;
+}
+.scan-wait-text { min-width: 0; }
+.scan-wait-text strong { display: block; font-size: 1.08rem; }
+.scan-wait-text small { display: block; margin-top: 2px; font-size: 16px; }
 /* A scan-first workspace. Months and suppliers share the same folder language. */
 .invoice-entry { margin-bottom: 16px; }
 .scan-primary { width: 100%; min-height: 80px; justify-content: flex-start; padding: 16px 22px; border-radius: 16px; text-align: right; }
@@ -1011,7 +1027,7 @@ dialog.crop-modal {
   .advanced-filters { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .scan-crop [aria-busy="true"]::before { animation: none; }
+  .scan-crop [aria-busy="true"]::before, .scan-wait-spin { animation: none; }
 }
 .crop-heading {
   display: flex;
