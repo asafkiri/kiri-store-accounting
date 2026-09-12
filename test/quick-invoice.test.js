@@ -30,7 +30,7 @@ const fill = (name, value) => { const input = document.querySelector(`[name="${n
 const choose = async action => { const button = document.querySelector(`[data-quick-choice="${action}"]`); assert.ok(button, action); button.click(); await tick(); };
 const submit = () => document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-test("date choices and multiple notes require individual review and a final save", async () => {
+test("a correction answers its note and continues to the next one before a final save", async () => {
   const { ctx, writes } = setup();
   const original = scan({ warnings: ["תאריך החשבונית אינו ברור: 10.09.2026 או 12/09/2026", "מספר החשבונית דורש בדיקה"] });
   await invoiceForm(ctx, null, original);
@@ -39,13 +39,24 @@ test("date choices and multiple notes require individual review and a final save
   assert.equal(document.querySelectorAll("[data-date-candidate]").length, 2);
   document.querySelector('[data-date-candidate="2026-09-12"]').click(); await tick();
   assert.equal(original.result.invoiceDate, "2026-09-10", "printed source remains unchanged");
-  await choose("next");
-  assert.match(document.querySelector(".review-position").textContent, /2 מתוך 2/);
+  assert.match(document.querySelector(".review-position").textContent, /2 מתוך 2/, "the fix continues to the next note");
   assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'));
   assert.equal(writes.length, 0);
   await choose("next"); assert.ok(document.querySelector(".quick-summary-grid"));
   submit(); await tick();
   assert.equal(writes.length, 1); assert.equal(writes[0].body.data.invoiceDate, "2026-09-12");
+});
+
+test("a note with nothing to fix is one confirmation and never lists every field as work", async () => {
+  const { ctx, writes } = setup();
+  await invoiceForm(ctx, null, scan({ warnings: ["יש לאמת ידנית את שיוך מספרי הלקוח ואת כל המזהים הנוספים המודפסים במסמך."] }));
+  assert.equal(document.querySelectorAll("[data-warning-edit]").length, 0, "no field is guessed from an unclassified note");
+  assert.equal(document.querySelector("details.warning-other").open, false, "the field picker stays closed");
+  await choose("next");
+  assert.ok(document.querySelector(".quick-summary-grid"));
+  assert.equal(writes.length, 0);
+  submit(); await tick();
+  assert.equal(writes.length, 1);
 });
 
 test("inclusive VAT uses exact agorot, configurable rates and never applies the rate to the gross again", () => {
@@ -147,7 +158,7 @@ test("a separately recorded included rounding line does not create a false VAT q
   assert.equal(writes[0].body.data.finalAgorot, 399500);
 });
 
-test("a warning-only ambiguous invoice number can be corrected, resumed and explicitly acknowledged", async () => {
+test("a warning-only ambiguous invoice number is corrected once, resumed and saved deliberately", async () => {
   const { ctx, writes, cache } = setup();
   const original = scan({ documentNumber: "59912_2", warnings: ["מספר החשבונית אינו חד משמעי: 59912_2 או 59912_21. נדרש אימות אנושי."] });
   await invoiceForm(ctx, null, original);
@@ -155,11 +166,11 @@ test("a warning-only ambiguous invoice number can be corrected, resumed and expl
   assert.match(document.querySelector('.quick-question').textContent, /59912_21/);
   fill("documentNumber", "59912_21"); await choose("next");
   assert.equal(cache.get("invoice").fields.documentNumber, "59912_21");
-  assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'), "return to unacknowledged warning");
+  assert.ok(document.querySelector(".quick-summary-grid"), "the correction answers the note it came from");
   await invoiceForm(ctx);
-  assert.ok(document.querySelector('[data-warning-edit="documentNumber"]'));
+  assert.ok(document.querySelector(".quick-summary-grid"), "the answered note does not return on resume");
   assert.equal(writes.length, 0);
-  await choose("next"); submit(); await tick();
+  submit(); await tick();
   assert.equal(writes[0].body.data.documentNumber, "59912_21");
   assert.equal(original.result.documentNumber, "59912_2", "retain the original scan as evidence");
 });

@@ -25,10 +25,18 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const photo = () => f.attachmentIds?.length ? `<button type="button" class="text-button quick-photo" data-open-document="${e(f.attachmentIds[0])}" data-safe-action>${icon("image")} הצג חשבונית</button>` : "";
   const warning = () => read.warnings?.[Math.min(q.warningIndex || 0, (read.warnings?.length || 1) - 1)] || "";
   const warningText = () => `<p class="notice warning">${e(warning())}</p>`;
+  // A note is answered either by acknowledging it or by correcting a detail it
+  // points at; both continue to the next note. The picker of every field stays
+  // closed, so a note nothing is wrong with is one confirmation rather than a
+  // list that reads as if the whole invoice needs fixing.
+  const advanceWarning = () => {
+    if ((q.warningIndex || 0) + 1 < (read.warnings?.length || 0)) q.warningIndex = (q.warningIndex || 0) + 1;
+    else q.confirmed.warnings = true;
+  };
   const warningEdits = () => {
     const relevant = warningFields(warning(), draft);
     return `<div class="warning-edits">${relevant.map(([key, label]) => `<button type="button" class="secondary" data-warning-edit="${e(key)}">תקן ${e(label)}</button>`).join("")}</div>
-      <details class="warning-other" ${relevant.length ? "" : "open"}><summary>${relevant.length ? "תיקון פרט אחר" : "בחר פרט לתיקון"}</summary><label class="field"><span>איזה פרט צריך לתקן?</span><select name="warningField"><option value="">בחר פרט</option>${reviewFields(draft).map(([key, label]) => `<option value="${e(key)}">${e(label)}</option>`).join("")}</select></label><button type="button" class="secondary" data-warning-other>פתח לתיקון</button></details>`;
+      <details class="warning-other"><summary>${relevant.length ? "תיקון פרט אחר" : "יש פרט שצריך לתקן?"}</summary><label class="field"><span>איזה פרט צריך לתקן?</span><select name="warningField"><option value="">בחר פרט</option>${reviewFields(draft).map(([key, label]) => `<option value="${e(key)}">${e(label)}</option>`).join("")}</select></label><button type="button" class="secondary" data-warning-other>פתח לתיקון</button></details>`;
   };
   const adjustment = () => {
     const reduction = parseMoney(q.paymentReduction || "0");
@@ -105,7 +113,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           choice("final-calculate", "חשב לפי הסכום וההפחתות", true) + choice("final-keep", "בדקתי — השאר את הסכום הסופי");
         footerButton = false;
       }
-      content.innerHTML = `<div class="quick-progress"><span>${q.editing ? "שינוי פרט" : `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}`}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${q.warningEditing ? warningText() : ""}${body}${footerButton ? choice("next", current === "warnings" ? "בדקתי את ההערות, המשך" : "אשר והמשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${q.warningEditing ? "חזרה להערות" : questions.length ? "חזרה לבדיקה" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
+      content.innerHTML = `<div class="quick-progress"><span>${q.editing ? "שינוי פרט" : `${questions.length} ${questions.length === 1 ? "פרט לאישור" : "פרטים לאישור"}`}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${q.warningEditing ? warningText() : ""}${body}${footerButton ? choice("next", current !== "warnings" ? "אשר והמשך" : (q.warningIndex || 0) + 1 < read.warnings.length ? "בדקתי, להערה הבאה" : "בדקתי את ההערות, המשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${q.warningEditing ? "חזרה להערות" : questions.length ? "חזרה לבדיקה" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
       if (current === "supplierName") supplierPicker = bindSupplierPicker(ctx, form, draft, {
         collect: () => { f.supplierId = form.elements.supplierId.value; f.supplierName = form.elements.supplierName.value; return f; },
         persist: () => binding?.persist(),
@@ -123,7 +131,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const answer = async action => {
     if (advancing || draft.pending) return;
     advancing = true; error.hidden = true;
-    const key = current;
+    const key = current, fromWarning = q.warningEditing;
     try {
       if (action === "back-summary") { delete q.editing; delete q.warningEditing; render(); return; }
       if (action.startsWith("arithmetic-") && action !== "arithmetic-keep") {
@@ -181,11 +189,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         q.finalDerived = true;
         delete q.paymentBaseFinal;
       }
-      if (key === "warnings" && (q.warningIndex || 0) + 1 < read.warnings.length) {
-        q.warningIndex = (q.warningIndex || 0) + 1;
-        await binding.persist(true); render(); return;
-      }
-      q.confirmed[key] = true; delete q.editing; delete q.warningEditing;
+      if (key !== "warnings") q.confirmed[key] = true;
+      if (key === "warnings" || fromWarning) advanceWarning();
+      delete q.editing; delete q.warningEditing;
       deriveMissingAmounts(draft);
       await binding.persist(true);
       if (form.isConnected) render();
