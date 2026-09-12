@@ -115,3 +115,22 @@ test("the invoice and photo archive show only the current folder and retain a ba
   assert.equal(doc.querySelectorAll('.month-folder').length, 2);
   assert.equal(doc.querySelectorAll('.invoice-card').length, 0);
 });
+
+test("the main navigation does not duplicate the invoices entry already offered on Home", () => {
+  const html = shell({
+    route: "home",
+    filters: {},
+    folderPath: {},
+    limit: 80,
+    data: { invoices: [], suppliers: [], dailyCash: [] },
+    draftNames: [],
+    lastRefresh: 123,
+    syncError: false,
+  });
+  const routes = html.match(/data-route="[^"]+"/g) || [];
+  assert.equal(routes.length, 2);
+  assert.match(html, /data-route="home"/);
+  assert.match(html, /data-route="more"/);
+  assert.doesNotMatch(html, /data-route="invoices"/);
+  assert.doesNotMatch(html, /data-route="invoices" class="active"/);
+});
