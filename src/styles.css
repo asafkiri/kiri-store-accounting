@@ -915,8 +915,6 @@ dialog.crop-modal {
 .tabs button.active { background: white; color: #174f97; box-shadow: 0 1px 4px #1a345018; }
 .filter-panel { background: transparent; border: 0; border-radius: 0; padding: 0; margin-bottom: 8px; }
 .filter-panel summary { display: flex; align-items: center; font-size: .88rem; min-height: 44px; }
-.filter-panel summary::after { content: "+"; margin-inline-start: 8px; font-size: 20px; }
-.filter-panel[open] summary::after { content: "−"; }
 .filters .field, .field input, .field select, .field textarea { min-width: 0; max-width: 100%; }
 .field input[type=date], .field input[type=month] { width: 100%; min-width: 0; -webkit-appearance: none; appearance: none; min-height: 48px; }
 .field input::-webkit-date-and-time-value { text-align: start; min-height: 1.5em; }

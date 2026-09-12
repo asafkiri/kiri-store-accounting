@@ -1567,7 +1567,7 @@ for (const engine of [chromium, webkit]) {
     await page.waitForTimeout(3600);
     assert.ok(await page.locator(".save-confirmation").isVisible());
     await mkdir("test-artifacts", { recursive: true });
-    await page.screenshot({ path: `test-artifacts/payment-confirmation-${engine.name()}.png`, fullPage: true });
+    await page.screenshot({ path: `test-artifacts/payment-confirmation-${engine.name()}.png` });
     await page.locator("[data-saved-done]").click();
     assert.equal(await page.locator(".invoice-card").count(), 13);
     await page.locator('[data-action="detail"][data-id="INV-101"]').click();
