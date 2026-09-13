@@ -35,6 +35,8 @@ export async function batchPaymentForm(ctx, supplierId) {
     <p>פרטי התשלום יירשמו לכל החשבוניות שבחרת.</p><button type="button" class="text-button" data-change-selection>שנה בחירת חשבוניות</button></section>
     ${footer("אשר תשלום", "בטל את רישום התשלום")}</form>`);
   const form = $("form", root), submit = $("[type=submit]", form);
+  // Keep continuation reachable while scrolling a long supplier history.
+  $(".form-footer", form).prepend($("[data-batch-next]", form));
   const collect = () => {
     const { invoiceSelection, ...values } = formObject(form);
     return { ...values, selectedIds: [...form.querySelectorAll('[name="invoiceSelection"]:checked')].map(el => el.value) };
@@ -46,7 +48,10 @@ export async function batchPaymentForm(ctx, supplierId) {
     form.querySelectorAll("[data-batch-phase]").forEach(el => { el.hidden = el.dataset.batchPhase !== phase; });
     $("[data-batch-total]", form).textContent = `${chosen.length} חשבוניות · סה״כ לתשלום ${money(total)}`;
     $("[data-selection-error]", form).textContent = chosen.length > 50 ? "אפשר לשלם עד 50 חשבוניות בכל פעם." : total < 0 ? "סך הזיכויים גבוה מסכום החשבוניות. יש לשנות את הבחירה." : "";
+    $("[data-selection-error]", form).hidden = !$("[data-selection-error]", form).textContent;
     $("[data-batch-next]", form).disabled = Boolean(draft.pending) || !chosen.length || chosen.length > 50 || total < 0;
+    $("[data-batch-next]", form).hidden = phase !== "selection";
+    $("[data-batch-next]", form).textContent = chosen.length ? `המשך · ${chosen.length} חשבוניות · ${money(total)}` : "בחר חשבוניות כדי להמשיך";
     const check = form.elements.method.value === "check";
     $("[data-batch-check]", form).hidden = !check; $("[data-batch-due]", form).hidden = !check;
     form.elements.paymentDate.closest("label").querySelector("span").textContent = check ? "באיזה יום מסרת את הצ׳ק לספק?" : "באיזה יום שילמת?";

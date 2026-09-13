@@ -1933,7 +1933,7 @@ dialog.crop-modal {
   #modal:not(.crop-modal) { width: 100%; height: var(--app-visible-height, 100dvh); max-height: var(--app-visible-height, 100dvh); margin: 0; border-radius: 0; scroll-padding-block: 145px 170px; }
   #modal:not(.crop-modal) > .modal-content { min-height: 100%; }
   #modal:not(.crop-modal) .modal-heading { position: sticky; top: -18px; z-index: 3; background: white; padding-block: 12px; }
-  .quick-invoice .form-footer, .payment-form .form-footer { position: sticky; bottom: -18px; z-index: 2; background: white; padding-bottom: max(18px, env(safe-area-inset-bottom)); }
+  .quick-invoice .form-footer, .payment-form .form-footer, .batch-payment-form .form-footer { position: sticky; bottom: -18px; z-index: 2; background: white; padding-bottom: max(18px, env(safe-area-inset-bottom)); }
   .home-heading h1 { font-size: 28px; }
   .home-action { padding: 16px; gap: 12px; }
   .home-action strong, .home-action.scan-primary strong { font-size: 21px; }
