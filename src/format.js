@@ -59,6 +59,12 @@ export const types = {
   delivery: "תעודת משלוח",
   receipt: "קבלה",
 };
+// The number is no longer typed during intake, so every screen names a document
+// by what it is and adds the number only when there is one. It stays printed on
+// the paper and on the photograph either way.
+export const invoiceLabel = (invoice) =>
+  (types[invoice?.documentType] || "חשבונית") +
+  (invoice?.documentNumber?.trim() ? " " + invoice.documentNumber.trim() : " ללא מספר");
 export const escapeHtml = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,

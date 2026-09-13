@@ -24,6 +24,7 @@ import {
   filterInvoices,
   monthRange,
   monthLabel,
+  invoiceLabel,
 } from "./format.js";
 import { shell } from "./views.js";
 import {
@@ -123,7 +124,7 @@ ctx.showSaved = (key, record) => {
   const supplier = ctx.data.suppliers.find(s => s.id === record.supplierId)?.name || "הספק";
   const title = key === "invoice" ? `החשבונית של ${supplier} נשמרה` : key === "payment" ? "התשלום נרשם" : "סגירת היום נשמרה";
   const description = key === "cash" ? `קופה ורב־קו · ${displayDate(record.date)}`
-    : `חשבונית ${record.documentNumber} · ${money(record.finalAgorot)} · ${key === "invoice" ? monthLabel(record.invoiceDate?.slice(0, 7)) : supplier}`;
+    : `${invoiceLabel(record)} · ${money(record.finalAgorot)} · ${key === "invoice" ? monthLabel(record.invoiceDate?.slice(0, 7)) : supplier}`;
   const root = ctx.dialog("השמירה הסתיימה", `<section class="save-confirmation" role="status"><span class="saved-mark">${icon("check")}</span><h3>${e(title)}</h3><p>${e(description)}</p>${key === "payment" ? '<p class="badge paid">שולם</p>' : ""}</section><div class="saved-actions"><button class="primary" data-saved-done>סיום וחזרה</button>${key === "invoice" ? '<button class="secondary" data-saved-scan>צלם חשבונית נוספת</button>' : ""}<button class="secondary" data-saved-edit>${key === "payment" ? "תיקון פרטי התשלום" : key === "cash" ? "תיקון סכומי הסגירה" : "תיקון פרטי החשבונית"}</button>${key === "payment" ? '<button class="text-button" data-saved-unpay>טעיתי — החשבונית לא שולמה</button>' : ""}</div>`);
   $("[data-saved-done]", root).onclick = () => ctx.closeModal();
   const run = async (button, fn) => {
@@ -535,8 +536,8 @@ async function action(type, data = {}) {
     case "delete":
       if (
         confirm(
-          "למחוק את חשבונית " +
-            record.documentNumber +
+          "למחוק את " +
+            invoiceLabel(record) +
             " על סך " +
             money(record.finalAgorot) +
             "? היא תוסר מהרשימות הפעילות.",
@@ -607,7 +608,7 @@ async function simpleMutation(actionName, record) {
 }
 function detail(i) {
   const supplier = ctx.data.suppliers.find((s) => s.id === i.supplierId);
-  const root = ctx.dialog("חשבונית " + i.documentNumber, invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
+  const root = ctx.dialog(invoiceLabel(i), invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
   root.classList.add("invoice-detail-modal");
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
@@ -628,7 +629,7 @@ function documentList(invoiceId) {
   if (!i) return;
   const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
   const files = i.attachmentIds || [];
-  const root = ctx.dialog("צילומי חשבונית " + i.documentNumber,
+  const root = ctx.dialog("צילומי " + invoiceLabel(i),
     `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${retentionNote(ctx.retentionDays)}`);
   if (files.length)
     $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
@@ -758,7 +759,7 @@ async function deletePhoto(button) {
   const page = (invoice.attachmentIds || []).length > 1
     ? "צילום עמוד " + button.dataset.page
     : "צילום החשבונית";
-  if (!confirm(`למחוק את ${page} של חשבונית ${invoice.documentNumber}? הקובץ יימחק מהאחסון ולא ניתן לשחזר אותו. פרטי החשבונית והתשלום יישארו.`))
+  if (!confirm(`למחוק את ${page} של ${invoiceLabel(invoice)}? הקובץ יימחק מהאחסון ולא ניתן לשחזר אותו. פרטי החשבונית והתשלום יישארו.`))
     return;
   const inDetails = Boolean($(".invoice-detail-modal"));
   button.disabled = true;

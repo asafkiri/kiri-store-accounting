@@ -1,4 +1,4 @@
-import { escapeHtml as e, money, displayDate, types, methods } from "./format.js";
+import { escapeHtml as e, money, displayDate, types, methods, invoiceLabel } from "./format.js";
 import { icon } from "./ui.js";
 
 // Deleting a photo really deletes the file, so the button sits next to the one
@@ -30,7 +30,7 @@ export function invoiceDetails(invoice, supplier, { retentionDays = 0 } = {}) {
   const paid = invoice.status === "paid", payment = invoice.payment, files = invoice.attachmentIds || [];
   const rows = [["לפני מע״מ", money(invoice.subtotalAgorot)], ["מע״מ", money(invoice.vatAgorot)], ["כולל מע״מ", money(invoice.totalAgorot)]];
   const rowList = rows => `<dl class="details-list">${rows.map(([label, value]) => `<div><dt>${e(label)}</dt><dd>${e(value)}</dd></div>`).join("")}</dl>`;
-  return `<section class="invoice-hero"><h3>${e(supplier?.name || "ספק")}</h3><p>${e(types[invoice.documentType])} ${e(invoice.documentNumber)} · ${e(displayDate(invoice.invoiceDate))}</p>
+  return `<section class="invoice-hero"><h3>${e(supplier?.name || "ספק")}</h3><p>${e(invoiceLabel(invoice))} · ${e(displayDate(invoice.invoiceDate))}</p>
     <span class="badge ${paid ? "paid" : "unpaid"}">${paid ? icon("check") + "שולם" : "טרם שולם"}</span><div class="invoice-hero-amount"><span>${invoice.documentType === "credit" ? "סכום הזיכוי" : "סכום לתשלום"}</span><strong>${e(money(invoice.finalAgorot))}</strong></div></section>
     <button class="primary invoice-detail-primary" data-detail-action="pay">${paid ? "תיקון פרטי התשלום" : "סמן ששילמתי"}</button>
     ${payment ? `<section class="payment-receipt"><h3>פרטי התשלום</h3>${rowList([

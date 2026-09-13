@@ -69,7 +69,7 @@ test("a photographed invoice opens the typed questions at once, while its pages 
   // The questions are answerable while the photograph is still on its way.
   assert.ok(document.getElementById("invoice-form"));
   assert.equal(questionTitle(), "מי הספק?", "the questions start with the supplier");
-  assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 1 מתוך 5/);
+  assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 1 מתוך 4/);
   assert.equal(calls.length, 1, "one upload and no other request");
   assert.equal(calls[0].path, "documents");
   assert.equal(calls[0].options.method, "POST");

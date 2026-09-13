@@ -1,5 +1,5 @@
 import { $, icon, errorText } from "./ui.js";
-import { escapeHtml as e, monthLabel } from "./format.js";
+import { escapeHtml as e, monthLabel, invoiceLabel } from "./format.js";
 import { download } from "./export.js";
 
 export const SHARE_BATCH_BYTES = 18 * 1024 * 1024;
@@ -16,7 +16,7 @@ export function sharingManifest(data, { month, invoiceId }) {
     .sort((a, b) => (names.get(a.supplierId) || "").localeCompare(names.get(b.supplierId) || "", "he") || a.invoiceDate.localeCompare(b.invoiceDate) || a.id.localeCompare(b.id));
   const entries = invoices.flatMap((i, index) => [...new Set(i.attachmentIds || [])].map((id, page) => {
     const supplier = safeName(names.get(i.supplierId) || "ספק"), invoice = `${safeName(i.invoiceDate)}_${safeName(i.documentNumber)}_${index + 1}`;
-    return { id, label: `${names.get(i.supplierId) || "ספק"} · ${i.documentNumber} · קובץ ${page + 1}`,
+    return { id, label: `${names.get(i.supplierId) || "ספק"} · ${invoiceLabel(i)} · קובץ ${page + 1}`,
       name: `${supplier}_${invoice}_${page + 1}`, path: `${supplier}/${invoice}/${page + 1}` };
   }));
   return { invoices, entries };
@@ -76,7 +76,7 @@ export class DocumentShareBatch {
 
 export function shareDocuments(ctx, selection) {
   const { invoices, entries } = sharingManifest(ctx.data, selection), api = ctx.api;
-  const title = selection.month ? "צילומי " + monthLabel(selection.month) : "צילומי חשבונית " + (invoices[0]?.documentNumber || "");
+  const title = selection.month ? "צילומי " + monthLabel(selection.month) : "צילומי " + invoiceLabel(invoices[0]);
   const dialog = document.createElement("dialog"); dialog.className = "preview-dialog";
   dialog.setAttribute("aria-label", title);
   dialog.innerHTML = `<div class="share-dialog"><div class="preview-toolbar"><button class="secondary" data-share-close>חזרה</button><h2>${e(title)}</h2></div>
