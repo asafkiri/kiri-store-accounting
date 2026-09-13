@@ -280,7 +280,7 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
     };
     const enterAdjust = () => {
       if (!ready || adjusting || failed || saving || rendering || dragging) return;
-      adjusting = true; entry = { frame, historyLength: history.length };
+      adjusting = true; entry = { frame, history: history.slice() };
       controls(); fitPreview();
       status.textContent = "גרור את הפינות לחיתוך מלבני, או בחר ״יישור פינות״ ליישור לפי ארבע פינות.";
       $("[data-crop-corner=\"0\"]", editor).focus({ preventScroll: true });
@@ -289,14 +289,23 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
     const leaveAdjust = async () => {
       if (!adjusting || saving || rendering || dragging) return;
       if (straightening) cancelStraightening();
-      if (entry && frame !== entry.frame && !await showPreview(false, false, entry.frame)) return;
-      if (entry) history.length = Math.min(history.length, entry.historyLength);
+      const session = generation;
+      if (entry && frame !== entry.frame && !await showPreview(false, false, entry.frame)) {
+        // Without a working preview the earlier view cannot be restored:
+        // Cancel then abandons the photo, as it does on the result screen.
+        if (!disposed && session === generation && !ready) finish(null);
+        return;
+      }
+      // Back and forth inside the manual tools leaves the earlier undo steps intact.
+      if (entry) history = entry.history;
       adjusting = false; entry = null; controls();
       status.textContent = detected ? RESULT_TEXT.detected : RESULT_TEXT.undetected;
       status.setAttribute("aria-busy", "false");
       fitPreview();
     };
-    $("[data-crop-cancel]", editor).onclick = () => { if (adjusting) void leaveAdjust(); else finish(null); };
+    // While a save is running the manual view cannot be restored; Cancel then
+    // abandons the photo instead of doing nothing.
+    $("[data-crop-cancel]", editor).onclick = () => { if (adjusting && !saving) void leaveAdjust(); else finish(null); };
     $("[data-crop-retake-button]", editor).onclick = () => {
       if (options.onRetake) { finish({ retake: true }); return; }
       retake.click();
@@ -336,7 +345,8 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
         if (!disposed && current === generation) finish(value);
       } catch {
         if (!disposed && current === generation) {
-          saving = false; controls(); originalButton.disabled = false;
+          // A preview this save interrupted never clears its own flag.
+          saving = false; rendering = false; controls(); originalButton.disabled = false;
           status.textContent = "לא ניתן להכין את הצילום. אפשר לנסות ללא חיתוך או לצלם שוב.";
           status.setAttribute("aria-busy", "false");
         }

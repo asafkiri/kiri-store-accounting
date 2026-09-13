@@ -640,6 +640,14 @@ for (const engine of [chromium, webkit]) {
     await page.locator("[data-crop-accept]").tap();
     await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("מיישר ושומר"));
     assert.equal(await page.locator("[data-crop-retake-button]").isEnabled(), true, "retake stays available while saving");
+    // A retake during the stuck save replaces the photo and drops the pending save.
+    await page.evaluate(async () => {
+      const { file } = await window.makePhoto("none");
+      const transfer = new DataTransfer(); transfer.items.add(file);
+      const retake = document.querySelector("[data-crop-retake]"); retake.files = transfer.files; retake.onchange();
+    });
+    await page.waitForFunction(() => document.querySelector("[data-crop-status]").textContent.includes("לא נמצאו גבולות ברורים") && !document.querySelector("[data-crop-accept]").disabled);
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "a retake during a stuck save stores no page");
     await page.locator("[data-crop-cancel]").tap();
     await page.waitForFunction(() => !document.querySelector(".scan-crop"));
     assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "cancelling a stuck save keeps no page");
@@ -764,12 +772,13 @@ for (const engine of [chromium, webkit]) {
     const page = await scannerPage(t, engine);
     const result = await page.evaluate(async () => {
       const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
-      const positives = ["beige-texture", "dark-counter", "wood-grain", "white-table-soft-shadow", "cut-off", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
+      const positives = ["beige-texture", "dark-counter", "wood-grain", "white-table-soft-shadow", "cut-off", "tight-frame", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
       const frame = (canvas, maxEdge) => {
         const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
         if (scale === 1) return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
         const small = document.createElement("canvas"); small.width = Math.round(canvas.width * scale); small.height = Math.round(canvas.height * scale);
-        const pen = small.getContext("2d", { willReadFrequently: true }); pen.drawImage(canvas, 0, 0, small.width, small.height);
+        // The same resampler the camera view uses (live-capture.js pins it).
+        const pen = small.getContext("2d", { willReadFrequently: true }); pen.imageSmoothingQuality = "low"; pen.drawImage(canvas, 0, 0, small.width, small.height);
         return pen.getImageData(0, 0, small.width, small.height);
       };
       const rows = [];
@@ -795,6 +804,7 @@ for (const engine of [chromium, webkit]) {
       }
       return { rows, negatives, textureFalsePositives };
     });
+    t.diagnostic(`${engine.name()} fixture rows: ${result.rows.map(row => `${row.mode}/${row.path} max=${row.max} inward=${row.inward} conf=${row.confidence}`).join("; ")}`);
     for (const row of result.rows) {
       const label = `${row.mode}/${row.path}: ${JSON.stringify(row)}`;
       assert.ok(row.max !== null, `document must be found: ${label}`);
@@ -879,7 +889,9 @@ for (const engine of [chromium, webkit]) {
     const fakeGetUserMedia = async constraints => {
       window.lastConstraints = constraints;
       if (window.cameraMode === "denied") throw new DOMException("Permission denied", "NotAllowedError");
-      const stream = (window.cameraMode === "small" ? small : scene).captureStream(15);
+      let stream;
+      try { stream = (window.cameraMode === "small" ? small : scene).captureStream(15); }
+      catch (error) { window.captureStreamError = String(error); throw error; }
       window.liveStreams.push(stream);
       return stream;
     };
@@ -907,7 +919,8 @@ for (const engine of [chromium, webkit]) {
     const videoState = () => page.evaluate(() => {
       const video = document.querySelector("[data-live-video]");
       return { status: document.querySelector("[data-live-status]")?.textContent, unavailable: document.querySelector("[data-live-unavailable]")?.hidden === false, paused: document.querySelector("[data-live-paused]")?.hidden === false,
-        video: video && { width: video.videoWidth, height: video.videoHeight, readyState: video.readyState, paused: video.paused, hasStream: Boolean(video.srcObject) }, streams: window.liveStreams.length, tracks: window.liveStreams.map(s => s.getTracks().map(track => `${track.readyState}${track.muted ? "/muted" : ""}`)) };
+        video: video && { width: video.videoWidth, height: video.videoHeight, readyState: video.readyState, paused: video.paused, hasStream: Boolean(video.srcObject) }, streams: window.liveStreams.length, tracks: window.liveStreams.map(s => s.getTracks().map(track => `${track.readyState}${track.muted ? "/muted" : ""}`)),
+        constraints: window.lastConstraints ?? null, captureError: window.captureStreamError ?? null };
     });
     // 1. Moving page: the polygon follows it, nothing is captured.
     await cameraLabel.tap();
@@ -918,7 +931,7 @@ for (const engine of [chromium, webkit]) {
       t.diagnostic(`${engine.name()} fake camera did not start: ${JSON.stringify(state)}`);
       // Headless WebKit on Linux may not feed a canvas-captured stream into a video element; the
       // view's own logic is engine-neutral and is covered by Chromium, so do not fail CI on that.
-      if (engine.name() === "webkit") { await page.locator("[data-live-cancel]").tap(); t.skip("canvas.captureStream did not produce video frames in this engine"); return; }
+      if (engine.name() === "webkit") { await page.locator("[data-live-cancel]").tap(); t.skip("the fake camera produced no stream in this engine; the fallback is covered by the denied-camera test"); return; }
       assert.fail(`the in-app camera did not start: ${JSON.stringify(state)}`);
     }
     assert.deepEqual(await page.evaluate(() => [window.lastConstraints.video.facingMode.ideal, window.lastConstraints.video.width.ideal]), ["environment", 3840]);
@@ -1012,7 +1025,7 @@ for (const engine of [chromium, webkit]) {
       const rect = el => { const r = el.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; };
       return { frame: rect(document.querySelector("[data-live-frame]")), shutter: rect(document.querySelector("[data-live-shutter]")), cancel: rect(document.querySelector("[data-live-cancel]")), viewport: [innerWidth, innerHeight] };
     });
-    await denied.waitForFunction(() => innerWidth === 844 && document.querySelector("[data-live-frame]").getBoundingClientRect().height < 390);
+    await denied.waitForFunction(() => innerWidth === 844 && document.querySelector("[data-live-frame]").getBoundingClientRect().width < innerWidth);
     const landscape = await landscapeLayout();
     for (const [name, box] of Object.entries({ frame: landscape.frame, shutter: landscape.shutter, cancel: landscape.cancel }))
       assert.ok(box[0] >= 0 && box[1] >= 0 && box[2] <= landscape.viewport[0] && box[3] <= landscape.viewport[1] && box[2] > box[0] && box[3] > box[1], `${name} on screen in landscape: ${JSON.stringify(landscape)}`);
@@ -1029,6 +1042,30 @@ for (const engine of [chromium, webkit]) {
     const [deniedChooser] = await Promise.all([denied.waitForEvent("filechooser"), denied.locator("label:has(#camera-file)").tap()]);
     assert.ok(deniedChooser, "a denied permission hands the button to the phone camera");
     assert.deepEqual(await denied.evaluate(() => window.scannerCspViolations), []);
+  });
+
+  // Needs no video frames, so it also runs where the fake stream cannot start
+  // (headless WebKit): the fallback path the iPhone relies on.
+  test(`${engine.name()}: a denied in-app camera hands the button to the phone camera`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(() => window.openScanner());
+    const patched = await page.evaluate(fakeCamera);
+    if (!patched && engine.name() === "webkit") { t.skip("getUserMedia cannot be replaced in this engine"); return; }
+    assert.equal(patched, true, "the fake camera replaces getUserMedia");
+    await page.evaluate(() => { window.cameraMode = "denied"; });
+    const cameraLabel = page.locator("label:has(#camera-file)");
+    await cameraLabel.tap();
+    await page.waitForFunction(() => !document.querySelector("[data-live-unavailable]")?.hidden);
+    assert.equal(await page.evaluate(() => window.lastConstraints?.video?.facingMode?.ideal), "environment", "the in-app camera was requested first");
+    assert.equal(await page.locator("[data-live-fallback]").count(), 1, "the overlay offers the phone camera");
+    assert.equal(await page.locator("[data-live-shutter]").isEnabled(), false);
+    await page.locator("[data-live-cancel]").tap();
+    await page.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.match(await page.locator("#scan-status").textContent(), /מצלמת הטלפון/);
+    const [chooser] = await Promise.all([page.waitForEvent("filechooser"), cameraLabel.tap()]);
+    assert.ok(chooser, "after a denied permission the button opens the phone camera natively");
+    assert.equal(await page.locator(".scan-live").count(), 0);
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
   });
 }
 

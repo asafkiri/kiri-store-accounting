@@ -170,7 +170,7 @@ function probeFeatures(image) {
     const x0 = x ? x - 1 : 0, x1 = x < w - 1 ? x + 1 : x, y0 = y ? y - 1 : 0, y1 = y < h - 1 ? y + 1 : y;
     return (f(x0, y0) + 2 * f(x, y0) + f(x1, y0) + 2 * f(x0, y) + 4 * f(x, y) + 2 * f(x1, y) + f(x0, y1) + 2 * f(x, y1) + f(x1, y1)) / 16;
   };
-  const F = { w, h, sigL: 1.5, sigS: .8, planes: false, probe: null, gradients: null };
+  const F = { w, h, sigL: 1.5, sigS: .8, planes: false, probe: null, gradients: null, lum, sat };
   F.gradients = (x, y, out) => {
     out[1] = (blurred(lum, x + 1, y) - blurred(lum, x - 1, y)) * .5; out[2] = (blurred(lum, x, y + 1) - blurred(lum, x, y - 1)) * .5;
     out[3] = (blurred(sat, x + 1, y) - blurred(sat, x - 1, y)) * .5; out[4] = (blurred(sat, x, y + 1) - blurred(sat, x, y - 1)) * .5;
@@ -220,6 +220,9 @@ function locateEdges(F, a, b, R, N, pol, minWeight) {
     }
     if (bestValue < minWeight) continue;
     hits++;
+    // The first maximum along the normal (outermost sample of a saturated run)
+    // is kept on purpose: on the reference receipt, centring the run or taking
+    // the strongest unclipped step both moved corners further out.
     if (bestOffset > -R && bestOffset < R) {
       const prev = values[bestOffset + R - 1], next = values[bestOffset + R + 1], den = prev - 2 * bestValue + next;
       if (den < 0) bestOffset += .5 * (prev - next) / den;
@@ -369,10 +372,10 @@ function detectQuad(image, stats = null) {
         if (v > best) best = v;
       }
       if (best >= VOTE_MIN) hits++;
-      const ix = Math.round(x + nx * offset), iy = Math.round(y + ny * offset), ox = Math.round(x - nx * offset), oy = Math.round(y - ny * offset);
-      if (ix >= 0 && ix < w && iy >= 0 && iy < h && ox >= 0 && ox < w && oy >= 0 && oy < h) {
-        dL += L[iy * w + ix] - L[oy * w + ox]; dS += S[iy * w + ix] - S[oy * w + ox]; plus += L[iy * w + ix]; minus += L[oy * w + ox]; count++;
-      }
+      // Probes are clamped to the frame: a page a few pixels from the border
+      // must keep its contrast samples, or a tightly framed still loses its edge.
+      const ix = clamp(Math.round(x + nx * offset), 0, w - 1), iy = clamp(Math.round(y + ny * offset), 0, h - 1), ox = clamp(Math.round(x - nx * offset), 0, w - 1), oy = clamp(Math.round(y - ny * offset), 0, h - 1);
+      dL += L[iy * w + ix] - L[oy * w + ox]; dS += S[iy * w + ix] - S[oy * w + ox]; plus += L[iy * w + ix]; minus += L[oy * w + ox]; count++;
     }
     // plus/minus: mean luminance on the +normal / -normal side; which one is
     // the interior depends on the candidate's winding.
@@ -506,17 +509,23 @@ function detectQuad(image, stats = null) {
   }
   lap("assembly");
   if (stats) stats.lines = lines.filter(l => !l.border).map(l => ({ theta: Math.round(l.theta / DEG), c: Math.round(l.c) }));
+  // A page filling the whole frame: bright and mostly blank inside.
+  const frameLooksLikePaper = () => {
+    let sum = 0;
+    for (let i = 0; i < n; i += 7) sum += L[i];
+    return sum / Math.ceil(n / 7) >= 100 && interiorSmooth([{ x: 0, y: 0 }, { x: w - 1, y: 0 }, { x: w - 1, y: h - 1 }, { x: 0, y: h - 1 }]) >= .5;
+  };
   if (!best) {
     let reason = "no-supported-quad";
     if (detectedLines < 2) reason = "no-lines";
-    else if (fullFrameCandidate) {
-      // A page filling the whole frame: bright and mostly blank inside.
-      let sum = 0;
-      for (let i = 0; i < n; i += 7) sum += L[i];
-      if (sum / Math.ceil(n / 7) >= 100 && interiorSmooth([{ x: 0, y: 0 }, { x: w - 1, y: 0 }, { x: w - 1, y: h - 1 }, { x: 0, y: h - 1 }]) >= .5) reason = "fills-frame";
-    }
+    else if (fullFrameCandidate && frameLooksLikePaper()) reason = "fills-frame";
     return { corners: null, confidence: 0, reason, borderSides: 0, polarity: null };
   }
+  // Two frame borders plus two edges inside a frame that is itself paper-like
+  // is a region of a page that overflows the frame (a lighting step across a
+  // receipt), not a page: cropping it would cut the print. Reported as
+  // fills-frame so the live view asks for distance and the still keeps everything.
+  if (best.borders >= 2 && frameLooksLikePaper()) return { corners: null, confidence: 0, reason: "fills-frame", borderSides: 0, polarity: null };
   const refined = refineQuadIterated(P, best.winding > 0 ? [...best.q].reverse() : best.q, best.polarity, Math.max(3, Math.round(long * .02)), 32, VOTE_MIN);
   lap("refine");
   const corners = orderCorners(refined.quad).map(p => ({ x: p.x / (w - 1), y: p.y / (h - 1) }));
@@ -538,8 +547,31 @@ function refineWithHint(image, corners, polarity, sideMinSupport, requireSupport
   // Grain or print inside the search band must not drag a corner away from
   // the estimate the whole-frame detection agreed on.
   const guarded = refined.map((p, i) => Math.hypot(p.x - ordered[i].x, p.y - ordered[i].y) <= .02 * long ? p : ordered[i]);
+  // A hint from a video frame is accepted only where every side still separates
+  // paper from background; edge support alone would also accept a row of print.
+  if (requireSupport > 0 && !sidesContrast(F, guarded, lines, polarity, Math.max(3, Math.round(long * .01)))) return null;
   const result = orderCorners(guarded).map(p => ({ x: p.x / (w - 1), y: p.y / (h - 1) }));
   return validCorners(result) ? { corners: result, support } : null;
+}
+// Polarity-consistent paper/background contrast on each non-border side of a
+// quad in inward-normal traversal order (dL = inside - outside).
+function sidesContrast(F, quad, lines, pol, R, N = 24) {
+  const offset = 2 * R + 2;
+  for (let s = 0; s < 4; s++) {
+    if (lines[s].border) continue;
+    const a = quad[s], b = quad[(s + 1) % 4], dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), nx = dy / len, ny = -dx / len;
+    let dL = 0, dS = 0;
+    for (let j = 0; j < N; j++) {
+      const f = (j + .5) / N, x = a.x + dx * f, y = a.y + dy * f;
+      const ix = clamp(Math.round(x + nx * offset), 0, F.w - 1), iy = clamp(Math.round(y + ny * offset), 0, F.h - 1), ox = clamp(Math.round(x - nx * offset), 0, F.w - 1), oy = clamp(Math.round(y - ny * offset), 0, F.h - 1);
+      dL += F.lum(ix, iy) - F.lum(ox, oy); dS += F.sat(ix, iy) - F.sat(ox, oy);
+    }
+    dL /= N; dS /= N;
+    const lumOk = pol.lum && Math.sign(dL) === pol.lum && Math.abs(dL) >= Math.max(6, 1.5 * F.sigL);
+    const chrOk = pol.chr && Math.sign(dS) === pol.chr && Math.abs(dS) >= Math.max(3, 1.5 * F.sigS);
+    if (!lumOk && !chrOk) return false;
+  }
+  return true;
 }
 export const HINT_SUPPORT = .6;
 const NO_DOCUMENT = reason => ({ corners: null, confidence: 0, reason, borderSides: 0, polarity: null });

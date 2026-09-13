@@ -9,7 +9,7 @@ import { DISPLAY_CONFIDENCE, LOCK_CONFIDENCE } from "./scan-worker.js";
 // with a hint, so the review screen refines instead of re-detecting.
 // Frames never leave the device and nothing is stored until the page is approved.
 const DETECT_EDGE = 320, DETECT_INTERVAL = 100, POLYGON_FRAMES = 2, LOCK_FRAMES = 6, LOCK_JITTER = .015, LOCK_AREA = .2;
-const MIN_LONG_EDGE = 1600, OPEN_TIMEOUT = 3000, IDLE_TIMEOUT = 90_000, HOLD_FRAMES = 3, BORDER_HINT_MS = 3000, NO_DOCUMENT_HINT_MS = 4000;
+const MIN_LONG_EDGE = 1600, OPEN_TIMEOUT = 3000, IDLE_TIMEOUT = 90_000, HOLD_FRAMES = 3, BORDER_HINT_MS = 3000, NO_DOCUMENT_HINT_MS = 4000, WORKER_RESTARTS = 1;
 export const HINTS = {
   opening: "פותח מצלמה…",
   none: "כוון את המצלמה אל התעודה",
@@ -19,9 +19,15 @@ export const HINTS = {
   locked: "מצלם…",
   noDocument: "לא נמצאה תעודה. אפשר ללחוץ על כפתור הצילום למטה",
   borderLong: "התעודה לא נכנסת כולה? הרחק מעט את הטלפון, או לחץ על כפתור הצילום למטה ונשמור את מה שנראה",
+  tooClose: "התעודה ממלאת את כל המסך? הרחק מעט את הטלפון",
+  tooCloseLong: "התעודה ממלאת את כל המסך? הרחק מעט את הטלפון, או לחץ על כפתור הצילום למטה",
+  detectorUnavailable: "הזיהוי האוטומטי לא זמין כרגע. אפשר ללחוץ על כפתור הצילום למטה",
   unavailable: "המצלמה בתוך האפליקציה לא זמינה כרגע",
   paused: "המצלמה הושהתה",
 };
+// Failures that will repeat for the rest of this page load: the button then
+// opens the phone camera directly. A busy camera or a dismissed prompt is not one.
+const PERMANENT_CAMERA_ERRORS = ["NotAllowedError", "NotFoundError", "NotSupportedError", "SecurityError"];
 export const liveCameraSupported = () => Boolean(navigator.mediaDevices?.getUserMedia) && window.isSecureContext !== false;
 // Remembered for this launch only, never persisted: once the in-app camera
 // failed, the button opens the phone camera directly.
@@ -41,12 +47,13 @@ export function liveCapture(ctx, root, options = {}) {
       <p class="small" data-live-status role="status" aria-live="polite">${HINTS.opening}</p>
       <div class="live-stage"><div class="live-frame" data-live-frame>
         <video data-live-video playsinline autoplay muted></video>
-        <canvas data-live-frozen hidden></canvas>
+        <canvas data-live-frozen width="0" height="0" hidden></canvas>
         <svg class="live-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon data-live-polygon points="" fill="rgba(56,132,255,.28)" stroke="#4d9cff" stroke-width="2" vector-effect="non-scaling-stroke" hidden></polygon></svg>
+      </div>
         <div class="live-overlay" data-live-paused hidden><p>${HINTS.paused}</p><button type="button" class="primary" data-live-resume>הקש להפעלת המצלמה</button></div>
         <div class="live-overlay" data-live-unavailable hidden><p>${HINTS.unavailable}</p><label class="primary upload-label">צלם עם מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-fallback hidden></label></div>
         <pre class="live-debug" data-live-debug ${debug ? "" : "hidden"}></pre>
-      </div></div>
+      </div>
       <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>
       ${options.alternatives ? '<div class="live-alternatives"><label class="text-button upload-label">בחר PDF / תמונה<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-live-gallery hidden></label><button type="button" class="text-button" data-live-manual>הקלד חשבונית ידנית</button></div>' : ""}`;
     if (scanView) scanView.hidden = true;
@@ -59,22 +66,28 @@ export function liveCapture(ctx, root, options = {}) {
     const paused = $("[data-live-paused]", view), unavailable = $("[data-live-unavailable]", view), shutter = $("[data-live-shutter]", view);
     const debugBox = $("[data-live-debug]", view);
     const small = document.createElement("canvas"), smallPen = small.getContext("2d", { willReadFrequently: true });
+    // The detector is tuned on this resampler; keep it explicit across engines.
+    smallPen.imageSmoothingQuality = "low";
     let worker = options.worker || null, stream = null, tracks = [], disposed = false, running = false, capturing = false;
     let inFlight = false, lastDetect = 0, frameSize = null, smoothed = null, missed = 0, shown = 0, window_ = [], wakeLock = null;
     let idleTimer = null, borderSince = 0, noneSince = 0, resolvedOnce = false, unavailableShown = false, frameLoop = null, openTimer = null;
     // start() is re-entrant only through its guards: `starting` blocks a second
     // tap while the camera opens, and release() bumps `openSession` so an
-    // in-flight start() abandons a stream that was paused or disposed meanwhile.
-    let starting = false, openSession = 0;
+    // in-flight start() abandons a stream that was paused or disposed meanwhile
+    // (settleOpen lets release() end its wait for the first frame).
+    let starting = false, openSession = 0, settleOpen = null, grabHandle = null, grabAbort = null, workerRestarts = 0;
     const timings = [];
     const setStatus = text => { if (status.textContent !== text) status.textContent = text; };
     // SVG elements have no `hidden` property; the attribute drives the CSS.
     const showPolygon = visible => polygon.toggleAttribute("hidden", !visible);
     const stopFrameLoop = () => { if (frameLoop && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameLoop); else if (frameLoop) cancelAnimationFrame(frameLoop); frameLoop = null; };
+    // A capture interrupted by release() must not grab the next stream's first frame.
+    const stopGrab = () => { if (grabHandle && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(grabHandle); else if (grabHandle) cancelAnimationFrame(grabHandle); grabHandle = null; grabAbort?.(); grabAbort = null; };
     const stopTracks = () => { for (const track of tracks) { try { track.stop(); } catch { /* already ended */ } } tracks = []; stream = null; video.srcObject = null; };
     const release = () => {
-      running = false; openSession++; stopFrameLoop(); stopTracks();
+      running = false; openSession++; stopFrameLoop(); stopGrab(); stopTracks();
       clearTimeout(idleTimer); clearTimeout(openTimer); idleTimer = openTimer = null;
+      settleOpen?.(false); settleOpen = null;
       small.width = small.height = 0;
       wakeLock?.release?.().catch(() => {}); wakeLock = null;
     };
@@ -85,7 +98,9 @@ export function liveCapture(ctx, root, options = {}) {
       document.removeEventListener("visibilitychange", onVisibility); window.removeEventListener("pagehide", onHide);
       release();
       frozen.width = frozen.height = 0;
-      if (!value?.file && !options.keepWorker) { worker?.stop(); }
+      // capture() hands its worker over (and nulls it) before calling finish;
+      // any worker still held here was not handed to anyone.
+      if (!options.keepWorker) { worker?.stop(); worker = null; }
       view.remove();
       root.classList.remove("crop-modal-content");
       if (!modal?.querySelector(".scan-crop, .scan-live")) modal?.classList.remove("crop-modal");
@@ -108,8 +123,8 @@ export function liveCapture(ctx, root, options = {}) {
     };
     const sizeObserver = new ResizeObserver(fitFrame);
     sizeObserver.observe(stage);
-    const showUnavailable = () => {
-      release(); markLiveCameraUnavailable(); unavailableShown = true;
+    const showUnavailable = (permanent = false) => {
+      release(); if (permanent) markLiveCameraUnavailable(); unavailableShown = true;
       unavailable.hidden = false; paused.hidden = true; showPolygon(false); shutter.disabled = true;
       setStatus(HINTS.unavailable);
     };
@@ -136,7 +151,10 @@ export function liveCapture(ctx, root, options = {}) {
         if (missed > HOLD_FRAMES) { showPolygon(false); smoothed = null; }
         borderSince = 0;
         if (!noneSince) noneSince = now;
-        setStatus(now - noneSince >= NO_DOCUMENT_HINT_MS ? HINTS.noDocument : HINTS.none);
+        // A bright, blank frame is either a page held too close or an empty
+        // table, so the hint asks rather than instructs.
+        const tooClose = result.reason === "fills-frame";
+        setStatus(now - noneSince >= NO_DOCUMENT_HINT_MS ? (tooClose ? HINTS.tooCloseLong : HINTS.noDocument) : (tooClose ? HINTS.tooClose : HINTS.none));
         return;
       }
       noneSince = 0; missed = 0; shown++;
@@ -180,7 +198,12 @@ export function liveCapture(ctx, root, options = {}) {
         updateDebug(performance.now() - now, result);
         handleResult(result);
       } catch {
-        if (!disposed && running && worker?.stopped) { worker = imageWorker(); }
+        // One restart covers a crashed worker; a script that cannot load (a
+        // stale tab across a deploy) must not be fetched again on every frame.
+        if (!disposed && running && worker?.stopped) {
+          if (++workerRestarts > WORKER_RESTARTS) { worker = null; showPolygon(false); setStatus(HINTS.detectorUnavailable); }
+          else worker = imageWorker();
+        }
       } finally { inFlight = false; }
     };
     const scheduleFrames = () => {
@@ -190,6 +213,7 @@ export function liveCapture(ctx, root, options = {}) {
     const captureFrame = () => new Promise((done, fail) => {
       // Grab the frame at presentation time, at the track's own resolution.
       const grab = () => {
+        grabHandle = null; grabAbort = null;
         try {
           const vw = video.videoWidth, vh = video.videoHeight;
           const full = document.createElement("canvas"); full.width = vw; full.height = vh;
@@ -197,7 +221,8 @@ export function liveCapture(ctx, root, options = {}) {
           full.toBlob(blob => { full.width = full.height = 0; blob ? done(blob) : fail(Error("Capture failed")); }, "image/jpeg", .92);
         } catch (error) { fail(error); }
       };
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(grab); else requestAnimationFrame(grab);
+      grabAbort = () => fail(Error("Capture interrupted"));
+      grabHandle = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(grab) : requestAnimationFrame(grab);
     });
     const capture = async hint => {
       if (disposed || capturing || !running) return;
@@ -209,14 +234,17 @@ export function liveCapture(ctx, root, options = {}) {
         frozen.getContext("2d").drawImage(video, 0, 0); frozen.hidden = false;
       } catch { /* keep the live video visible */ }
       stopFrameLoop();
+      const session = openSession;
       try {
         const blob = await captureFrame();
-        if (disposed) return;
+        if (disposed || session !== openSession) return;
         const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
         validateFile(file);
         const handedWorker = worker; worker = null;
         finish({ file, hint, worker: handedWorker });
       } catch {
+        // A release() meanwhile (pause, hide, phone camera) already reset the view.
+        if (disposed || session !== openSession) return;
         capturing = false; frozen.hidden = true; frozen.width = frozen.height = 0;
         polygon.setAttribute("fill", "rgba(56,132,255,.28)"); resetTracking();
         shutter.disabled = false; setStatus(HINTS.none);
@@ -233,16 +261,19 @@ export function liveCapture(ctx, root, options = {}) {
       let media;
       try {
         media = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 24, max: 30 } } });
-      } catch { starting = false; if (current()) showUnavailable(); return; }
+      } catch (error) { starting = false; if (current()) showUnavailable(PERMANENT_CAMERA_ERRORS.includes(error?.name)); return; }
       // Backgrounded, paused or disposed while the permission prompt was up.
       if (!current() || document.hidden) { for (const track of media.getTracks()) track.stop(); starting = false; if (current()) showPaused(); return; }
       stream = media; tracks = media.getVideoTracks();
       video.srcObject = media;
       try {
-        const ready = new Promise(done => { const settle = () => done(true); video.addEventListener("loadedmetadata", settle, { once: true }); openTimer = setTimeout(() => done(false), OPEN_TIMEOUT); });
-        try { await video.play(); } catch { /* Low Power Mode or a missing gesture: the paused overlay asks for a tap */ }
+        const ready = new Promise(done => { settleOpen = done; video.addEventListener("loadedmetadata", () => done(true), { once: true }); openTimer = setTimeout(() => done(false), OPEN_TIMEOUT); });
+        // play() settles only once frames arrive or autoplay is refused (Low
+        // Power Mode, a missing gesture); the open timeout bounds it instead.
+        let playRejected = false;
+        video.play().catch(() => { playRejected = true; if (current() && running && !capturing) showPaused(); });
         const opened = await ready;
-        clearTimeout(openTimer); openTimer = null;
+        settleOpen = null; clearTimeout(openTimer); openTimer = null;
         if (!current()) return;
         if (!opened || !video.videoWidth) { if (video.paused && tracks.length && tracks[0].readyState === "live") showPaused(); else showUnavailable(); return; }
         if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) {
@@ -252,12 +283,11 @@ export function liveCapture(ctx, root, options = {}) {
           try { await tracks[0].applyConstraints({ width: { ideal: 1920 }, height: { ideal: 1080 } }); } catch { /* keep the stream as it is */ }
           await resized;
           if (!current()) return;
-          if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) { showUnavailable(); return; }
+          if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) { showUnavailable(true); return; }
         }
         try { await tracks[0].applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch { /* not every camera exposes focus */ }
         if (!current()) return;
-        if (video.paused) { try { await video.play(); } catch { if (current()) showPaused(); return; } }
-        if (!current()) return;
+        if (video.paused && playRejected) { showPaused(); return; }
         for (const track of tracks) {
           track.addEventListener("ended", () => { if (!disposed && running) showPaused(); });
           track.addEventListener("mute", () => { setTimeout(() => { if (!disposed && running && track.muted) showPaused(); }, 1000); });
@@ -265,6 +295,7 @@ export function liveCapture(ctx, root, options = {}) {
         try { wakeLock = await navigator.wakeLock?.request?.("screen"); } catch { wakeLock = null; }
         if (!current()) { wakeLock?.release?.().catch(() => {}); wakeLock = null; return; }
         if (!worker) worker = imageWorker();
+        workerRestarts = 0;
         running = true; shutter.disabled = false; fitFrame(); setStatus(HINTS.none);
         idleTimer = setTimeout(() => { if (!disposed && running && !capturing) showPaused(); }, IDLE_TIMEOUT);
         scheduleFrames();
@@ -287,7 +318,7 @@ export function liveCapture(ctx, root, options = {}) {
     video.addEventListener("pause", () => { if (!disposed && running && !capturing) showPaused(); });
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onHide);
-    $("[data-live-cancel]", view).onclick = () => finish({ cancelled: true, unavailable: unavailableShown });
+    $("[data-live-cancel]", view).onclick = () => finish({ cancelled: true, unavailable: isLiveCameraUnavailable() });
     $("[data-live-resume]", view).onclick = () => void start();
     shutter.onclick = () => void capture(null);
     for (const input of [$("[data-live-fallback]", view), $("[data-live-phone]", view)]) {
@@ -296,12 +327,12 @@ export function liveCapture(ctx, root, options = {}) {
         if (!file) return; // Cancelling the phone camera keeps the live view.
         try { validateFile(file); } catch (error) { setStatus(error.message); return; }
         release();
-        finish({ file, hint: null, worker: null, unavailable: unavailableShown });
+        finish({ file, hint: null, worker: null, unavailable: isLiveCameraUnavailable() });
       };
       // The phone camera must not run on top of the live stream.
       input.parentElement.addEventListener("click", () => { if (running) showPaused(); });
     }
-    if (!liveCameraSupported()) { showUnavailable(); }
+    if (!liveCameraSupported()) { showUnavailable(true); }
     else void start();
     $("[data-live-cancel]", view).focus({ preventScroll: true });
   });
