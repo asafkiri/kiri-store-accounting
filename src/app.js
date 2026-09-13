@@ -359,10 +359,9 @@ async function action(type, data = {}) {
         ctx.data.suppliers.find((s) => s.id === data.id),
       );
     case "cash":
-      return cashForm(
-        ctx,
-        ctx.data.dailyCash.find((r) => r.date === today()),
-      );
+      // Starting a closing must not open today's saved record for editing.
+      // Existing amounts belong only to the explicit cash-edit action below.
+      return cashForm(ctx);
     case "cash-edit":
       return cashForm(
         ctx,
