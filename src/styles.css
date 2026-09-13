@@ -773,6 +773,14 @@ dialog::backdrop {
   border: 1px solid #e8d3a4;
   color: #775226;
 }
+[data-duplicate-notice] {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+[data-duplicate-notice] .text-button {
+  padding-inline: 0;
+}
 .form-error {
   border-radius: 10px;
   background: #fff0ed;

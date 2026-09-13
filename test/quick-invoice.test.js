@@ -192,3 +192,69 @@ test("the number is still one tap away on the summary, for the invoices that nee
   submit(); await tick();
   assert.equal(writes[0].body.data.documentNumber, "7009");
 });
+
+// The number is no longer typed during intake, so the invoice is recognised by
+// what is: the supplier, the date, the total and the VAT.
+const alreadySaved = (extra = {}) => ({
+  id: "invoice-earlier", version: 1, supplierId: "supplier-001", documentNumber: "7009",
+  documentType: "invoice", invoiceDate: today(), subtotalAgorot: 10000, vatAgorot: 1800,
+  totalAgorot: 11800, finalAgorot: 11800, deductions: [], attachmentIds: [], status: "unpaid", ...extra,
+});
+test("an invoice already entered is named on the summary and is not saved again by accident", async () => {
+  const { ctx, writes } = setup();
+  ctx.data.invoices = [alreadySaved()];
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  const notice = document.querySelector("[data-duplicate-notice]");
+  assert.ok(notice, "the summary says the invoice is already here");
+  assert.match(notice.textContent, /כנראה כבר קלטת/);
+  assert.match(notice.textContent, /חשבונית 7009/, "and which invoice it is");
+  assert.match(notice.textContent, /ספק בדיקה/);
+  submit(); await tick();
+  assert.equal(writes.length, 0, "saving is refused while it looks like the same invoice");
+  assert.match(document.querySelector("[data-form-error]").textContent, /כבר קלטת/);
+  // The same supplier on another day is another invoice, and nothing is said.
+  document.querySelector('[data-edit-question="invoiceDate"]').click(); await tick();
+  fill("invoiceDate", "2026-09-01"); await choose("next");
+  assert.equal(document.querySelector("[data-duplicate-notice]"), null);
+  submit(); await tick();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.data.invoiceDate, "2026-09-01");
+  assert.equal("duplicateAllowed" in writes[0].body.data, false, "an invoice with no twin keeps its own guard");
+});
+test("two identical invoices in one day are saved once the person says they are two", async () => {
+  const { ctx, writes } = setup();
+  ctx.data.invoices = [alreadySaved()];
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  document.querySelector("[data-confirm-duplicate]").click(); await tick();
+  assert.match(document.querySelector("[data-duplicate-notice]").textContent, /חשבונית נפרדת/);
+  submit(); await tick();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.data.duplicateAllowed, true);
+});
+test("a deleted invoice is not the twin of the one typed in its place", async () => {
+  const { ctx, writes } = setup();
+  ctx.data.invoices = [alreadySaved({ deletedAt: 1757700000000 })];
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  assert.equal(document.querySelector("[data-duplicate-notice]"), null);
+  submit(); await tick();
+  assert.equal(writes.length, 1);
+});
+test("the store's own refusal offers the same choice, for an invoice this device has not synced", async () => {
+  const { ctx, writes } = setup();
+  ctx.api.save = async () => { throw new ApiError("כבר נשמרה חשבונית של הספק הזה", "DUPLICATE_INVOICE_DETAILS", 409, "request-1", { invoiceId: "invoice-elsewhere" }); };
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  assert.equal(document.querySelector("[data-duplicate-notice]"), null, "nothing here says so yet");
+  submit(); await tick();
+  const notice = document.querySelector("[data-duplicate-notice]");
+  assert.ok(notice, "the refusal is shown with the way out");
+  assert.match(notice.textContent, /אותם פרטים בדיוק/);
+  ctx.api.save = async p => { writes.push(structuredClone(p)); return { record: { ...p.body.data, id: p.path.split("/")[1], version: 1 } }; };
+  document.querySelector("[data-confirm-duplicate]").click(); await tick();
+  submit(); await tick();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].body.data.duplicateAllowed, true);
+});
