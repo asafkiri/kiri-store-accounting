@@ -406,7 +406,7 @@ function detectQuad(image, stats = null) {
       // A flat dark area can be perfectly smooth yet belong to the counter.
       // Allow substantial paper shadows, but don't count dark background as
       // positive evidence merely because it has no texture.
-      const backgroundLike = paperL !== null && L[k] < paperL * .55;
+      const backgroundLike = paperL !== null && L[k] < paperL * .7;
       if (!backgroundLike && (W[k] < VOTE_MIN || (paperL !== null && Math.abs(L[k] - paperL) <= tolerance))) smooth++;
     }
     return inside ? smooth / inside : 0;
