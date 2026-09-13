@@ -2365,6 +2365,9 @@ for (const engine of [chromium, webkit]) {
     assert.match(await page.locator('.check-reference').innerText(), /00012345/);
     await page.locator('[data-action="detail"]').click();
     assert.match(await page.locator('#modal').innerText(), /00012345/);
+    await page.locator('[data-photo-open]').waitFor();
+    const previewDownloads = requests.filter(r => r.path.startsWith('/api/v1/documents/')).length;
+    assert.equal(previewDownloads, 1, 'the checked invoice displays its photo before sharing starts');
     await page.locator('[data-close-modal]').first().click();
     await workspaceRoute(page, "documents");
     await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
@@ -2373,7 +2376,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-action="share-month"]').click();
     const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 2, 'one PDF per invoice, all suppliers and pages regardless of folder/search');
-    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3);
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length - previewDownloads, 3);
     await send.click();
     assert.equal(await page.locator('[data-share-error]').isVisible(), false, 'cancel is not an error or a download');
     assert.ok(await page.locator('.share-dialog').isVisible());
@@ -2387,7 +2390,7 @@ for (const engine of [chromium, webkit]) {
     assert.ok(shared.every(file => file.type === 'application/pdf' && file.name.endsWith('.pdf')));
     assert.deepEqual(await Promise.all(shared.map(async file => (await PDFDocument.load(Uint8Array.from(file.bytes))).getPageCount())), [1, 3], 'WebP becomes one page; JPEG plus a two-page native PDF stays together');
     assert.equal(shared[1].name, `תנובה_${month}-08_1254.00ILS.pdf`);
-    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3, 'share retry reuses prepared PDFs');
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length - previewDownloads, 3, 'share retry reuses prepared PDFs');
     await mkdir('test-artifacts', { recursive: true });
     await writeFile(`test-artifacts/invoice-sharing-${engine.name()}.pdf`, Uint8Array.from(shared[1].bytes));
     for (const width of [320, 390]) {
