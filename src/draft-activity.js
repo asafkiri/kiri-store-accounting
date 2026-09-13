@@ -5,7 +5,9 @@ export function hasDraftContent(key, draft) {
   if (key === "scan")
     return Boolean(draft.files?.length || draft.attachmentIds?.length);
   const f = draft.fields || {};
-  if (key === "invoice" && draft.mode !== "edit" && !(draft.version > 0) && f.attachmentIds?.length) return true;
+  // A photographed invoice is started work from the first question, whether or
+  // not its pages have finished uploading into the draft.
+  if (key === "invoice" && draft.mode !== "edit" && !(draft.version > 0) && (f.attachmentIds?.length || draft.fromScan)) return true;
   if (draft.initialFields) return JSON.stringify(f) !== JSON.stringify(draft.initialFields);
   if (key === "invoice") return Boolean(f.supplierId || f.supplierName?.trim() || f.documentNumber?.trim() ||
     [f.subtotal, f.vat, f.total, f.final, f.notes].some(v => String(v ?? "").trim()) || f.deductions?.length);
@@ -26,6 +28,9 @@ export async function actionableDraftNames(drafts, data) {
     }
   }
   const invoice = values.get("invoice"), scan = values.get("scan");
-  const sameScan = invoice && scan?.attachmentIds?.length && scan.attachmentIds.every(id => invoice.fields?.attachmentIds?.includes(id));
+  // One reminder for one invoice: the questions opened from this photograph
+  // cover it, whether the pages reached the invoice draft yet or not.
+  const sameScan = invoice && scan && ((invoice.fromScan && scan.files?.length) ||
+    (scan.attachmentIds?.length && scan.attachmentIds.every(id => invoice.fields?.attachmentIds?.includes(id))));
   return names.filter(key => (!values.has(key) || values.get(key)) && !(key === "scan" && sameScan));
 }

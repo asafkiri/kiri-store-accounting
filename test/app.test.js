@@ -31,7 +31,7 @@ async function setup(t, sdk = {}) {
       '";',
     "./export.js": "export const invoiceCsv=()=>'',cashCsv=()=>'',download=async(...args)=>globalThis.appTestSdk.download?.(...args);",
     "./api.js":
-      "export class Api { request(...args) { return globalThis.appTestSdk.request(...args); } } export class ApiError extends Error {} export const pendingMutation=()=>{};",
+      "export class Api { request(...args) { return globalThis.appTestSdk.request(...args); } save(pending) { return this.request(pending.path, { method: pending.method, body: pending.body }); } } export class ApiError extends Error {} export const pendingMutation=(path,data,expectedVersion=0,method='PUT',extra={})=>({path,method,body:{expectedVersion,mutationId:'test-mutation-'+path,...(data?{data}:{}),...extra}});",
     "./drafts.js":
       "export class Drafts { async open(){} async names(){if(globalThis.appTestSdk.namesError)throw globalThis.appTestSdk.namesError;return [...globalThis.appTestSdk.drafts.keys()];} async load(k){return globalThis.appTestSdk.drafts.get(k);} async save(k,v){globalThis.appTestSdk.drafts.set(k,structuredClone(v));} async remove(k){globalThis.appTestSdk.drafts.delete(k);} }",
   });
@@ -279,4 +279,84 @@ test("folder back retains status, while choosing another period leaves the old f
   assert.equal(document.querySelectorAll('.month-folder').length, 1);
   assert.equal(document.querySelector('.month-folder').dataset.value, '2026-08');
   assert.equal(document.querySelector('[data-action="folder-back"]'), null);
+});
+
+// One page of one invoice, deleted for real. The photo screens are the only
+// place that offers it, so they are the ones under test.
+async function photoWorkspace(t, { fileDeleted = true, failWith = null } = {}) {
+  const pages = ["a".repeat(64), "b".repeat(64)];
+  const requests = [];
+  let invoice = {
+    id: "photo-invoice", documentNumber: "PH-1", supplierId: "s1", documentType: "invoice",
+    invoiceDate: "2026-09-10", status: "unpaid", totalAgorot: 1000, finalAgorot: 1000,
+    deductions: [], version: 4, attachmentIds: [...pages],
+  };
+  await setup(t, {
+    request: async (path, options = {}) => {
+      requests.push({ path, ...options });
+      if (path === "me") return { uid: "owner" };
+      if (options.method === "DELETE") {
+        if (failWith) throw Object.assign(Error(failWith.message), failWith);
+        invoice = { ...invoice, version: invoice.version + 1,
+          attachmentIds: invoice.attachmentIds.filter(id => id !== pages[0]) };
+        return { record: invoice, fileDeleted, stillUsedBy: fileDeleted ? null : "other-invoice" };
+      }
+      return { full: true, version: 1, dailyCash: [], settings: [], documentRetentionDays: 365,
+        suppliers: [{ id: "s1", name: "ספק לבדיקה", active: true }], invoices: [invoice] };
+    },
+  });
+  globalThis.confirm = () => true;
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click();
+  document.querySelector('[data-action="folder-month"]').click();
+  document.querySelector('[data-action="folder-supplier"]').click();
+  document.querySelector('[data-action="documents"]').click();
+  return { pages, requests, modal: document.querySelector("#modal") };
+}
+
+test("deleting a photo calls the versioned file endpoint and refreshes the photo list", async t => {
+  const { pages, requests, modal } = await photoWorkspace(t);
+  assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
+  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
+  modal.querySelector(`[data-delete-document="${pages[0]}"]`).click();
+  await tick();
+  const call = requests.find(r => r.method === "DELETE");
+  assert.equal(call.path, "invoices/photo-invoice/documents/" + pages[0]);
+  assert.equal(call.body.expectedVersion, 4);
+  assert.ok(call.body.mutationId);
+  assert.equal(call.body.data, undefined);
+  assert.match(document.querySelector("#toast").textContent, /נמחק מהמערכת ומהאחסון/);
+  const left = modal.querySelectorAll("[data-delete-document]");
+  assert.equal(left.length, 1, "the deleted page must leave the list");
+  assert.equal(left[0].dataset.deleteDocument, pages[1]);
+  assert.equal(modal.querySelectorAll(`[data-open-document="${pages[0]}"]`).length, 0);
+});
+
+test("a photo another invoice still uses is reported as kept, and a refused deletion keeps the page", async t => {
+  const shared = await photoWorkspace(t, { fileDeleted: false });
+  shared.modal.querySelector("[data-delete-document]").click();
+  await tick();
+  assert.match(document.querySelector("#toast").textContent, /הוסר מהחשבונית/);
+  assert.match(document.querySelector("#toast").textContent, /חשבונית אחרת/);
+  const refused = await photoWorkspace(t, {
+    failWith: { status: 409, code: "VERSION_CONFLICT", message: "הרשומה עודכנה מאז." },
+  });
+  refused.modal.querySelector("[data-delete-document]").click();
+  await tick();
+  assert.match(document.querySelector("#toast").textContent, /עודכנה מאז/);
+  assert.equal(refused.modal.querySelectorAll("[data-delete-document]").length, 2,
+    "a deletion the server refused must not remove the page from the screen");
+});
+
+test("declining the confirmation deletes nothing, and invoice details offers the same button", async t => {
+  const { requests, modal } = await photoWorkspace(t);
+  globalThis.confirm = () => false;
+  modal.querySelector("[data-delete-document]").click();
+  await tick();
+  assert.equal(requests.some(r => r.method === "DELETE"), false);
+  assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
+  modal.querySelector("[data-invoice-details]").click();
+  assert.match(modal.textContent, /תמונות ומסמכים מצורפים/);
+  assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
+  assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
 });

@@ -66,6 +66,7 @@ export function createBrowserCheckServer() {
         "/export.js",
         "/scan-worker.js",
         "/scan.js",
+        "/scan-upload.js",
         "/forms.js",
         "/quick-invoice.js",
         "/quick-invoice-model.js",

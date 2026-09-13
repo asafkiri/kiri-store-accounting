@@ -905,3 +905,38 @@ test("a supplier's bound identifiers are visible, survive an edit and reject a b
     /513036435/,
   );
 });
+
+test("an invoice typed from a photograph is never saved before its pages are stored", async () => {
+  const { ctx, drafts, saved } = setup();
+  const pages = [{ name: "page.jpg", mime: "image/jpeg", data: "AQID" }];
+  drafts.set("scan", { files: pages, attachmentIds: [] });
+  const requests = [];
+  let completeUpload = null;
+  ctx.api.request = async (path, options) => {
+    requests.push({ path, options });
+    // The first attempt is the background one the scan screen started and
+    // lost; the save has to notice and ask again.
+    if (requests.length === 1) throw new ApiError("אין חיבור לרשת כרגע", "NETWORK", 0);
+    return new Promise(resolve => { completeUpload = resolve; });
+  };
+  await openInvoiceForm(ctx, null, [], { fullEditor: true, fromScan: true });
+  await tick();
+  assert.equal(requests.length, 1, "the pages start going up as the form opens");
+  assert.equal(drafts.get("invoice").fromScan, true);
+  fill("supplierId", "supplier-001");
+  fill("documentNumber", "PHOTO-1");
+  fill("total", "100");
+  fill("final", "100");
+  document.querySelector("[name=review]").checked = true;
+  submit();
+  await tick();
+  assert.equal(saved.length, 0, "nothing is written while the photograph is still on its way");
+  assert.equal(requests.length, 2, "the save asks for the pages again");
+  assert.match(document.querySelector("[type=submit]").textContent, /מסיים להעלות את הצילום/);
+  completeUpload({ documents: [{ id: "c".repeat(64) }] });
+  await tick();
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].body.data.attachmentIds, ["c".repeat(64)], "the invoice carries the pages it was typed from");
+  assert.equal(drafts.has("invoice"), false);
+  assert.equal(drafts.has("scan"), false, "the photograph draft is cleared with the invoice");
+});

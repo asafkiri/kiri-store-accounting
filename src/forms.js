@@ -15,6 +15,7 @@ import { creditSignIssues } from "./credit.js";
 import { isValidTaxId, normalizeTaxId } from "./tax-id.js";
 import { hasDraftContent } from "./draft-activity.js";
 import { quickInvoiceReview } from "./quick-invoice.js";
+import { uploadScanPages } from "./scan-upload.js";
 import {
   cancellationFor,
   cancelAttempt,
@@ -231,6 +232,17 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         throw Error("יש לטעון את הגרסה העדכנית לפני שמירה נוספת.");
       if (!draft.pending) {
         draft.fields = collect();
+        // The photograph opened the questions without waiting to be uploaded.
+        // This is the step that cannot proceed without it: an invoice is never
+        // saved without the pages it was typed from, and a failed background
+        // upload is retried here, where the person is watching.
+        if (key === "invoice" && draft.fromScan && !draft.fields.attachmentIds?.length) {
+          // The draft status line belongs to the save-a-draft cycle, which
+          // overwrites it; the button is the one place that stays put. lock()
+          // restores its label as soon as the mutation exists.
+          submit.textContent = "מסיים להעלות את הצילום…";
+          draft.fields.attachmentIds = await uploadScanPages(ctx);
+        }
         draft.pending = onSubmit(draft.fields);
         await persist(true);
       }
@@ -498,9 +510,17 @@ export async function invoiceForm(
         attachmentIds: record?.attachmentIds || manualAttachments,
         source: "manual",
       },
+      fromScan: Boolean(options.fromScan),
     };
   }
   const f = draft.fields;
+  // The pages are recorded on the draft the moment they land, so the summary
+  // can offer the photograph and the save has nothing left to wait for. This
+  // joins the upload the scan screen already started; it never starts a second.
+  if (draft.fromScan && !f.attachmentIds?.length)
+    void uploadScanPages(ctx)
+      .then(ids => { if (ids.length && !f.attachmentIds?.length) f.attachmentIds = ids; })
+      .catch(() => {});
   if (f.supplierName === undefined)
     f.supplierName =
       draft.newSupplier?.name ||

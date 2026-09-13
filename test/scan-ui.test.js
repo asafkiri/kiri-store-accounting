@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { scanDialog } from "../src/scan.js";
+import { uploadScanPages } from "../src/scan-upload.js";
 import { ApiError } from "../src/api.js";
 const attachmentIds = ["a".repeat(64), "b".repeat(64)];
 function setup(draft) {
@@ -52,27 +53,42 @@ const selectedFiles = () => [
 ];
 const questionTitle = () => document.querySelector(".quick-question h3")?.textContent;
 
-test("a photographed invoice opens the typed questions with the pages attached, and nothing reads it", async () => {
+test("a photographed invoice opens the typed questions at once, while its pages go up behind them", async () => {
   const { ctx, cache, calls } = setup({ files: selectedFiles(), attachmentIds: [] });
+  let completeUpload;
+  ctx.api.request = async (path, options) => {
+    calls.push({ path, options });
+    return new Promise((resolve) => { completeUpload = resolve; });
+  };
   await scanDialog(ctx);
   assert.equal(document.getElementById("run-scan"), null, "no scan button exists");
   assert.equal(document.getElementById("check-scan"), null);
   const button = document.getElementById("fill-details");
   assert.equal(button.textContent, "המשך למילוי הפרטים");
   await button.onclick();
-  await tick();
-  assert.deepEqual(calls, ["documents"], "one upload and no other request");
+  // The questions are answerable while the photograph is still on its way.
   assert.ok(document.getElementById("invoice-form"));
   assert.equal(questionTitle(), "מי הספק?", "the questions start with the supplier");
   assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 1 מתוך 5/);
-  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
-  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  assert.equal(calls.length, 1, "one upload and no other request");
+  assert.equal(calls[0].path, "documents");
+  assert.equal(calls[0].options.method, "POST");
+  assert.deepEqual(calls[0].options.body.files, selectedFiles());
+  assert.deepEqual(cache.get("scan").attachmentIds, [], "nothing is recorded before the server answers");
+  assert.ok(document.querySelector("[data-quick-photo]"), "the photograph stays one tap away from the device itself");
+  assert.equal(cache.get("invoice").fromScan, true, "the invoice knows it is waiting for pages");
   assert.equal(cache.get("invoice").fields.source, "manual");
   assert.equal("scanJobId" in cache.get("invoice").fields, false, "no reading to point at");
   assert.equal("scan" in cache.get("invoice"), false, "nothing was read");
-  assert.ok(document.querySelector("[data-open-document]"), "the photograph stays one tap away");
+  completeUpload({ documents: attachmentIds.map((id) => ({ id })) });
+  await tick();
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds, "the pages are recorded where they can be found again");
+  // Typing anything saves the open draft, which by now carries the pages.
+  document.getElementById("invoice-form").dispatchEvent(new Event("input", { bubbles: true }));
+  await tick();
+  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds, "the pages reach the open questions");
 });
-test("the upload happens once even when the button is pressed twice, and shows its wait", async () => {
+test("pressing continue twice uploads the pages once and opens one set of questions", async () => {
   const files = selectedFiles();
   const { ctx, cache, calls } = setup({ files, attachmentIds: [] });
   let completeUpload;
@@ -84,25 +100,17 @@ test("the upload happens once even when the button is pressed twice, and shows i
   const button = document.getElementById("fill-details");
   const continuing = button.onclick();
   await button.onclick(); // A second activation while the upload is pending.
-  assert.equal(button.disabled, true);
-  assert.equal(document.getElementById("camera-file").disabled, true);
-  assert.equal(document.getElementById("invoice-form"), null);
-  const status = document.getElementById("scan-status");
-  assert.ok(status.querySelector(".scan-wait-spin"), "the wait is visibly alive");
-  assert.match(status.querySelector(".scan-wait-text strong").textContent, /מעלה את הצילום…/);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].path, "documents");
-  assert.equal(calls[0].options.method, "POST");
-  assert.deepEqual(calls[0].options.body.files, files);
-  completeUpload({ documents: attachmentIds.map((id) => ({ id })) });
   await continuing;
-  await tick();
-  assert.equal(status.getAttribute("aria-busy"), null, "nothing keeps spinning");
-  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
-  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  assert.equal(calls.length, 1, "the pages are sent once");
+  assert.equal(calls[0].path, "documents");
+  assert.deepEqual(calls[0].options.body.files, files);
+  assert.equal(document.querySelectorAll("#invoice-form").length, 1);
   assert.equal(questionTitle(), "מי הספק?");
+  completeUpload({ documents: attachmentIds.map((id) => ({ id })) });
+  await tick();
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
 });
-test("a failed upload keeps the photos and lets the user try again", async () => {
+test("an upload that fails in the background keeps the photos and is retried on demand", async () => {
   const files = selectedFiles();
   const { ctx, cache, calls } = setup({ files, attachmentIds: [] });
   ctx.api.request = async (path) => {
@@ -112,15 +120,16 @@ test("a failed upload keeps the photos and lets the user try again", async () =>
   };
   await scanDialog(ctx);
   await document.getElementById("fill-details").onclick();
-  assert.equal(document.getElementById("invoice-form"), null);
-  assert.equal(cache.has("invoice"), false);
-  assert.deepEqual(cache.get("scan").files, files);
-  assert.equal(document.getElementById("fill-details").disabled, false);
-  assert.equal(document.getElementById("scan-error").hidden, false);
-  await document.getElementById("fill-details").onclick();
   await tick();
-  assert.deepEqual(cache.get("invoice").fields.attachmentIds, attachmentIds);
+  // The failure must not cost the person the photograph or the questions.
+  assert.ok(document.getElementById("invoice-form"), "the questions still open");
+  assert.deepEqual(cache.get("scan").files, files, "the pages stay in the draft");
+  // The next caller of the same queue retries: the open draft first, and the
+  // save after it. Nothing is lost, and a page that landed is never resent.
   assert.deepEqual(calls, ["documents", "documents"]);
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds);
+  assert.deepEqual(await uploadScanPages(ctx), attachmentIds);
+  assert.equal(calls.length, 2);
 });
 test("reopening after a failed form load reuses the uploaded pages", async () => {
   const { ctx, cache, calls } = setup({ files: selectedFiles(), attachmentIds: [] });
@@ -148,17 +157,18 @@ test("without a photograph the same questions open and nothing is uploaded", asy
   assert.equal(questionTitle(), "מי הספק?");
   assert.deepEqual(calls, []);
 });
-test("an upload finishing after the scan view is removed does not reopen an invoice", async () => {
+test("pages that land after the screen is gone are kept for the save, not thrown away", async () => {
   const { ctx, cache } = setup({ files: selectedFiles(), attachmentIds: [] });
   let completeUpload;
   ctx.api.request = async () => new Promise((resolve) => { completeUpload = resolve; });
   await scanDialog(ctx);
   const continuing = document.getElementById("fill-details").onclick();
+  await continuing;
   document.getElementById("modal").replaceChildren();
   completeUpload({ documents: attachmentIds.map((id) => ({ id })) });
-  await continuing;
-  assert.equal(document.getElementById("invoice-form"), null);
-  assert.equal(cache.has("invoice"), false);
+  await tick();
+  assert.equal(document.getElementById("invoice-form"), null, "no screen is reopened");
+  assert.deepEqual(cache.get("scan").attachmentIds, attachmentIds, "the upload is still worth what it cost");
 });
 test("a draft left over from the reading days still opens as pages to photograph and fill", async () => {
   const { ctx, calls } = setup({

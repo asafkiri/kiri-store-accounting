@@ -576,7 +576,9 @@ for (const engine of [chromium, webkit]) {
     await page.waitForSelector("#invoice-form");
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
     assert.ok(await page.evaluate(() => JSON.stringify(window.scanRequests[0].body.files) === JSON.stringify(window.scanDrafts().find(([key]) => key === "scan")[1].files)));
-    assert.equal(await page.locator("[data-open-document]").count(), 1, "the photograph stays one tap away");
+    // The pages are still on their way, so the photograph is offered from the
+    // device; it stays one tap away for the whole of the questions.
+    assert.equal(await page.locator(".quick-photo").count(), 1, "the photograph stays one tap away");
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
     // The same five questions in the same order, typed from the paper.
     const question = () => page.locator(".quick-question h3").innerText();
@@ -584,6 +586,9 @@ for (const engine of [chromium, webkit]) {
     await page.locator("[name=supplierName]").fill("אסם");
     await page.locator('[data-quick-choice="next"]').tap();
     assert.match(await question(), /מספר החשבונית/);
+    // The upload landed while the supplier was being typed, and the same button
+    // now opens the stored page instead of the one on the device.
+    await page.locator("[data-open-document]").waitFor();
     await page.locator("[name=documentNumber]").fill("MANUAL-PHOTO-1");
     await page.locator('[data-quick-choice="next"]').tap();
     assert.match(await question(), /הסכום כולל מע״מ/);
@@ -1647,6 +1652,27 @@ for (const engine of [chromium, webkit]) {
     assert.equal(requests.filter(r => r.path.startsWith("/api/v1/documents/")).length, 1);
     assert.ok(await page.locator("[data-preview-download]").isVisible());
     await page.locator("[data-preview-close]").click();
+    // Deleting one page: the row stays readable on a phone, the confirmation is
+    // a real browser prompt, and only the page asked for leaves the invoice.
+    const photoRow = page.locator("#modal .attachment-row").first();
+    const openBox = await photoRow.locator("[data-open-document]").boundingBox();
+    const deleteBox = await photoRow.locator("[data-delete-document]").boundingBox();
+    assert.ok(deleteBox.y >= openBox.y + openBox.height - 1, "deleting belongs under the page it deletes");
+    const nextOpen = await page.locator("#modal [data-open-document]").nth(1).boundingBox();
+    assert.ok(nextOpen.y >= deleteBox.y + deleteBox.height - 1, "the next page starts below the previous page's delete button");
+    assert.ok(deleteBox.height >= 44, "the delete button stays a comfortable tap target");
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "no horizontal overflow");
+    assert.match(await page.locator("#modal").innerText(), /נמחק מהמערכת ומהאחסון אוטומטית כעבור 8 שנים/);
+    page.once("dialog", dialog => dialog.dismiss());
+    await photoRow.locator("[data-delete-document]").click();
+    assert.equal(requests.filter(r => r.method === "DELETE" && r.path.includes("/documents/")).length, 0, "a dismissed question deletes nothing");
+    page.once("dialog", dialog => dialog.accept());
+    await photoRow.locator("[data-delete-document]").click();
+    await page.waitForFunction(() => document.querySelectorAll("#modal [data-open-document]").length === 1);
+    const deletion = requests.find(r => r.method === "DELETE" && r.path.includes("/documents/"));
+    assert.equal(deletion.path, "/api/v1/invoices/INV-101/documents/" + "a".repeat(64));
+    assert.equal(deletion.body.expectedVersion, 1);
+    assert.ok(deletion.body.mutationId);
     await page.locator('[data-close-modal]').first().click();
     await page.screenshot({ path: `test-artifacts/photos-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-action="folder-back"]').click();
@@ -1704,7 +1730,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator("#modal").waitFor({ state: "hidden" });
     assert.equal(await page.locator(".trash-card").count(), 1);
     await page.screenshot({ path: `test-artifacts/trash-${engine.name()}.png`, fullPage: true });
-    assert.equal(requests.filter(r => r.method === "DELETE").length, 2);
+    assert.equal(requests.filter(r => r.method === "DELETE" && r.path.startsWith("/api/v1/suppliers/")).length, 2);
     assert.deepEqual(errors, []);
   });
 }
