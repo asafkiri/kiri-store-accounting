@@ -65,6 +65,76 @@ const submit = () =>
   document
     .querySelector("form")
     .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+
+test("saved cash deletion requires confirmation, resumes as DELETE and only reports server success", async () => {
+  const { ctx, drafts, saved } = setup();
+  const record = { id: today(), date: today(), cashAgorot: 15000, ravKavAgorot: 60000, version: 4 };
+  ctx.data.dailyCash = [record];
+  let merged = null, closed = false;
+  ctx.mergeRecord = r => { merged = r; };
+  ctx.closeModal = () => { closed = true; };
+  ctx.showSaved = () => assert.fail("deletion is not a saved closing");
+  ctx.api.save = async pending => {
+    saved.push(structuredClone(pending));
+    if (saved.length === 1) throw new ApiError("בדוק חיבור", "NETWORK", 0);
+    return { record: { ...record, version: 5, deletedAt: 12345 } };
+  };
+  await cashForm(ctx, record);
+  assert.equal(document.querySelector('[data-discard-draft]').textContent, "בטל שינויים שלא נשמרו");
+  document.querySelector('[data-remove-cash]').click(); await tick();
+  assert.equal(saved.length, 0);
+  assert.match(document.querySelector('.delete-form').textContent, /150.00.*600.00/);
+  document.querySelector('[data-discard-draft]').click(); await tick();
+  assert.equal(saved.length, 0);
+  assert.equal(closed, true);
+  closed = false;
+  await cashForm(ctx, record);
+  document.querySelector('[data-remove-cash]').click(); await tick();
+  submit(); await tick();
+  assert.equal(merged, null); assert.equal(closed, false);
+  assert.equal(saved[0].method, "DELETE");
+  assert.equal(saved[0].body.expectedVersion, 4);
+  assert.equal(saved[0].body.data, undefined);
+  assert.equal(document.querySelector('[type=submit]').textContent, "נסה שוב למחוק");
+  await cashForm(ctx, record);
+  assert.ok(document.querySelector('.delete-form'));
+  submit(); await tick();
+  assert.deepEqual(saved[1], saved[0]);
+  assert.equal(merged.deletedAt, 12345); assert.equal(closed, true);
+  assert.equal(drafts.has('cash'), false);
+});
+
+test("new entry on a deleted cash date stays blank and sends fresh values with the tombstone version", async () => {
+  const { ctx, saved } = setup();
+  const deleted = { id: today(), date: today(), cashAgorot: 15000, ravKavAgorot: 60000, notes: "ישן", version: 5, deletedAt: 12345 };
+  ctx.data.dailyCash = [deleted];
+  await cashForm(ctx);
+  assert.equal(document.querySelector('[name=cash]').value, "");
+  assert.equal(document.querySelector('[name=ravKav]').value, "");
+  fill("cash", "0"); submit(); await tick();
+  assert.equal(saved[0].path, "daily-cash/" + today() + "/restore");
+  assert.equal(saved[0].method, "POST");
+  assert.equal(saved[0].body.expectedVersion, 5);
+  assert.deepEqual(saved[0].body.data, { date: today(), cashAgorot: 0, ravKavAgorot: null, notes: "" });
+});
+
+test("cancelling a deletion whose answer was lost reconciles the tombstone without showing a saved closing", async () => {
+  const { ctx, drafts } = setup();
+  const record = { id: today(), date: today(), cashAgorot: 15000, ravKavAgorot: null, version: 1 };
+  ctx.data.dailyCash = [record];
+  let merged, closed = false;
+  ctx.mergeRecord = r => { merged = r; };
+  ctx.closeModal = () => { closed = true; };
+  ctx.api.save = async () => { throw new ApiError("בדוק חיבור", "NETWORK", 0); };
+  ctx.api.request = async () => ({ status: "committed", path: "daily-cash/" + today(), record: { ...record, version: 2, deletedAt: 12345 } });
+  await cashForm(ctx, record);
+  document.querySelector('[data-remove-cash]').click(); await tick();
+  submit(); await tick();
+  document.querySelector('[data-cancel-attempt]').click(); await tick();
+  assert.ok(merged.deletedAt); assert.equal(closed, true);
+  assert.equal(drafts.has('cash'), false);
+});
+
 test("manual form and recovery preserve values, unknown VAT and explicit review", async () => {
   const { ctx, drafts, saved } = setup();
   await invoiceForm(ctx);

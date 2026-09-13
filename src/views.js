@@ -119,6 +119,7 @@ export function cashView(ctx) {
     rows = ctx.data.dailyCash
       .filter(
         (r) =>
+          !r.deletedAt &&
           (!f.month || r.date.startsWith(f.month)) &&
           (!f.from || r.date >= f.from) &&
           (!f.to || r.date <= f.to),

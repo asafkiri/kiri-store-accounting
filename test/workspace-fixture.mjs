@@ -27,6 +27,7 @@ export function workspaceFixture({ documents = new Map() } = {}) {
     { id: previous + "-20", date: previous + "-20", cashAgorot: 30000, ravKavAgorot: 15000, version: 1 },
   ] };
   const requests = [];
+  const cashReceipts = new Map();
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const path = req.url.split("?")[0];
@@ -110,10 +111,16 @@ export function workspaceFixture({ documents = new Map() } = {}) {
       data.version++;
       return res.end(JSON.stringify({ record }));
     }
-    if (req.method === "PUT" && path.startsWith("/api/v1/daily-cash/")) {
-      const id = path.split("/").at(-1), old = data.dailyCash.find(r => r.id === id);
-      const record = { ...body.data, id, version: (old?.version || 0) + 1 };
+    const cashPath = path.match(/^\/api\/v1\/daily-cash\/([^/]+)(\/restore)?$/);
+    if (cashPath && ["PUT", "POST", "DELETE"].includes(req.method)) {
+      const id = cashPath[1], restore = Boolean(cashPath[2]), old = data.dailyCash.find(r => r.id === id);
+      if (cashReceipts.has(body.mutationId)) return res.end(JSON.stringify({ record: old, replayed: true }));
+      if ((old?.version || 0) !== body.expectedVersion || (old?.deletedAt && !restore) || (restore && !old?.deletedAt)) {
+        res.statusCode = 409; return res.end(JSON.stringify({ error: { code: "VERSION_CONFLICT", message: "הרשומה עודכנה מאז" } }));
+      }
+      const record = { ...old, ...body.data, id, version: (old?.version || 0) + 1, deletedAt: req.method === "DELETE" ? Date.now() : null };
       if (old) data.dailyCash[data.dailyCash.indexOf(old)] = record; else data.dailyCash.push(record);
+      cashReceipts.set(body.mutationId, true);
       data.version++;
       return res.end(JSON.stringify({ record }));
     }

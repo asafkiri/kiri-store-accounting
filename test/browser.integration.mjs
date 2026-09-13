@@ -1576,6 +1576,83 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(errors, []);
   });
 
+  test(`${engine.name()}: saved closing deletion confirms, survives retry, updates totals and permits a fresh same-date entry`, { timeout: 60000 }, async t => {
+    const { server, data, requests, month } = workspaceFixture();
+    const date = month + '-13', otherDate = month + '-14';
+    data.dailyCash = [
+      { id: date, date, cashAgorot: 15000, ravKavAgorot: 60000, notes: '', version: 4 },
+      { id: otherDate, date: otherDate, cashAgorot: 20000, ravKavAgorot: null, notes: '', version: 1 },
+    ];
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on('pageerror', err => errors.push(err.message));
+    const deleteAttempts = [];
+    await page.route('**/api/v1/daily-cash/' + date, async route => {
+      if (route.request().method() !== 'DELETE') return route.continue();
+      deleteAttempts.push(route.request().postDataJSON());
+      if (deleteAttempts.length === 1) return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'TEMPORARY', message: 'המחיקה לא אושרה. נסה שוב.' } }) });
+      return route.continue();
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, 'cash');
+    const row = () => page.locator(`[data-action="cash-edit"][data-id="${date}"]`);
+    await row().click();
+    assert.equal(await page.locator('[data-discard-draft]').innerText(), 'בטל שינויים שלא נשמרו');
+    await page.locator('[data-remove-cash]').click();
+    await page.locator('.delete-form').waitFor();
+    assert.equal(deleteAttempts.length, 0, 'opening confirmation sends no delete');
+    assert.match(await page.locator('.delete-form').innerText(), /150.00.*600.00/);
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/delete-daily-close-${engine.name()}.png` });
+    await page.locator('[data-discard-draft]').click();
+    assert.equal(deleteAttempts.length, 0, 'declining keeps the saved closing');
+    assert.equal(await page.locator('.cash-row').count(), 2);
+    await row().click();
+    await page.locator('[data-remove-cash]').click();
+    await page.locator('.delete-form [type=submit]').click();
+    await page.locator('[data-form-error]').waitFor({ state: 'visible' });
+    assert.equal(await row().count(), 1, 'no optimistic deletion after an unconfirmed request');
+    assert.match(await page.locator('.cash-totals').innerText(), /350\.00/);
+    await page.locator('[data-close-modal]').click();
+    await row().click();
+    await page.locator('.delete-form').waitFor();
+    assert.equal(await page.locator('.delete-form [type=submit]').innerText(), 'נסה שוב למחוק');
+    await page.locator('.delete-form [type=submit]').click();
+    await row().waitFor({ state: 'detached' });
+    assert.equal(await page.locator('.save-confirmation').count(), 0);
+    assert.deepEqual(deleteAttempts[1], deleteAttempts[0]);
+    assert.equal(deleteAttempts[0].expectedVersion, 4);
+    assert.equal(data.dailyCash.find(r => r.id === date).version, 5);
+    assert.equal(data.dailyCash.find(r => r.id === otherDate).cashAgorot, 20000);
+    assert.match(await page.locator('.cash-totals').innerText(), /200\.00/);
+    assert.doesNotMatch(await page.locator('.cash-totals').innerText(), /600\.00|350\.00/);
+    const csv = await page.evaluate(async () => {
+      const { cashCsv } = await import('/workspace/export.js');
+      const snapshot = await (await fetch('/api/v1/sync', { headers: { Authorization: 'Bearer fixture-token' } })).json();
+      return cashCsv(snapshot.dailyCash);
+    });
+    assert.ok(!csv.includes(date)); assert.ok(csv.includes(otherDate));
+    await page.reload();
+    await workspaceRoute(page, 'cash');
+    assert.equal(await row().count(), 0, 'a fresh server snapshot keeps the closing deleted');
+    await page.locator('[data-action="cash"]').first().click();
+    await page.locator('[name=cash]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('[name=cash]').inputValue(), '');
+    assert.equal(await page.locator('[name=ravKav]').inputValue(), '');
+    await page.locator('[name=date]').fill(date);
+    await page.locator('[name=cash]').fill('0');
+    await page.locator('#modal [type=submit]').click();
+    await page.locator('.save-confirmation').waitFor();
+    const fresh = data.dailyCash.find(r => r.id === date);
+    assert.equal(fresh.deletedAt, null); assert.equal(fresh.cashAgorot, 0); assert.equal(fresh.ravKavAgorot, null);
+    const restore = requests.find(r => r.path.endsWith(date + '/restore'));
+    assert.equal(restore.method, 'POST'); assert.equal(restore.body.expectedVersion, 5);
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: number-free invoice search, readable rows and Back through retained answers`, { timeout: 60000 }, async t => {
     const { server, data, month, requests } = workspaceFixture();
     data.invoices.forEach(i => { i.documentNumber = ""; });
