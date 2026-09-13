@@ -1,9 +1,9 @@
 // Isolated workspace: production UI, fictional data, no Firebase or paid scans.
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { today } from "../src/format.js";
 
-export function workspaceFixture() {
+export function workspaceFixture({ documents = new Map() } = {}) {
   const month = today().slice(0, 7);
   const date = new Date(month + "-15T12:00:00Z");
   date.setUTCMonth(date.getUTCMonth() - 1);
@@ -42,6 +42,14 @@ export function workspaceFixture() {
       res.setHeader("Content-Type", "text/javascript");
       return res.end('export const initializeAuth = async () => ({}), onAuthStateChanged = (_auth, fn) => { fn({ getIdToken: async () => "fixture-token" }); return () => {}; }, signOut = async () => {}, sendCode = async () => {}, authMessage = () => "בדיקה";');
     }
+    // Exercise the production PDF bundle and its shared chunk. The remaining
+    // workspace modules retain the isolated auth/API fixture used by UI tests.
+    if (path === "/workspace/invoice-pdf.js" || /^\/workspace\/chunk-[A-Z0-9]+\.js$/.test(path)) {
+      const assets = new URL("../dist/assets/", import.meta.url);
+      const name = path.endsWith("/invoice-pdf.js") ? (await readdir(assets)).find(n => /^invoice-pdf-.*\.js$/.test(n)) : path.split("/").at(-1);
+      res.setHeader("Content-Type", "text/javascript");
+      return res.end(await readFile(new URL(name, assets)));
+    }
     if (/^\/workspace\/[a-z-]+\.(js|css)$/.test(path)) {
       try {
         res.setHeader("Content-Type", path.endsWith("css") ? "text/css" : "text/javascript");
@@ -56,6 +64,11 @@ export function workspaceFixture() {
     if (path === "/api/v1/me") return res.end('{"uid":"workspace-fixture"}');
     if (path === "/api/v1/sync") return res.end(JSON.stringify(data));
     if (path.startsWith("/api/v1/documents/")) {
+      const file = documents.get(path.split("/").at(-1));
+      if (file) {
+        res.setHeader("Content-Type", file.type);
+        return res.end(Buffer.from(await file.arrayBuffer()));
+      }
       res.setHeader("Content-Type", "image/png");
       return res.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"));
     }

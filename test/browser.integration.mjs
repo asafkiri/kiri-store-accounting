@@ -1,11 +1,13 @@
 // Runs in CI with native Chromium and WebKit, independently of Node's fetch.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readdir, readFile as readTestFile } from "node:fs/promises";
+import { mkdir, readdir, readFile as readTestFile, writeFile } from "node:fs/promises";
 import { chromium, webkit } from "playwright";
 import { createBrowserCheckServer } from "../scripts/check-browser.mjs";
 import { installScannerFixtures } from "./scanner-fixtures.mjs";
 import { workspaceFixture } from "./workspace-fixture.mjs";
+import { sharingDocuments } from "./pdf-fixtures.mjs";
+import { PDFDocument } from "pdf-lib";
 
 // Exercise narrow Android/Chromium and iPhone/WebKit layouts with touch enabled.
 // These are browser emulations, not a claim of testing physical phones.
@@ -1911,7 +1913,9 @@ for (const engine of [chromium, webkit]) {
 
 for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: monthly and single invoice sharing, cancel/retry and global check lookup`, { timeout: 60000 }, async t => {
-    const { server, requests, month, previous, data } = workspaceFixture();
+    const documents = await sharingDocuments();
+    const { server, requests, month, previous, data } = workspaceFixture({ documents });
+    data.invoices.forEach(i => { i.documentNumber = ""; });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     let browser;
     t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
@@ -1923,6 +1927,7 @@ for (const engine of [chromium, webkit]) {
       Object.defineProperty(navigator, 'canShare', { configurable: true, value: ({ files }) => files.length > 0 });
       Object.defineProperty(navigator, 'share', { configurable: true, value: async ({ files }) => {
         if (!navigator.userActivation.isActive) throw Error('Missing user activation');
+        window.sharedFiles = files;
         window.shareCalls.push(files.map(file => ({ name: file.name, type: file.type, size: file.size })));
         if (window.shareMode === 'cancel') throw new DOMException('Cancelled', 'AbortError');
         if (window.shareMode === 'error') throw new DOMException('Unavailable', 'NotAllowedError');
@@ -1944,7 +1949,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('#invoice-search').fill('1,254');
     await page.locator('[data-action="share-month"]').click();
     const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('.share-files li').count(), 3, 'all suppliers and pages, regardless of folder/search');
+    assert.equal(await page.locator('.share-files li').count(), 2, 'one PDF per invoice, all suppliers and pages regardless of folder/search');
     assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3);
     await send.click();
     assert.equal(await page.locator('[data-share-error]').isVisible(), false, 'cancel is not an error or a download');
@@ -1954,19 +1959,39 @@ for (const engine of [chromium, webkit]) {
     assert.ok(await page.locator('[data-share-zip]').isVisible());
     await page.evaluate(() => { window.shareMode = 'success'; }); await send.click();
     await page.waitForFunction(() => document.querySelector('[data-share-status]').textContent.startsWith('הוכנו כל'));
-    assert.equal((await page.evaluate(() => window.shareCalls.at(-1))).length, 3);
-    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3, 'share retry reuses prepared originals');
+    const shared = await page.evaluate(async () => Promise.all(window.sharedFiles.map(async file => ({ name: file.name, type: file.type, bytes: [...new Uint8Array(await file.arrayBuffer())] }))));
+    assert.equal(shared.length, 2);
+    assert.ok(shared.every(file => file.type === 'application/pdf' && file.name.endsWith('.pdf')));
+    assert.deepEqual(await Promise.all(shared.map(async file => (await PDFDocument.load(Uint8Array.from(file.bytes))).getPageCount())), [1, 3], 'WebP becomes one page; JPEG plus a two-page native PDF stays together');
+    assert.equal(shared[1].name, `תנובה_${month}-08_1254.00ILS.pdf`);
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3, 'share retry reuses prepared PDFs');
+    await mkdir('test-artifacts', { recursive: true });
+    await writeFile(`test-artifacts/invoice-sharing-${engine.name()}.pdf`, Uint8Array.from(shared[1].bytes));
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 });
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
       const rect = await send.boundingBox(); assert.ok(rect.width <= width && rect.height >= 44);
     }
     await page.screenshot({ path: `test-artifacts/share-${engine.name()}.png`, fullPage: true });
+    await page.locator('[data-share-format]').click();
+    await send.waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.share-files li').count(), 3);
+    await send.click();
+    const originals = await page.evaluate(async () => Promise.all(window.sharedFiles.map(async file => ({ type: file.type, bytes: [...new Uint8Array(await file.arrayBuffer())] }))));
+    for (const [index, id] of ['c', 'a', 'b'].entries()) {
+      const original = documents.get(id.repeat(64));
+      assert.equal(originals[index].type, original.type);
+      assert.deepEqual(Uint8Array.from(originals[index].bytes), new Uint8Array(await original.arrayBuffer()));
+    }
     await page.locator('[data-share-close]').click();
     await page.locator('[data-action="documents"][data-id="INV-101"]').click();
     await page.locator('[data-share-this-invoice]').click();
     await page.locator('[data-share-send]').waitFor({ state: 'visible' });
-    assert.equal(await page.locator('.share-files li').count(), 2);
+    assert.equal(await page.locator('.share-files li').count(), 1);
+    assert.match(await page.locator('[data-share-zip]').innerText(), /הורד PDF/);
+    await page.locator('[data-share-send]').click();
+    const single = await page.evaluate(async () => [...new Uint8Array(await window.sharedFiles[0].arrayBuffer())]);
+    assert.equal((await PDFDocument.load(Uint8Array.from(single))).getPageCount(), 3);
     await page.locator('[data-share-close]').click();
     await page.locator('#modal [data-close-modal]').click();
     // Empty filtered directories still expose the parent/back navigation.
@@ -1975,6 +2000,73 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-action="folder-back"]').click();
     await page.locator('#invoice-search').fill('');
     assert.equal(await page.locator('.supplier-folder').count(), 2);
+    assert.deepEqual(errors, []);
+  });
+
+  test(`${engine.name()}: PDF page retry, switching format during preparation and downloadable fallback`, { timeout: 60000 }, async t => {
+    const documents = await sharingDocuments();
+    const { server, requests, month } = workspaceFixture({ documents });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on('pageerror', err => errors.push(err.message));
+    await page.addInitScript(() => {
+      window.directShare = true;
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => window.directShare });
+      Object.defineProperty(navigator, 'share', { configurable: true, value: async () => {} });
+    });
+    let attempts = 0, holdNext = false, held;
+    await page.route('**/api/v1/documents/' + 'b'.repeat(64), async route => {
+      attempts++;
+      if (attempts === 1) return route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+      if (holdNext) { holdNext = false; held = route; return; }
+      return route.continue();
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, 'documents');
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    await page.locator('[data-action="share-month"]').click();
+    await page.locator('[data-share-retry]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('[data-share-send]').isVisible(), false, 'never offer a partial invoice after a failed page');
+    assert.match(await page.locator('[data-share-status]').innerText(), /שום עמוד לא דולג/);
+    await page.locator('[data-share-retry]').click();
+    await page.locator('[data-share-send]').waitFor({ state: 'visible' });
+    assert.equal(attempts, 2);
+    assert.equal(requests.filter(r => r.path.endsWith('a'.repeat(64))).length, 1, 'retry keeps the earlier image inside the invoice');
+    assert.equal(requests.filter(r => r.path.endsWith('c'.repeat(64))).length, 1, 'retry keeps the completed invoice PDF');
+    await page.locator('[data-share-close]').click();
+
+    // Hold an old PDF job, choose originals, then let the old response arrive.
+    holdNext = true;
+    await page.locator('[data-action="share-month"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-share-status]').textContent.includes('קובץ 2 מתוך 2'));
+    await page.locator('[data-share-format]').click();
+    await page.locator('[data-share-send]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.share-files li').count(), 3);
+    assert.ok(held);
+    const staleResponse = page.waitForResponse(response => response.url().endsWith('b'.repeat(64)) && response.status() === 200);
+    await held.continue(); await staleResponse;
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.match(await page.locator('[data-share-description]').innerText(), /ללא המרה/);
+    assert.equal(await page.locator('.share-files li').count(), 3, 'the stale PDF job cannot replace original files');
+
+    await page.evaluate(() => { window.directShare = false; });
+    await page.locator('[data-share-format]').click();
+    await page.locator('[data-share-zip]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('[data-share-send]').isVisible(), false);
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('[data-share-zip]').click();
+    const download = await downloadPromise;
+    assert.match(download.suggestedFilename(), /-pdf-part-1[.]zip$/);
+    const zip = await readTestFile(await download.path());
+    // Read the actual ZIP independently, not through the app's own writer.
+    const { execFileSync } = await import('node:child_process');
+    const extracted = JSON.parse(execFileSync('python3', ['-c', 'import sys,io,zipfile,json,base64; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({n:base64.b64encode(z.read(n)).decode() for n in z.namelist()}))'], { input: zip, encoding: 'utf8' }));
+    assert.equal(Object.keys(extracted).length, 2);
+    assert.ok(Object.keys(extracted).every(name => name.endsWith('.pdf')));
+    assert.deepEqual(await Promise.all(Object.values(extracted).map(async b64 => (await PDFDocument.load(Buffer.from(b64, 'base64'))).getPageCount())), [1, 3]);
     assert.deepEqual(errors, []);
   });
 }

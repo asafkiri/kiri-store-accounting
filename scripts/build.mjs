@@ -20,7 +20,8 @@ await build({
   minify: true,
   format: "esm",
   target: ["safari16", "chrome110"],
-  outfile: "dist/assets/app.js",
+  outdir: "dist/assets",
+  splitting: true,
   define: { SCAN_WORKER_URL: JSON.stringify("./" + workerName) },
   logLevel: "info",
 });

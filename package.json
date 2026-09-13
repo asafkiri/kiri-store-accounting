@@ -14,7 +14,8 @@
     "private-detect": "node scripts/private-detect.mjs"
   },
   "dependencies": {
-    "firebase": "12.2.1"
+    "firebase": "12.2.1",
+    "pdf-lib": "1.17.1"
   },
   "devDependencies": {
     "esbuild": "0.25.9",
