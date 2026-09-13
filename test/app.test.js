@@ -282,7 +282,7 @@ test("folder back retains status, while choosing another period leaves the old f
   assert.equal(document.querySelector('[data-action="folder-back"]'), null);
 });
 
-// One page of one invoice, deleted for real. The photo screens are the only
+// One page of one invoice, moved to the recycle bin. The photo screens are the only
 // place that offers it, so they are the ones under test.
 async function photoWorkspace(t, { fileDeleted = true, failWith = null } = {}) {
   const pages = ["a".repeat(64), "b".repeat(64)];
@@ -326,19 +326,19 @@ test("deleting a photo calls the versioned file endpoint and refreshes the photo
   assert.equal(call.body.expectedVersion, 4);
   assert.ok(call.body.mutationId);
   assert.equal(call.body.data, undefined);
-  assert.match(document.querySelector("#toast").textContent, /נמחק מהמערכת ומהאחסון/);
+  assert.match(document.querySelector("#toast").textContent, /הועבר לסל המחזור/);
   const left = modal.querySelectorAll("[data-delete-document]");
   assert.equal(left.length, 1, "the deleted page must leave the list");
   assert.equal(left[0].dataset.deleteDocument, pages[1]);
   assert.equal(modal.querySelectorAll(`[data-open-document="${pages[0]}"]`).length, 0);
 });
 
-test("a photo another invoice still uses is reported as kept, and a refused deletion keeps the page", async t => {
+test("photo recycling is reported clearly, and a refused deletion keeps the page", async t => {
   const shared = await photoWorkspace(t, { fileDeleted: false });
   shared.modal.querySelector("[data-delete-document]").click();
   await tick();
-  assert.match(document.querySelector("#toast").textContent, /הוסר מהחשבונית/);
-  assert.match(document.querySelector("#toast").textContent, /חשבונית אחרת/);
+  assert.match(document.querySelector("#toast").textContent, /סל המחזור/);
+  assert.match(document.querySelector("#toast").textContent, /30 יום/);
   const refused = await photoWorkspace(t, {
     failWith: { status: 409, code: "VERSION_CONFLICT", message: "הרשומה עודכנה מאז." },
   });

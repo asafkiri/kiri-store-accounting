@@ -28,6 +28,7 @@ export function workspaceFixture({ documents = new Map() } = {}) {
   ] };
   const requests = [];
   const cashReceipts = new Map();
+  const paymentReceipts = new Map();
   const server = createServer(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const path = req.url.split("?")[0];
@@ -85,17 +86,44 @@ export function workspaceFixture({ documents = new Map() } = {}) {
       return res.end(JSON.stringify({ record }));
     }
     if (req.method === "POST" && path === "/api/v1/documents") return res.end(JSON.stringify({ documents: body.files.map(() => ({ id: "f".repeat(64) })) }));
-    // One photo, deleted for good: the invoice keeps its details and loses the
-    // page, exactly as the service answers.
-    const link = path.match(/^\/api\/v1\/invoices\/([^/]+)\/documents\/([a-f0-9]{64})$/);
-    if (req.method === "DELETE" && link) {
+    const link = path.match(/^\/api\/v1\/invoices\/([^/]+)\/documents\/([a-f0-9]{64})(\/restore)?$/);
+    if (link && (req.method === "DELETE" || (req.method === "POST" && link[3]))) {
       const record = data.invoices.find(i => i.id === link[1]);
-      Object.assign(record, {
-        attachmentIds: record.attachmentIds.filter(id => id !== link[2]),
-        version: record.version + 1,
-      });
+      record.attachmentOrder ||= [...record.attachmentIds];
+      record.attachmentTrash ||= [];
+      if (link[3]) {
+        record.attachmentIds.push(link[2]);
+        record.attachmentIds.sort((a, b) => record.attachmentOrder.indexOf(a) - record.attachmentOrder.indexOf(b));
+        record.attachmentTrash = record.attachmentTrash.filter(p => p.id !== link[2]);
+      } else {
+        record.attachmentIds = record.attachmentIds.filter(id => id !== link[2]);
+        record.attachmentTrash.push({ id: link[2], deletedAt: Date.now(), restoreUntil: Date.now() + 30 * 86400000 });
+      }
+      record.trashedAttachmentIds = record.attachmentTrash.map(p => p.id); record.version++;
       data.version++;
-      return res.end(JSON.stringify({ record, fileDeleted: true, stillUsedBy: null }));
+      return res.end(JSON.stringify({ record, fileDeleted: false, recycled: true }));
+    }
+    const batchPath = path.match(/^\/api\/v1\/invoices\/([^/]+)\/pay-batch$/);
+    if (batchPath && req.method === "POST") {
+      if (paymentReceipts.has(body.mutationId)) return res.end(JSON.stringify({ ...paymentReceipts.get(body.mutationId), replayed: true }));
+      const selected = body.items.map(item => data.invoices.find(i => i.id === item.id));
+      if (selected.some((i, n) => !i || i.deletedAt || i.status !== "unpaid" || i.version !== body.items[n].expectedVersion)) {
+        res.statusCode = 409; return res.end(JSON.stringify({ error: { code: "VERSION_CONFLICT", message: "אחת החשבוניות השתנתה. התשלום לא נרשם." } }));
+      }
+      const batch = { id: body.mutationId, invoiceIds: selected.map(i => i.id), totalAgorot: body.totalAgorot, supplierId: selected[0].supplierId };
+      selected.forEach(i => { Object.assign(i, { version: i.version + 1, status: "paid", payment: { ...body.payment, batch } }); });
+      data.version++;
+      const reply = { batch, record: selected.find(i => i.id === batchPath[1]), relatedRecords: selected.filter(i => i.id !== batchPath[1]).map(record => ({ path: "invoices/" + record.id, record })) };
+      paymentReceipts.set(body.mutationId, reply);
+      return res.end(JSON.stringify(reply));
+    }
+    const invoicePath = path.match(/^\/api\/v1\/invoices\/([^/]+)(\/restore)?$/);
+    if (invoicePath && (req.method === "GET" || req.method === "DELETE" || (req.method === "POST" && invoicePath[2]))) {
+      const record = data.invoices.find(i => i.id === invoicePath[1]);
+      if (req.method === "GET") return res.end(JSON.stringify(record));
+      Object.assign(record, { version: record.version + 1, deletedAt: invoicePath[2] ? null : Date.now(), restoreUntil: invoicePath[2] ? null : Date.now() + 30 * 86400000 });
+      data.version++;
+      return res.end(JSON.stringify({ record }));
     }
     if (req.method === "PUT" && path.startsWith("/api/v1/invoices/")) {
       const id = path.split("/").at(-1), existing = data.invoices.find(i => i.id === id);

@@ -1,5 +1,6 @@
 import { invoiceFolders, documentCards, periodPicker, statusTabs, summaryMoney, folderLocation } from "./invoice-browser.js";
 import { creditSignIssues } from "./credit.js";
+import { recycleView } from "./recycle.js";
 import { icon, empty, select, field } from "./ui.js";
 import {
   escapeHtml as e,
@@ -41,6 +42,7 @@ export function moreView() {
     <button class="secondary" data-action="manage-suppliers">${icon("suppliers")} ניהול ספקים</button>
     <button class="secondary" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>
     <button class="secondary" data-route="reports">${icon("reports")} סיכומים ודוחות</button>
+    <button class="secondary" data-route="recycle">${icon("trash")} סל מחזור</button>
     <button class="secondary" data-route="settings">${icon("settings")} הגדרות וגיבוי</button></div>`;
 }
 export function invoiceCards(items, ctx) {
@@ -71,12 +73,14 @@ export function invoicesView(ctx) {
   const searching = Boolean(f.q?.trim()), direct = searching || f.view === "list";
   const items = filterInvoices(ctx.data.invoices, { ...f, ...(path.month ? { month: path.month } : {}), ...(path.supplierId ? { supplierId: path.supplierId } : {}) }, ctx.data.suppliers);
   const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
+  const paymentSupplier = path.supplierId || f.supplierId || (direct && items.length && items.every(i => i.supplierId === items[0].supplierId) ? items[0].supplierId : null);
   const openTotals = totals(allOpen), itemTotals = totals(items);
   return `${inFolder ? folderLocation(ctx) : `<div class="page-heading"><h1>${f.view === "list" ? "חשבוניות בכל החודשים" : "חשבוניות"}</h1></div>`}
     ${searchBox(ctx, "invoice-search", "חפש ספק, תאריך או סכום")}
     ${draftReminders(ctx)}
     ${!inFolder && !direct ? `<button class="payable-summary payable-compact" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים · ${e(summaryMoney(openTotals.final))}</small></span>${icon("arrow")}</button>` : ""}
     ${path.supplierId || direct ? statusTabs(f.status) : ""}
+    ${paymentSupplier && allOpen.some(i => i.supplierId === paymentSupplier) ? act("batch-payment", "בחר חשבוניות לתשלום יחד", "primary batch-payment-entry", "check", `data-id="${e(paymentSupplier)}"`) : ""}
     ${filters(ctx, { invoiceActions: true, status: !path.supplierId && !direct })}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
     ${direct || path.supplierId ? `<div class="list-heading" role="status"><span>${searching ? "תוצאות חיפוש · " : ""}${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>` : ""}
     ${items.length || (inFolder && !direct) ? direct ? `<div class="invoice-list">${invoiceCards(items, ctx)}</div>` : invoiceFolders(items, ctx, invoiceCards) : empty(searching || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", searching || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "צלם חשבונית ממסך הבית, מלא את הפרטים ושמור.", searching || f.month || f.supplierId || f.status ? act("clear-filters", "נקה חיפוש וסינון", "secondary", null) : "")}`;
@@ -205,6 +209,7 @@ export function shell(ctx) {
     suppliers: suppliersView,
     documents: documentsView,
     "supplier-trash": supplierTrashView,
+    recycle: recycleView,
     cash: cashView,
     reports: reportsView,
     settings: settingsView,

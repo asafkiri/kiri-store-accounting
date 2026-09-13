@@ -1515,6 +1515,119 @@ async function workspaceRoute(page, route) {
 }
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: batch payment selects supplier invoices, resumes after lost response and confirms the total once`, { timeout: 60000 }, async t => {
+    const { server, data, requests, month, previous } = workspaceFixture();
+    const base = data.invoices[0];
+    data.invoices.push({ ...base, id: "INV-BATCH-2", invoiceDate: previous + "-25", attachmentIds: [], finalAgorot: 22000, totalAgorot: 22000 },
+      { ...base, id: "INV-CREDIT", invoiceDate: month + "-09", documentType: "credit", attachmentIds: [], finalAgorot: -1000, totalAgorot: -1000, subtotalAgorot: -1000 });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch(); const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, "invoices");
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
+    await page.locator('[data-action="batch-payment"]').click();
+    await page.locator('.batch-payment-form').waitFor();
+    assert.equal(await page.locator('.batch-invoice').count(), 3, "include open invoices across months, exclude paid and other suppliers");
+    assert.equal(await page.locator('[data-batch-next]').isDisabled(), true);
+    await page.locator('[data-select-all]').click();
+    assert.match(await page.locator('[data-batch-total]').innerText(), /1,464\.00/);
+    await page.screenshot({ path: `test-artifacts/batch-selection-${engine.name()}.png` });
+    await page.locator('[data-batch-next]').click();
+    await page.locator('[data-batch-method="check"]').click();
+    await page.locator('[data-close-modal]').click();
+    await page.locator('[data-change-selection]').filter({ visible: true }).click();
+    assert.equal(await page.locator('[name="invoiceSelection"]:checked').count(), 3);
+    await page.locator('[data-batch-next]').click();
+    await page.locator('[data-batch-method="check"]').click();
+    await page.locator('[name="checkNumber"]').fill("001234");
+    await page.locator('[name="paymentDate"]').fill(month + "-13");
+    await page.locator('.payment-optional > summary').click();
+    await page.locator('[name="checkDueDate"]').fill(month + "-28");
+    await page.screenshot({ path: `test-artifacts/batch-payment-${engine.name()}.png` });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await page.locator('.modal-content').evaluate(el => el.scrollWidth <= el.clientWidth + 1), "payment fits narrow phones");
+    }
+    let drop = true;
+    await page.route('**/api/v1/invoices/*/pay-batch', async route => {
+      if (!drop) return route.continue();
+      drop = false; await route.fetch(); await route.abort('failed');
+    });
+    await page.locator('.batch-payment-form [type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-form-error]')?.hidden === false);
+    assert.equal(data.invoices.filter(i => i.payment?.batch).length, 3);
+    await page.reload();
+    await page.locator('[data-action="resume-draft"][data-key="payment"]').click();
+    assert.equal(await page.locator('[name="checkNumber"]').inputValue(), "001234");
+    assert.match(await page.locator('[data-batch-total]').innerText(), /1,464\.00/);
+    await page.locator('.batch-payment-form [type="submit"]').click();
+    await page.locator('[data-batch-done]').waitFor();
+    assert.match(await page.locator('.save-confirmation').innerText(), /3 חשבוניות/);
+    const writes = requests.filter(r => r.path.endsWith('/pay-batch'));
+    assert.equal(writes.length, 2); assert.deepEqual(writes[0].body, writes[1].body, "a lost answer retries the same complete selection");
+    assert.equal(writes[0].body.payment.paymentDate, month + "-13");
+    assert.equal(writes[0].body.payment.checkDueDate, month + "-28");
+    assert.equal(data.invoices.filter(i => i.payment?.batch).every(i => i.version === 2), true);
+    assert.equal(data.invoices.find(i => i.id === "INV-102").version, 1);
+    assert.deepEqual(errors, []);
+  });
+
+  test(`${engine.name()}: invoice and photo recycle restores paid details and page order without exposing expired entries`, { timeout: 60000 }, async t => {
+    const { server, data, requests, month } = workspaceFixture();
+    const original = data.invoices[0];
+    original.status = "paid"; original.payment = { method: "check", paymentDate: month + "-11", checkNumber: "0909" };
+    data.invoices.push({ ...original, id: "EXPIRED-INVOICE", deletedAt: Date.now() - 31 * 86400000, restoreUntil: Date.now() - 86400000 });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch(); const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", err => errors.push(err.message));
+    page.on("dialog", dialog => dialog.accept());
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    const openInvoice = async () => {
+      await workspaceRoute(page, "invoices");
+      const monthFolder = page.locator(`[data-action="folder-month"][data-value="${month}"]`);
+      if (await monthFolder.count()) await monthFolder.click();
+      const supplierFolder = page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]');
+      if (await supplierFolder.count()) await supplierFolder.click();
+      await page.locator('[data-action="detail"][data-id="INV-101"]').click();
+      await page.locator('.invoice-edit-actions > summary').click();
+    };
+    await openInvoice();
+    await page.locator('[data-detail-action="delete"]').click();
+    await page.waitForFunction(() => !document.querySelector('#modal').open);
+    await workspaceRoute(page, "recycle");
+    assert.equal(await page.locator('[data-action="restore-invoice"]').count(), 1);
+    await page.locator('[data-action="restore-invoice"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-action="restore-invoice"]').length === 0);
+    assert.equal(original.status, "paid"); assert.equal(original.payment.checkNumber, "0909");
+    assert.deepEqual(original.attachmentIds, ["a".repeat(64), "b".repeat(64)]);
+    await openInvoice();
+    await page.locator('[data-delete-document]').first().click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-delete-document]').length === 1);
+    await page.locator('.invoice-edit-actions > summary').click();
+    await page.locator('[data-delete-document]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-delete-document]').length === 0);
+    await page.locator('[data-modal-home]').click();
+    await workspaceRoute(page, "recycle");
+    assert.equal(await page.locator('[data-action="restore-photo"]').count(), 2);
+    await page.screenshot({ path: `test-artifacts/recycle-${engine.name()}.png` });
+    await page.locator('[data-action="restore-photo"][data-document="' + "b".repeat(64) + '"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-action="restore-photo"]').length === 1);
+    await page.locator('[data-action="restore-photo"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-action="restore-photo"]').length === 0);
+    assert.deepEqual(original.attachmentIds, ["a".repeat(64), "b".repeat(64)]);
+    assert.equal(original.finalAgorot, 125400); assert.equal(original.payment.checkNumber, "0909");
+    assert.equal(requests.filter(r => r.path.endsWith('/restore') && r.method === 'POST').length, 3);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: supplier selection lists names immediately and filters live without duplicate creation or extra confirmation`, { timeout: 60000 }, async t => {
     const { server, data, requests } = workspaceFixture();
     data.suppliers.push(

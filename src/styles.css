@@ -2017,3 +2017,18 @@ dialog.crop-modal {
   .invoice-main { grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 8px; }
   .invoice-main > svg { display: none; }
 }
+.batch-payment-entry { width: 100%; margin-block: 12px; }
+.batch-payment-form section { margin-block: 18px; }
+.batch-payment-form [data-batch-phase="details"] { display: grid; gap: 16px; }
+.batch-total { padding: 18px; background: #e9f2ff; border: 1px solid #bfd2ed; border-radius: 14px; font-size: 1.2rem; font-weight: 800; color: var(--navy); }
+.batch-invoice-list { display: grid; gap: 10px; margin-block: 12px; }
+.batch-invoice { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 18px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; min-height: 72px; }
+.batch-invoice:has(input:checked) { background: #e9f2ff; border-color: var(--blue); }
+.batch-invoice input { width: 26px; height: 26px; margin: 0; accent-color: var(--blue); }
+.batch-invoice span { display: grid; gap: 4px; }
+.batch-invoice strong { overflow-wrap: anywhere; }
+.batch-payment-form [data-batch-next] { width: 100%; }
+.recycle-section { margin-block: 30px; }
+.recycle-section h3 { overflow-wrap: anywhere; font-size: 1.05rem; }
+.recycle-section .trash-card { flex-wrap: wrap; gap: 14px; }
+.recycle-section .row-actions { width: 100%; }

@@ -35,7 +35,7 @@ async function removeLinkedScan(ctx, draft) {
     await ctx.drafts.remove("scan");
 }
 
-function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
+export function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   const status = $("[data-draft-status]", form),
     submit = $("[type=submit]", form),
     error = $("[data-form-error]", form);
@@ -107,6 +107,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         return;
       button.disabled = true;
       try {
+        if (options.reloadConflict) { await options.reloadConflict(); return; }
         const collection =
           key === "preferences" ? "settings" : key === "supplier"
             ? "suppliers"
@@ -287,6 +288,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
         ctx.closeModal();
         toast(result.record.deletedAt ? "הסגירה נמחקה והסיכומים עודכנו" : "המחיקה הקודמת הושלמה. בינתיים נרשמה סגירה חדשה בתאריך הזה.");
       }
+      else if (options.onSaved) options.onSaved(result);
       else if (ctx.showSaved && ["invoice", "payment", "cash"].includes(key)) ctx.showSaved(key, result.record);
       else ctx.closeModal();
       ctx.render();
@@ -322,7 +324,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
   });
   return { persist, lock };
 }
-const footer = (label, discardLabel = "מחק טיוטה") =>
+export const footer = (label, discardLabel = "מחק טיוטה") =>
   `<div class="form-error" role="alert" data-form-error hidden></div><footer class="form-footer"><small data-draft-status>שומר טיוטה…</small><p class="notice" role="status" data-cancellation-status hidden></p><button class="primary" type="submit">${e(label)}</button><button class="secondary" type="button" data-cancel-attempt hidden>בטל את הניסיון</button><button class="text-button danger" type="button" data-discard-draft>${e(discardLabel)}</button></footer>`;
 const textArea = (name, value, label) =>
   `<label class="field wide"><span>${e(label)}</span><textarea name="${name}" rows="2" maxlength="4000">${e(value)}</textarea></label>`;
@@ -756,7 +758,9 @@ export async function invoiceForm(
 }
 export async function paymentForm(ctx, record, { onBack = null } = {}) {
   const key = "payment",
-    old = await ctx.drafts.load(key);
+    savedDraft = await ctx.drafts.load(key),
+    old = savedDraft?.batchSupplierId ? null : savedDraft;
+  if (savedDraft?.batchSupplierId) await retainDraft(ctx, key, savedDraft);
   if (old && old.recordId !== record.id)
     await ctx.drafts.save("saved-payment-" + old.recordId, {
       ...old,
