@@ -224,13 +224,16 @@ test("saved invoice exposes its attachments and opens the linked file through th
   const card = document.querySelector('[data-action="detail"][data-id="photo-invoice"]');
   assert.match(card.textContent, /מסמך מצורף/);
   card.click();
-  assert.match(document.getElementById("modal").textContent, /תמונות ומסמכים מצורפים/);
-  document.querySelector("[data-open-document]").click();
+  assert.match(document.getElementById("modal").textContent, /צילום החשבונית/);
+  await tick();
+  assert.ok(document.querySelector('[data-invoice-photo] img[src^="blob:"]'));
+  document.querySelector("[data-photo-open]").click();
   await tick();
   const request = requests.find(request => request.path === "documents/" + id);
   assert.equal(request.options.blob, true);
   assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
   document.querySelector(".preview-dialog").onclose();
+  document.querySelector("[data-close-modal]").click();
 });
 
 test("photo archive opens month, supplier, invoice and file without scanning again", async t => {
@@ -251,13 +254,15 @@ test("photo archive opens month, supplier, invoice and file without scanning aga
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   document.querySelector('[data-action="detail"]').click();
-  document.querySelector('[data-open-document]').click();
+  await tick();
+  document.querySelector('[data-photo-open]').click();
   await tick();
   assert.equal(document.querySelector("#modal").open, true);
   assert.ok(document.querySelector('.preview-dialog img[src^="blob:"]'));
   assert.equal(requests.filter(r => r.path === "documents/" + id).length, 1);
   assert.equal(requests.some(r => r.path.includes("scan-invoice")), false);
   document.querySelector(".preview-dialog").onclose();
+  document.querySelector("[data-close-modal]").click();
 });
 
 test("folder back retains status, while choosing another period leaves the old folder", async t => {
@@ -357,7 +362,7 @@ test("declining the confirmation deletes nothing, and invoice details offers the
   assert.equal(requests.some(r => r.method === "DELETE"), false);
   assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
   modal.querySelector("[data-invoice-details]").click();
-  assert.match(modal.textContent, /תמונות ומסמכים מצורפים/);
+  assert.match(modal.textContent, /צילום החשבונית/);
   assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
   assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
 });
