@@ -647,7 +647,7 @@ function documentList(invoiceId) {
   const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
   const files = i.attachmentIds || [];
   const root = ctx.dialog("צילומי החשבונית",
-    `<p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${files.length ? `<details class="document-actions"><summary>פעולות נוספות</summary><div class="invoice-more-actions">${attachmentRemovalRows(i)}</div></details>` : ""}${retentionNote(ctx.retentionDays)}`);
+    `<p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף חשבונית ב־PDF</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${files.length ? `<details class="document-actions"><summary>פעולות נוספות</summary><div class="invoice-more-actions">${attachmentRemovalRows(i)}</div></details>` : ""}${retentionNote(ctx.retentionDays)}`);
   if (files.length)
     $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
   $("[data-invoice-details]", root).onclick = () => detail(i);

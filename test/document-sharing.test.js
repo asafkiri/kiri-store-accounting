@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { sharingManifest, DocumentShareBatch, documentZip } from '../src/document-sharing.js';
-const invoice = (id, date, attachments, extra = {}) => ({ id, invoiceDate: date, documentNumber: '../123', supplierId: 's1', attachmentIds: attachments, ...extra });
+const invoice = (id, date, attachments, extra = {}) => ({ id, invoiceDate: date, documentNumber: '', totalAgorot: 125400, finalAgorot: 120000, supplierId: 's1', attachmentIds: attachments, ...extra });
 const blob = (text, type = 'image/jpeg') => new Blob([text], { type });
 
 test('month selection includes paid/unpaid, archived suppliers, all pages and PDFs; excludes deleted invoices and other months', () => {
@@ -16,11 +16,37 @@ test('month selection includes paid/unpaid, archived suppliers, all pages and PD
   ] };
   const result = sharingManifest(data, { month: '2026-09' });
   assert.equal(result.invoices.length, 4);
+  assert.equal(result.pdfEntries.length, 3);
+  assert.deepEqual(result.pdfEntries[0].attachmentIds, ['a', 'b']);
   assert.deepEqual(result.entries.map(e => e.id), ['a', 'b', 'c', 'a']);
   assert.equal(new Set(result.entries.map(e => e.path)).size, 4);
   assert.ok(result.entries.every(e => !e.path.split('/').includes('..')));
   assert.deepEqual(sharingManifest(data, { invoiceId: 'one' }).entries.map(e => e.id), ['a', 'b']);
   assert.equal(sharingManifest(data, {}).entries.length, 0);
+});
+
+test('PDF filenames use supplier/date/printed amount, stay stable for single sharing and cannot overwrite a duplicate', () => {
+  const data = { suppliers: [{ id: 's1', name: 'ספק/א' }], invoices: [
+    invoice('a', '2026-09-02', ['one'], { documentNumber: 'DO-NOT-USE' }),
+    invoice('b', '2026-09-02', ['two']),
+    invoice('c', '2026-09-03', ['three'], { totalAgorot: -1050 }),
+  ] };
+  const { pdfEntries } = sharingManifest(data, { month: '2026-09' });
+  assert.equal(pdfEntries[0].name, 'ספק-א_2026-09-02_1254.00ILS');
+  assert.equal(pdfEntries[1].name, 'ספק-א_2026-09-02_1254.00ILS (2)');
+  assert.match(pdfEntries[2].name, /-10\.50ILS$/);
+  assert.equal(sharingManifest(data, { invoiceId: 'b' }).pdfEntries[0].name, pdfEntries[1].name);
+  assert.ok(pdfEntries.every(e => !e.name.includes('DO-NOT-USE')));
+});
+
+test('an invoice PDF larger than a batch is offered whole on its own, then the next invoice follows', async () => {
+  const entries = ['a', 'b', 'c'].map(id => ({ id, name: id, path: id }));
+  const batch = new DocumentShareBatch(entries, id => blob('x'.repeat(id === 'b' ? 15 : 6), 'application/pdf'), { maxBytes: 10, maxFileBytes: 20 });
+  const delivered = [];
+  do {
+    await batch.prepare(); delivered.push(batch.files.map(f => f.id)); batch.next();
+  } while (batch.cursor < entries.length);
+  assert.deepEqual(delivered, [['a'], ['b'], ['c']]);
 });
 
 test('bounded batches and retry deliver every original exactly once without skipping a failed file', async () => {
