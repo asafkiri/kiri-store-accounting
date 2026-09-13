@@ -2,6 +2,7 @@ import { $, field, icon, errorText } from "./ui.js";
 import { escapeHtml as e, money, moneyInput, parseMoney, displayDate, types } from "./format.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
 import { draftPageBlob } from "./image-upload.js";
+import { duplicateShown, duplicateNotice } from "./duplicate-invoice.js";
 import { invoiceQuestions, typedSteps, deriveMissingAmounts, amountOrNull, validInvoiceDate, vatFromInclusive, expectedFinal } from "./quick-invoice-model.js";
 
 // A new invoice is typed from the paper, one detail at a time, and shares the
@@ -23,6 +24,12 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const input = (label, name, value, type = "text") => field(label, name, value, { type, wide: true });
   const row = (key, label, value) => `<button type="button" class="quick-summary-row" data-edit-question="${key}" aria-label="שנה ${e(label)}"><span>${e(label)} <small class="edit-caption">תקן</small></span><strong>${e(value)}</strong></button>`;
   const signed = value => value === null ? null : f.documentType === "credit" ? -Math.abs(value) : value;
+  // The invoice already entered is named on the summary, where the amounts are
+  // all in and the paper is still in hand, rather than after a refused save.
+  const twin = () => duplicateShown(ctx.data.invoices, {
+    supplierId: f.supplierId, documentType: f.documentType, invoiceDate: f.invoiceDate,
+    totalAgorot: signed(amountOrNull(f.total)), vatAgorot: signed(amountOrNull(f.vat)),
+  }, draft.recordId, draft.duplicateConflict);
   // The photograph is one tap away throughout the questions. Until its upload
   // lands it is opened from the device itself, so the offer never disappears
   // and looking at the paper again costs nothing.
@@ -56,7 +63,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     $("[data-discard-draft]", form).textContent = "בטל את קליטת החשבונית";
     if (!current) {
       q.paymentBaseFinal ??= f.final;
+      const existing = twin();
       content.innerHTML = `<div class="quick-summary-heading">${photo()}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת</button></div>
+        ${duplicateNotice(existing, { supplierName: ctx.data.suppliers.find(s => s.id === existing?.supplierId)?.name || f.supplierName, allowed: Boolean(f.duplicateAllowed) })}
         <div class="quick-summary-grid">
         ${row("supplierName", "ספק", f.supplierName)}${row("documentType", "סוג", types[f.documentType])}
         ${row("documentNumber", "מספר חשבונית", f.documentNumber?.trim() || "ללא מספר")}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
@@ -130,6 +139,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const answer = async action => {
     if (advancing || draft.pending) return;
     advancing = true; error.hidden = true;
+    // A detail typed over is a different invoice from the one the store
+    // refused, so its refusal stops speaking for what is in the form now.
+    delete draft.duplicateConflict;
     const key = current;
     try {
       if (action === "back-summary") { delete q.editing; render(); return; }
@@ -204,6 +216,12 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       draft.supplierConflict = err.details?.supplierId ? { id: err.details.supplierId } : null;
       f.supplierId = ""; q.editing = "supplierName"; render(); await supplierPicker?.recover(err);
     }
+    // The store keeps the same guard, and sees the invoices this device has not
+    // synced yet. Its refusal opens the same choice the summary offers.
+    if (err.code === "DUPLICATE_INVOICE_DETAILS") {
+      draft.duplicateConflict = err.details?.invoiceId || "";
+      render();
+    }
   } });
   form.addEventListener("submit", ev => {
     if (current) { ev.preventDefault(); ev.stopImmediatePropagation(); void answer("next"); }
@@ -212,6 +230,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     const choice = ev.target.closest("[data-quick-choice]"), edit = ev.target.closest("[data-edit-question]");
     if (choice) void answer(choice.dataset.quickChoice);
     if (ev.target.closest("[data-quick-photo]")) void showPhotographedPage();
+    if (ev.target.closest("[data-confirm-duplicate]") && !draft.pending) {
+      f.duplicateAllowed = true; error.hidden = true; render(); void binding.persist();
+    }
     if (edit && !draft.pending) { q.editing = edit.dataset.editQuestion; error.hidden = true; render(); }
     if (ev.target.closest("[data-full-invoice]") && !draft.pending)
       void binding.persist(true).then(openEditor).catch(showError);

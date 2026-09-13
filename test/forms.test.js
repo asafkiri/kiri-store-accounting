@@ -940,3 +940,49 @@ test("an invoice typed from a photograph is never saved before its pages are sto
   assert.equal(drafts.has("invoice"), false);
   assert.equal(drafts.has("scan"), false, "the photograph draft is cleared with the invoice");
 });
+test("the detailed editor names the invoice already entered while the amounts are typed", async () => {
+  const { ctx, saved } = setup();
+  ctx.data.invoices = [{
+    id: "invoice-earlier", version: 1, supplierId: "supplier-001", documentNumber: "A-900",
+    documentType: "invoice", invoiceDate: "2026-09-10", subtotalAgorot: 10000, vatAgorot: 1800,
+    totalAgorot: 11800, finalAgorot: 11800, deductions: [], attachmentIds: [], status: "unpaid",
+  }];
+  await invoiceForm(ctx);
+  fill("supplierId", "supplier-001");
+  fill("invoiceDate", "2026-09-10");
+  fill("vat", "18");
+  fill("total", "11");
+  assert.equal(document.querySelector("[data-duplicate-notice]"), null, "a different total is a different invoice");
+  fill("total", "118");
+  const notice = document.querySelector("[data-duplicate-notice]");
+  assert.ok(notice, "the twin is named as the amount matches");
+  assert.match(notice.textContent, /חשבונית A-900/);
+  fill("final", "118");
+  document.querySelector("[name=review]").checked = true;
+  submit(); await tick();
+  assert.equal(saved.length, 0);
+  assert.match(document.querySelector("[data-form-error]").textContent, /כבר קלטת/);
+  document.querySelector("[data-confirm-duplicate]").click();
+  await tick();
+  document.querySelector("[name=review]").checked = true;
+  submit(); await tick();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].body.data.duplicateAllowed, true);
+});
+test("editing an invoice already told apart from its twin is not asked about again", async () => {
+  const { ctx, saved } = setup();
+  const twin = {
+    id: "invoice-twin", version: 1, supplierId: "supplier-001", documentNumber: "",
+    documentType: "invoice", invoiceDate: "2026-09-10", subtotalAgorot: 10000, vatAgorot: 1800,
+    totalAgorot: 11800, finalAgorot: 11800, deductions: [], attachmentIds: [], status: "unpaid",
+  };
+  ctx.data.invoices = [twin, { ...twin, id: "invoice-second", duplicateAllowed: true }];
+  await invoiceForm(ctx, ctx.data.invoices[1]);
+  assert.match(document.querySelector("[data-duplicate-notice]").textContent, /חשבונית נפרדת/);
+  fill("notes", "תוקן");
+  document.querySelector("[name=review]").checked = true;
+  submit(); await tick();
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].body.data.duplicateAllowed, true);
+  assert.equal(saved[0].body.data.notes, "תוקן");
+});

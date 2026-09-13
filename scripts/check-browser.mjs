@@ -70,6 +70,7 @@ export function createBrowserCheckServer() {
         "/forms.js",
         "/quick-invoice.js",
         "/quick-invoice-model.js",
+        "/duplicate-invoice.js",
         "/review-actions.js",
         "/draft-activity.js",
         "/supplier-picker.js",

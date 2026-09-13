@@ -18,6 +18,11 @@ import { hasDraftContent } from "./draft-activity.js";
 import { quickInvoiceReview } from "./quick-invoice.js";
 import { uploadScanPages } from "./scan-upload.js";
 import {
+  findDuplicateInvoice,
+  duplicateShown,
+  duplicateNotice,
+} from "./duplicate-invoice.js";
+import {
   cancellationFor,
   cancelAttempt,
   mergeAttemptResult,
@@ -415,7 +420,12 @@ export function parseTaxIds(value) {
   }
   return ids;
 }
-export function invoiceMutation(draft, values, record = null) {
+export function invoiceMutation(
+  draft,
+  values,
+  record = null,
+  knownInvoices = [],
+) {
       if (!["invoice", "credit"].includes(values.documentType) && !(record && values.documentType === record.documentType))
         throw Error("יש לבחור סוג מסמך לפי התעודה.");
       if (values.deductions.some((d) => d.included === "unknown"))
@@ -457,6 +467,7 @@ export function invoiceMutation(draft, values, record = null) {
           attachmentIds: draft.fields.attachmentIds,
           source: "manual",
           reviewConfirmed: values.review === "on",
+          ...(values.duplicateAllowed ? { duplicateAllowed: true } : {}),
         },
         draft.version,
       );
@@ -467,6 +478,18 @@ export function invoiceMutation(draft, values, record = null) {
       if (creditSignIssues(pending.body.data).length)
         throw Error(
           "סכום הזיכוי והסכום הסופי חייבים להיות גדולים מאפס.",
+        );
+      // Checked on the finished figures, signs and all, so it asks exactly what
+      // the store asks. The store refuses this too; here it is caught before
+      // the save, where the invoice already entered can still be pointed at.
+      // An invoice with nothing to be told apart from keeps its own claim, so a
+      // permission given and then edited away does not follow it around.
+      const twin = findDuplicateInvoice(knownInvoices, pending.body.data, record?.id || draft.recordId);
+      if (!twin && !draft.duplicateConflict)
+        delete pending.body.data.duplicateAllowed;
+      else if (twin && !pending.body.data.duplicateAllowed)
+        throw Error(
+          "כנראה כבר קלטת את החשבונית הזאת. אם זו בכל זאת חשבונית אחרת, אשר זאת בהודעה שבטופס.",
         );
       return pending;
 }
@@ -491,6 +514,9 @@ export async function invoiceForm(
           ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name || ""
           : "",
         documentNumber: record?.documentNumber || "",
+        // An invoice already told apart from its twin is not asked about again
+        // when it is edited or paid.
+        duplicateAllowed: Boolean(record?.duplicateAllowed),
         invoiceDate: record?.invoiceDate || today(),
         documentType: record?.documentType || "invoice",
         subtotal: moneyInput(record?.subtotalAgorot),
@@ -531,7 +557,7 @@ export async function invoiceForm(
   // draft stays in the flow it began in. The full form edits saved invoices
   // and stays behind the questions for the complex case.
   if (!record && !options.fullEditor && (options.quick || draft.quick)) return quickInvoiceReview(ctx, draft, {
-    bindDraft, footer, buildMutation: values => invoiceMutation(draft, values),
+    bindDraft, footer, buildMutation: values => invoiceMutation(draft, values, null, ctx.data.invoices),
     openEditor: () => invoiceForm(ctx, null, [], { fullEditor: true }),
   });
   const root = ctx.dialog(
@@ -545,6 +571,7 @@ export async function invoiceForm(
     <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
     <div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך.</div>
     <div id="arithmetic-note" class="notice warning" hidden></div>
+    <div data-duplicate-slot></div>
     ${f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : ""}
     <label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>${footer("שמור חשבונית")}</form>`,
   );
@@ -594,11 +621,15 @@ export async function invoiceForm(
     key,
     draft,
     collect,
-    (values) => invoiceMutation(draft, values, record),
+    (values) => invoiceMutation(draft, values, record, ctx.data.invoices),
     {
       onError: async (err) => {
         if (["SUPPLIER_EXISTS", "SUPPLIER_CHANGED"].includes(err.code))
           await supplierPicker.recover(err);
+        if (err.code === "DUPLICATE_INVOICE_DETAILS") {
+          draft.duplicateConflict = err.details?.invoiceId || "";
+          showDuplicate();
+        }
       },
     },
   );
@@ -606,6 +637,38 @@ export async function invoiceForm(
     collect,
     persist: binding.persist,
   });
+  // The same invoice, typed a second time, differs from this one in nothing a
+  // person would notice, so it is named while the amounts are being typed.
+  const showDuplicate = () => {
+    const values = collect();
+    let candidate = null;
+    try {
+      const sign = (amount) =>
+        amount === null || values.documentType !== "credit"
+          ? amount
+          : -Math.abs(amount);
+      candidate = {
+        supplierId: values.supplierId,
+        documentType: values.documentType,
+        invoiceDate: values.invoiceDate,
+        totalAgorot: sign(parseMoney(values.total, true)),
+        vatAgorot: sign(parseMoney(values.vat, true)),
+      };
+    } catch {
+      /* A half-typed amount names nothing yet. */
+    }
+    const twin = duplicateShown(
+      ctx.data.invoices,
+      candidate,
+      record?.id || draft.recordId,
+      draft.duplicateConflict,
+    );
+    $("[data-duplicate-slot]", form).innerHTML = duplicateNotice(twin, {
+      supplierName:
+        ctx.data.suppliers.find((s) => s.id === twin?.supplierId)?.name || "",
+      allowed: Boolean(f.duplicateAllowed),
+    });
+  };
   $("#add-deduction", form).onclick = () => {
     Object.assign(f, collect());
     if (f.deductions.length >= 30) return;
@@ -621,6 +684,12 @@ export async function invoiceForm(
       f.deductions.splice(Number(b.dataset.removeDeduction), 1);
       renderDeductions();
       draft.fields = f;
+      binding.persist();
+    }
+    if (ev.target.closest("[data-confirm-duplicate]") && !draft.pending) {
+      Object.assign(f, collect(), { duplicateAllowed: true });
+      draft.fields = f;
+      showDuplicate();
       binding.persist();
     }
   });
@@ -661,7 +730,12 @@ export async function invoiceForm(
       note.textContent =
         "לפני מע״מ + מע״מ אינם שווים לסכום הכולל. בדוק מול המסמך; המספרים לא שונו.";
     } catch {}
+    // A detail typed over is a different invoice from the one the store
+    // refused, so its refusal stops speaking for what is in the form now.
+    delete draft.duplicateConflict;
+    showDuplicate();
   });
+  showDuplicate();
 }
 export async function paymentForm(ctx, record, { onBack = null } = {}) {
   const key = "payment",
