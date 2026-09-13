@@ -28,7 +28,7 @@ const submit = () => document.querySelector("form").dispatchEvent(new Event("sub
 
 const title = () => document.querySelector(".quick-question h3")?.textContent;
 const progress = () => document.querySelector(".quick-progress span")?.textContent;
-const answerSupplier = async () => { fill("supplierName", "ספק בדיקה"); await choose("next"); };
+const answerSupplier = async () => { fill("supplierName", "ספק בדיקה"); document.querySelector('[data-supplier-action="confirm"]').click(); await tick(); };
 // The four answers of an ordinary invoice. Its number remains blank.
 const typeInvoice = async ({ total = "118", vat = "18" } = {}) => {
   await answerSupplier();
@@ -36,6 +36,72 @@ const typeInvoice = async ({ total = "118", vat = "18" } = {}) => {
   fill("vat", vat); await choose("vat-manual");
   await choose("next");
 };
+
+test("supplier list filters while typing, keeps partial-name creation available and advances only on choice", async () => {
+  const { ctx, cache, writes } = setup();
+  ctx.data.suppliers = [
+    { id: "supplier-tnuva", name: "תנובה", active: true, version: 1 },
+    { id: "supplier-marina", name: "מרינה בע״מ", active: true, version: 1 },
+    { id: "supplier-other", name: "תנורי העיר", active: true, version: 1 },
+    { id: "supplier-inactive", name: "ספק לא פעיל", active: false, version: 3 },
+    { id: "supplier-deleted", name: "ספק שנמחק", active: false, deletedAt: 1, version: 2 },
+  ];
+  const rows = () => [...document.querySelectorAll('.supplier-result strong')].map(el => el.textContent);
+  const create = () => document.querySelector('[data-supplier-action="create"]');
+  await invoiceForm(ctx, null, [], { quick: true });
+  assert.equal(rows().length, 4);
+  assert.equal(document.querySelector('[data-supplier-picker] details'), null);
+  assert.equal(document.querySelector('[data-quick-choice="next"]'), null);
+  fill("supplierName", "תנו");
+  assert.deepEqual(rows(), ["תנובה", "תנורי העיר"]);
+  assert.ok(create());
+  assert.equal(cache.get("invoice").fields.supplierId, "");
+  assert.equal(title(), "מי הספק?");
+  fill("supplierName", "תנוב");
+  assert.deepEqual(rows(), ["תנובה"]);
+  assert.ok(create(), "a partial match does not prevent creating a distinct name");
+  fill("supplierName", "תנובה");
+  assert.equal(create(), null);
+  fill("supplierName", " מרינה בע\"מ ");
+  assert.deepEqual(rows(), ['מרינה בע״מ']);
+  assert.equal(create(), null, "the server's normalized duplicate rule is also enforced locally");
+  fill("supplierName", "ספק שאין");
+  assert.equal(rows().length, 0); assert.ok(create());
+  fill("supplierName", "");
+  assert.equal(rows().length, 4);
+  fill("supplierName", "תנוב");
+  await invoiceForm(ctx, null, [], { quick: true });
+  assert.deepEqual(rows(), ["תנובה"], "an unfinished search resumes with its results");
+  document.querySelector('[data-supplier-action="confirm"]').click(); await tick();
+  assert.equal(title(), "מה הסכום כולל מע״מ?");
+  assert.equal(cache.get("invoice").fields.supplierId, "supplier-tnuva");
+  assert.equal(cache.get("invoice").fields.supplierName, "תנובה");
+  assert.equal(cache.get("invoice").newSupplier, undefined);
+  assert.equal(cache.get("invoice").fields.documentNumber, "");
+  assert.equal(writes.length, 0);
+});
+
+test("creating beside a partial match retains a separate supplier until invoice approval", async () => {
+  const { ctx, cache, writes } = setup();
+  await invoiceForm(ctx, null, [], { quick: true });
+  fill("supplierName", "ספק");
+  assert.equal(document.querySelectorAll('.supplier-result').length, 1);
+  document.querySelector('[data-supplier-action="create"]').click(); await tick();
+  const pending = cache.get("invoice").newSupplier;
+  assert.equal(pending.name, "ספק");
+  assert.notEqual(pending.id, ctx.data.suppliers[0].id);
+  assert.equal(writes.length, 0);
+  await ctx.modalBack(); await tick();
+  document.querySelector('[data-supplier-action="keep-new"]').click(); await tick();
+  assert.equal(title(), "מה הסכום כולל מע״מ?");
+  assert.deepEqual(cache.get("invoice").newSupplier, pending);
+  await ctx.modalBack(); await tick();
+  fill("supplierName", "ספק בדיקה");
+  document.querySelector('[data-supplier-action="confirm"]').click(); await tick();
+  assert.equal(cache.get("invoice").newSupplier, undefined);
+  assert.equal(cache.get("invoice").fields.supplierId, ctx.data.suppliers[0].id);
+  assert.equal(writes.length, 0);
+});
 
 test("inclusive VAT uses exact agorot, configurable rates and never applies the rate to the gross again", () => {
   assert.deepEqual(vatFromInclusive(11800, 1800), { vatAgorot: 1800, subtotalAgorot: 10000 });
@@ -217,7 +283,7 @@ test("Back from a question returns to supplier selection without clearing later 
   assert.equal(progress(), "שאלה 1 מתוך 4");
   assert.equal(document.querySelector('[name="supplierName"]').value, "ספק בדיקה");
   assert.equal(ctx.modalBack, null, "the first question is the explicit exit point");
-  await choose("next");
+  document.querySelector('[data-supplier-action="confirm"]').click(); await tick();
   assert.equal(document.querySelector('[name="total"]').value, "118");
   assert.equal(writes.length, 0);
 });

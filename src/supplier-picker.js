@@ -1,122 +1,109 @@
-import { field, select, errorText } from "./ui.js";
+import { field, icon, errorText } from "./ui.js";
 import { escapeHtml as e } from "./format.js";
 import { normalizeSupplierName } from "./supplier-name.js";
 
 export function supplierPickerMarkup(fields) {
   return `<section class="supplier-picker wide" data-supplier-picker aria-label="בחירת ספק">
-    ${field("שם ספק לחיפוש או פתיחה", "supplierName", fields.supplierName, { wide: true })}
-    <div data-supplier-proposal aria-live="polite"></div>
-    <details><summary>בחירה מרשימת הספקים</summary>${select("ספק", "supplierId", "", { "": "בחר ספק" }, { wide: true })}</details>
+    ${field("חיפוש ספק", "supplierName", fields.supplierName, { wide: true, placeholder: "הקלד חלק מהשם" })}
+    <input type="hidden" name="supplierId" value="${e(fields.supplierId || "")}">
+    <p class="supplier-search-status muted" data-supplier-status role="status" aria-live="polite"></p>
+    <ul class="supplier-results" data-supplier-results aria-label="ספקים לבחירה"></ul>
+    <div data-supplier-proposal></div>
   </section>`;
 }
 
 export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelect }) {
   const root = form.querySelector("[data-supplier-picker]");
-  const input = form.elements.supplierName;
-  const selected = form.elements.supplierId;
+  const input = form.elements.supplierName, selected = form.elements.supplierId;
   const proposal = root.querySelector("[data-supplier-proposal]");
+  const list = root.querySelector("[data-supplier-results]"), status = root.querySelector("[data-supplier-status]");
   input.maxLength = 160;
-  let rejected = false;
+  input.enterKeyHint = "done";
   let lookupError = "";
-  const available = () => ctx.data.suppliers.filter((s) => !s.deletedAt || (draft.mode === "edit" && s.id === draft.fields.supplierId));
-  const matches = () =>
-    available().filter(
-      (s) =>
-        normalizeSupplierName(s.name) === normalizeSupplierName(input.value),
-    );
-  const button = (action, label, id = "", secondary = false) =>
-    `<button type="button" class="${secondary ? "secondary" : "primary"}" data-supplier-action="${action}" data-supplier-id="${e(id)}" ${draft.pending ? "disabled" : ""}>${e(label)}</button>`;
-  const persistChoice = () => {
-    draft.fields = collect();
-    persist();
+  const available = () => ctx.data.suppliers.filter(s => !s.deletedAt || (draft.mode === "edit" && s.id === draft.fields.supplierId));
+  const exactMatches = () => available().filter(s => normalizeSupplierName(s.name) === normalizeSupplierName(input.value));
+  const results = () => {
+    const query = normalizeSupplierName(input.value);
+    return available().filter(s => !query || normalizeSupplierName(s.name).includes(query) || s.id === draft.supplierConflict?.id)
+      .sort((a, b) => Number(!b.deletedAt && b.active) - Number(!a.deletedAt && a.active)
+        || Number(!normalizeSupplierName(a.name).startsWith(query)) - Number(!normalizeSupplierName(b.name).startsWith(query))
+        || a.name.localeCompare(b.name, "he"));
   };
+  const button = (action, label, id = "") =>
+    `<button type="button" class="secondary supplier-create" data-supplier-action="${action}" data-supplier-id="${e(id)}" ${draft.pending ? "disabled" : ""}>${action === "create" ? icon("plus") : ""}<span>${e(label)}</span></button>`;
+  const persistChoice = () => { draft.fields = collect(); persist(); };
   const clearChoice = () => {
     selected.value = "";
     delete draft.newSupplier;
     delete draft.reactivateSupplier;
-    renderOptions("");
-  };
-  const renderOptions = (id = selected.value) => {
-    const rows = [...available()];
-    if (draft.newSupplier) rows.push({ ...draft.newSupplier, active: true });
-    selected.innerHTML =
-      '<option value="">בחר ספק</option>' +
-      rows
-        .map(
-          (s) =>
-            `<option value="${e(s.id)}">${e(s.name)}${s.active ? "" : " — לא פעיל"}</option>`,
-        )
-        .join("");
-    selected.value = id;
   };
   const render = () => {
-    const name = input.value.trim();
+    const name = input.value.trim(), rows = results();
+    if (draft.newSupplier) rows.unshift({ ...draft.newSupplier, active: true, pendingCreation: true });
+    status.textContent = rows.length
+      ? name ? `${rows.length === 1 ? "ספק אחד מתאים" : rows.length + " ספקים מתאימים"} · לחץ על הספק לבחירה` : `${rows.length} ספקים לבחירה · אפשר לגלול ברשימה`
+      : name ? "לא נמצאו ספקים מתאימים" : "אין עדיין ספקים. הקלד שם לפתיחת ספק חדש";
+    list.hidden = rows.length === 0;
+    list.innerHTML = rows.map(s => {
+      const chosen = selected.value === s.id;
+      const hint = s.deletedAt ? "ספק שנמחק" : s.pendingCreation ? "ספק חדש · נבחר" : chosen ? "נבחר" : s.active ? "" : "לא פעיל · הפעל מחדש ובחר";
+      return `<li><button type="button" class="supplier-result ${chosen ? "is-selected" : ""}" data-supplier-action="${s.pendingCreation ? "keep-new" : s.active ? "confirm" : "reactivate"}" data-supplier-id="${e(s.id)}" aria-pressed="${chosen}" ${draft.pending || s.deletedAt ? "disabled" : ""}><span><strong>${e(s.name)}</strong>${hint ? `<small>${e(hint)}</small>` : ""}</span>${icon(chosen ? "check" : "arrow")}</button></li>`;
+    }).join("");
     if (draft.newSupplier) {
-      proposal.innerHTML = `<p><strong>ספק חדש: ${e(draft.newSupplier.name)}</strong></p><p>הספק ייפתח יחד עם החשבונית בלחיצה על ״שמור חשבונית״.</p>`;
+      proposal.innerHTML = `<p><strong>ספק חדש: ${e(draft.newSupplier.name)}</strong></p><p class="muted">הספק ייפתח יחד עם החשבונית בלחיצה על ״שמור חשבונית״.</p>`;
     } else if (draft.reactivateSupplier) {
-      proposal.innerHTML = `<p><strong>הספק יופעל מחדש עם שמירת החשבונית.</strong></p>`;
-    } else if (selected.value) {
-      const supplier = available().find((s) => s.id === selected.value);
-      proposal.innerHTML = `<p><strong>התעודה תשויך לספק: ${e(supplier?.name || name)}</strong></p>`;
+      proposal.innerHTML = "<p>הספק יופעל מחדש עם שמירת החשבונית.</p>";
     } else if (draft.supplierConflict && lookupError) {
-      proposal.innerHTML = `<p>${e(lookupError)}</p>${button("lookup", "טען את הספק הקיים")}`;
-    } else if (!name) {
-      proposal.innerHTML = "<p>הקלד שם ספק או בחר מהרשימה.</p>";
+      proposal.innerHTML = `<p role="alert">${e(lookupError)}</p>${button("lookup", "טען את הספק הקיים")}`;
+    } else if (selected.value) {
+      proposal.innerHTML = "";
+    } else if (name && normalizeSupplierName(name) && !exactMatches().length && !draft.supplierConflict) {
+      proposal.innerHTML = button("create", `פתח ספק חדש: ״${name}״`);
+    } else if (name && exactMatches().length) {
+      proposal.innerHTML = '<p class="small muted">ספק בשם הזה כבר קיים. לפתיחת ספק אחר, הקלד שם שונה.</p>';
     } else {
-      const forced = available().find(
-        (s) => s.id === draft.supplierConflict?.id,
-      );
-      const candidates = forced ? [forced] : matches();
-      if (candidates.length) {
-        proposal.innerHTML =
-          candidates
-            .map((s) =>
-              s.active
-                ? `<p>זה הספק '${e(s.name)}' שכבר קיים?</p>${button("confirm", "כן, שייך לספק הזה", s.id)}`
-                : `<p>הספק '${e(s.name)}' סומן כלא פעיל. להפעיל אותו מחדש?</p>${button("reactivate", "הפעל מחדש ושייך את התעודה", s.id)}`,
-            )
-            .join("") +
-          button("reject", "לא — פתח ספק חדש", "", true) +
-          (rejected
-            ? "<p>כדי לפתוח ספק אחר, הקלד שם שמבדיל אותו מהספק הקיים.</p>"
-            : "");
-      } else {
-        proposal.innerHTML = `<p><strong>ספק חדש: ${e(name)}</strong></p>${button("create", "פתח ספק חדש ושייך את התעודה")}`;
-      }
+      proposal.innerHTML = "";
     }
   };
-  renderOptions(draft.fields.supplierId);
   render();
   input.addEventListener("input", () => {
     if (draft.pending) return;
     clearChoice();
     delete draft.supplierConflict;
-    rejected = false;
     lookupError = "";
-    const exact = available().filter(
-      (s) => s.active && s.name === input.value.trim(),
-    );
-    if (exact.length === 1) selected.value = exact[0].id;
     render();
+    list.scrollTop = 0;
     persistChoice();
   });
-  const selectExisting = () => {
-    if (draft.pending) return;
-    const supplier = available().find((s) => s.id === selected.value);
-    delete draft.newSupplier;
-    delete draft.reactivateSupplier;
+  const selectExisting = supplier => {
+    if (draft.pending || !supplier || supplier.deletedAt) return;
+    clearChoice();
     delete draft.supplierConflict;
-    if (supplier) {
-      input.value = supplier.name;
-    }
-    renderOptions(supplier?.active ? supplier.id : "");
+    selected.value = supplier.id;
+    input.value = supplier.name;
+    if (!supplier.active) draft.reactivateSupplier = { id: supplier.id, expectedVersion: supplier.version };
     render();
     persistChoice();
+    onSelect?.();
   };
-  selected.addEventListener("change", selectExisting);
-  selected.addEventListener("input", selectExisting);
-
-  const recover = async (error) => {
+  // Keep the retained editor's field binding, while the visible control is a list.
+  const fieldSelection = () => selectExisting(available().find(s => s.id === selected.value));
+  selected.addEventListener("change", fieldSelection);
+  selected.addEventListener("input", fieldSelection);
+  input.addEventListener("keydown", event => {
+    if (draft.pending || event.isComposing) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault(); list.querySelector("button:not(:disabled)")?.focus();
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const rows = results();
+      // Enter can choose one clear existing result; opening or reactivating a
+      // supplier always needs the button naming that action.
+      if (input.value.trim() && rows.length === 1 && rows[0].active) selectExisting(rows[0]);
+    }
+  });
+  const recover = async error => {
     const id = error?.details?.supplierId || draft.supplierConflict?.id;
     if (!id || !/^[a-zA-Z0-9_-]{8,100}$/.test(id)) return;
     clearChoice();
@@ -124,11 +111,9 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
     try {
       const existing = await ctx.api.request("suppliers/" + id);
       if (!form.isConnected || draft.supplierConflict?.id !== id) return;
-      if (existing.deletedAt)
-        throw Error("הספק נמחק בינתיים. אפשר לתקן את השם או לבחור ספק אחר.");
+      if (existing.deletedAt) throw Error("הספק נמחק בינתיים. אפשר לתקן את השם או לבחור ספק אחר.");
       ctx.mergeRecord(existing, "suppliers/" + id);
       lookupError = "";
-      renderOptions("");
     } catch (err) {
       if (!form.isConnected || draft.supplierConflict?.id !== id) return;
       lookupError = errorText(err);
@@ -136,54 +121,27 @@ export function bindSupplierPicker(ctx, form, draft, { collect, persist, onSelec
     render();
     persistChoice();
   };
-  proposal.addEventListener("click", async (event) => {
+  root.addEventListener("click", async event => {
     const action = event.target.closest("[data-supplier-action]");
     if (!action || draft.pending || action.disabled) return;
-    const name = input.value.trim();
     if (action.dataset.supplierAction === "lookup") {
-      action.disabled = true;
-      await recover();
-      return;
+      action.disabled = true; await recover(); return;
     }
-    if (action.dataset.supplierAction === "reject") {
-      rejected = true;
-      render();
-      input.focus();
+    if (action.dataset.supplierAction === "keep-new") {
+      if (draft.newSupplier?.id === selected.value) onSelect?.();
       return;
     }
     if (action.dataset.supplierAction === "create") {
-      if (
-        !name ||
-        !normalizeSupplierName(name) ||
-        matches().length ||
-        draft.supplierConflict
-      )
-        return;
+      const name = input.value.trim();
+      if (!name || !normalizeSupplierName(name) || exactMatches().length || draft.supplierConflict) return;
       draft.newSupplier = { id: crypto.randomUUID(), name, taxIds: [] };
       delete draft.reactivateSupplier;
-      renderOptions(draft.newSupplier.id);
+      selected.value = draft.newSupplier.id;
+      render(); persistChoice(); onSelect?.();
     } else {
-      const supplier = available().find(
-        (s) => s.id === action.dataset.supplierId,
-      );
-      if (!supplier) return;
-      clearChoice();
-      delete draft.supplierConflict;
-      selected.value = supplier.id;
-      input.value = supplier.name;
-      if (!supplier.active)
-        draft.reactivateSupplier = {
-          id: supplier.id,
-          expectedVersion: supplier.version,
-        };
+      selectExisting(available().find(s => s.id === action.dataset.supplierId));
     }
-    render();
-    persistChoice();
   });
   if (draft.supplierConflict && !draft.pending) recover();
-  proposal.addEventListener("click", event => {
-    const action = event.target.closest("[data-supplier-action]");
-    if (action && ["create", "confirm", "reactivate"].includes(action.dataset.supplierAction) && selected.value) onSelect?.();
-  });
   return { recover };
 }
