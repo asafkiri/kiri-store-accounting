@@ -1,6 +1,7 @@
 import { $, field, icon, errorText } from "./ui.js";
 import { escapeHtml as e, money, moneyInput, parseMoney, displayDate, types } from "./format.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
+import { draftPageBlob } from "./image-upload.js";
 import { invoiceQuestions, typedSteps, deriveMissingAmounts, amountOrNull, validInvoiceDate, vatFromInclusive, expectedFinal } from "./quick-invoice-model.js";
 
 // A new invoice is typed from the paper, one detail at a time, and shares the
@@ -22,7 +23,21 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   const input = (label, name, value, type = "text") => field(label, name, value, { type, wide: true });
   const row = (key, label, value) => `<button type="button" class="quick-summary-row" data-edit-question="${key}" aria-label="שנה ${e(label)}"><span>${e(label)} <small class="edit-caption">תקן</small></span><strong>${e(value)}</strong></button>`;
   const signed = value => value === null ? null : f.documentType === "credit" ? -Math.abs(value) : value;
-  const photo = () => f.attachmentIds?.length ? `<button type="button" class="text-button quick-photo" data-open-document="${e(f.attachmentIds[0])}" data-safe-action>${icon("image")} הצג חשבונית</button>` : "";
+  // The photograph is one tap away throughout the questions. Until its upload
+  // lands it is opened from the device itself, so the offer never disappears
+  // and looking at the paper again costs nothing.
+  const photo = () => f.attachmentIds?.length
+    ? `<button type="button" class="text-button quick-photo" data-open-document="${e(f.attachmentIds[0])}" data-safe-action>${icon("image")} הצג חשבונית</button>`
+    : draft.fromScan
+      ? `<button type="button" class="text-button quick-photo" data-quick-photo data-safe-action>${icon("image")} הצג חשבונית</button>`
+      : "";
+  const showPhotographedPage = async () => {
+    try {
+      const scan = await ctx.drafts.load("scan");
+      const page = scan?.files?.[0];
+      if (page) ctx.previewBlob(draftPageBlob(page));
+    } catch (err) { showError(err); }
+  };
   const adjustment = () => {
     const reduction = parseMoney(q.paymentReduction || "0");
     if (reduction < 0) throw Error("יש להזין הפחתה של אפס או יותר.");
@@ -197,6 +212,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   form.addEventListener("click", ev => {
     const choice = ev.target.closest("[data-quick-choice]"), edit = ev.target.closest("[data-edit-question]");
     if (choice) void answer(choice.dataset.quickChoice);
+    if (ev.target.closest("[data-quick-photo]")) void showPhotographedPage();
     if (edit && !draft.pending) { q.editing = edit.dataset.editQuestion; error.hidden = true; render(); }
     if (ev.target.closest("[data-full-invoice]") && !draft.pending)
       void binding.persist(true).then(openEditor).catch(showError);

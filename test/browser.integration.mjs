@@ -576,7 +576,9 @@ for (const engine of [chromium, webkit]) {
     await page.waitForSelector("#invoice-form");
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(request => request.path)), ["documents"]);
     assert.ok(await page.evaluate(() => JSON.stringify(window.scanRequests[0].body.files) === JSON.stringify(window.scanDrafts().find(([key]) => key === "scan")[1].files)));
-    assert.equal(await page.locator("[data-open-document]").count(), 1, "the photograph stays one tap away");
+    // The pages are still on their way, so the photograph is offered from the
+    // device; it stays one tap away for the whole of the questions.
+    assert.equal(await page.locator(".quick-photo").count(), 1, "the photograph stays one tap away");
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
     // The same five questions in the same order, typed from the paper.
     const question = () => page.locator(".quick-question h3").innerText();
@@ -584,6 +586,9 @@ for (const engine of [chromium, webkit]) {
     await page.locator("[name=supplierName]").fill("אסם");
     await page.locator('[data-quick-choice="next"]').tap();
     assert.match(await question(), /מספר החשבונית/);
+    // The upload landed while the supplier was being typed, and the same button
+    // now opens the stored page instead of the one on the device.
+    await page.locator("[data-open-document]").waitFor();
     await page.locator("[name=documentNumber]").fill("MANUAL-PHOTO-1");
     await page.locator('[data-quick-choice="next"]').tap();
     assert.match(await question(), /הסכום כולל מע״מ/);

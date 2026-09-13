@@ -15,6 +15,12 @@ export function encodeFile(file, name = file.name) {
     reader.readAsDataURL(file);
   });
 }
+// A page that was photographed is on the device from that moment, so looking
+// at it never depends on the upload that is still on its way.
+export const draftPageBlob = (page) =>
+  new Blob([Uint8Array.from(atob(page.data), (c) => c.charCodeAt(0))], {
+    type: page.mime,
+  });
 export async function decodeImage(file) {
   if (typeof createImageBitmap === "function") {
     try {

@@ -2,14 +2,11 @@ import { $, icon, errorText } from "./ui.js";
 import { escapeHtml as e } from "./format.js";
 import { invoiceForm } from "./forms.js";
 import { hasDraftContent } from "./draft-activity.js";
-import { readFile, encodeFile, decodeImage, validateFile } from "./image-upload.js";
+import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
+import { uploadScanPages } from "./scan-upload.js";
 export { readFile } from "./image-upload.js";
-// Cloud Run ends the request itself at 60 seconds, so the browser waits past
-// that deadline instead of stopping ahead of it: an upload that is still on
-// its way is not a connection problem.
-const UPLOAD_TIMEOUT = 70_000;
 
 async function pixelsFromImage(image, maxEdge = Infinity) {
   const width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
@@ -363,47 +360,8 @@ export async function scanDialog(ctx, options = {}) {
   );
   let busy = false;
   const persist = () => hasDraftContent(key, draft) ? ctx.drafts.save(key, draft) : ctx.drafts.remove(key);
-  const uploadDocuments = async () => {
-    // Both AI review and manual entry must retain the selected documents.
-    // Reuse persisted IDs when the upload succeeded before an interrupted step.
-    if (draft.files.length && !draft.attachmentIds.length) {
-      const result = await ctx.api.request("documents", {
-        method: "POST",
-        body: { files: draft.files },
-        timeout: UPLOAD_TIMEOUT,
-      });
-      draft.attachmentIds = result.documents.map(document => document.id);
-      await persist();
-    }
-  };
   const err = $("#scan-error", root),
     status = $("#scan-status", root);
-  // The wait is long enough that a still line of text reads as a stuck screen.
-  // The spinner lives inside the status area, so every plain message elsewhere
-  // clears it by simply replacing the text. Elapsed seconds are aria-hidden: a
-  // screen reader should hear the step, not a count every second.
-  let ticker = null;
-  const stopWaiting = () => {
-    clearInterval(ticker);
-    ticker = null;
-    status.removeAttribute("aria-busy");
-  };
-  const waiting = (text, hint, since = Date.now()) => {
-    stopWaiting();
-    status.hidden = false;
-    status.setAttribute("aria-busy", "true");
-    status.innerHTML =
-      '<span class="scan-wait"><span class="scan-wait-spin" aria-hidden="true"></span><span class="scan-wait-text"><strong></strong><small aria-hidden="true"></small></span></span>';
-    $(".scan-wait-text strong", status).textContent = text + "…";
-    const seconds = $(".scan-wait-text small", status);
-    const tick = () => {
-      if (!seconds.isConnected) return stopWaiting();
-      seconds.textContent = `${Math.round((Date.now() - since) / 1000)} שניות · ${hint}`;
-    };
-    tick();
-    ticker = setInterval(tick, 1000);
-    return since;
-  };
   const showError = (error) => {
     err.hidden = false;
     err.textContent = errorText(error);
@@ -515,31 +473,30 @@ export async function scanDialog(ctx, options = {}) {
         showError(error);
       }
     }
-    if (preview) {
-      const f = draft.files[Number(preview.dataset.previewFile)],
-        bytes = Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0));
-      ctx.previewBlob(new Blob([bytes], { type: f.mime }));
-    }
+    if (preview)
+      ctx.previewBlob(draftPageBlob(draft.files[Number(preview.dataset.previewFile)]));
   });
-  // The photograph goes up once, then the questions open with it attached; a
-  // failed upload keeps the pages here for another try. Nothing is read.
+  // The questions open at once and the photograph goes up behind them: typing
+  // five details from the paper takes far longer than the upload, so the wait
+  // is spent on work instead of on a spinner. The save is what waits for the
+  // pages, and a failed upload is retried from there. Nothing is read.
   $("#fill-details", root).onclick = async () => {
     if (busy || !root.isConnected) return;
     busy = true;
     ctx.setModalBusy(true);
     err.hidden = true;
-    waiting("מעלה את הצילום", "הפרטים נפתחים מיד אחרי זה");
     paint();
     try {
-      await uploadDocuments();
-      stopWaiting();
-      if (!root.isConnected) return;
-      await invoiceForm(ctx, null, draft.attachmentIds, { quick: true });
+      if (draft.files.length && !draft.attachmentIds.length)
+        void uploadScanPages(ctx, draft).catch(() => {});
+      await invoiceForm(ctx, null, draft.attachmentIds, {
+        quick: true,
+        fromScan: draft.files.length > 0,
+      });
     } catch (error) {
       status.hidden = true;
       showError(error);
     } finally {
-      stopWaiting();
       busy = false;
       ctx.setModalBusy(false);
       if (root.isConnected) paint();
