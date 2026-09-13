@@ -1941,7 +1941,7 @@ for (const engine of [chromium, webkit]) {
     await workspaceRoute(page, "documents");
     await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
     await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
-    await page.locator('#invoice-search').fill('INV-101');
+    await page.locator('#invoice-search').fill('1,254');
     await page.locator('[data-action="share-month"]').click();
     const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 3, 'all suppliers and pages, regardless of folder/search');
@@ -1963,10 +1963,12 @@ for (const engine of [chromium, webkit]) {
     }
     await page.screenshot({ path: `test-artifacts/share-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-share-close]').click();
-    await page.locator('[data-action="share-invoice"]').click();
+    await page.locator('[data-action="documents"][data-id="INV-101"]').click();
+    await page.locator('[data-share-this-invoice]').click();
     await page.locator('[data-share-send]').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 2);
     await page.locator('[data-share-close]').click();
+    await page.locator('#modal [data-close-modal]').click();
     // Empty filtered directories still expose the parent/back navigation.
     await page.locator('#invoice-search').fill('missing-invoice');
     assert.ok(await page.locator('[data-action="folder-back"]').isVisible());
