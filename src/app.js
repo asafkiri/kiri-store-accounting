@@ -1,4 +1,5 @@
 import { previewDocument } from "./preview.js";
+import { batchPaymentForm } from "./batch-payment.js";
 import { shareDocuments } from "./document-sharing.js";
 import { createNavigation } from "./navigation.js";
 import { invoiceDetails, attachmentRows, attachmentRemovalRows, retentionNote } from "./invoice-details.js";
@@ -224,6 +225,10 @@ ctx.refresh = async (force = false) => {
   }
 };
 ctx.reopen = async (key, id) => {
+  if (key === "payment") {
+    const draft = await ctx.drafts.load("payment");
+    if (draft?.batchSupplierId) return batchPaymentForm(ctx, draft.batchSupplierId);
+  }
   const record = ctx.data.invoices.find((i) => i.id === id);
   if (key === "preferences") return preferencesForm(ctx);
   if (key === "invoice") return invoiceForm(ctx, record);
@@ -308,6 +313,19 @@ function bindShell() {
     };
 }
 async function action(type, data = {}) {
+  if (["restore-invoice", "restore-photo"].includes(type)) {
+    if (ctx.modalBusy) return;
+    const invoice = ctx.data.invoices.find(i => i.id === data.id);
+    if (!invoice) return;
+    if (type === "restore-invoice") return simpleMutation("restore", invoice);
+    return restorePhoto(invoice, data.document);
+  }
+  if (type === "recycle") { ctx.closeModal(); return navigate("recycle"); }
+  if (type === "pay-supplier") {
+    const invoice = ctx.data.invoices.find(i => i.id === data.id);
+    if (invoice) return batchPaymentForm(ctx, invoice.supplierId);
+  }
+  if (type === "batch-payment") return batchPaymentForm(ctx, data.id);
   const record = ctx.data.invoices.find((i) => i.id === data.id);
   switch (type) {
     case "back":
@@ -556,7 +574,7 @@ async function action(type, data = {}) {
             invoiceLabel(record) +
             " על סך " +
             money(record.finalAgorot) +
-            "? היא תוסר מהרשימות הפעילות.",
+            "? היא תעבור לסל המחזור עם הצילומים שלה. ניתן לשחזר במשך 30 יום.",
         )
       )
         await simpleMutation("delete", record);
@@ -614,7 +632,7 @@ async function simpleMutation(actionName, record) {
     await ctx.drafts.remove(key);
     ctx.closeModal();
     ctx.render();
-    toast("עודכן בחנות");
+    toast(actionName === "delete" ? "החשבונית הועברה לסל המחזור · ניתן לשחזר במשך 30 יום" : actionName === "restore" ? "החשבונית שוחזרה עם הצילומים ופרטי התשלום" : "עודכן בחנות");
   } catch (err) {
     if (err.status && err.status < 500 && ![429, 408].includes(err.status))
       await ctx.drafts.remove(key);
@@ -765,8 +783,7 @@ $("#modal").addEventListener("click", async (ev) => {
   const remove = ev.target.closest("[data-delete-document]");
   if (remove) await deletePhoto(remove);
 });
-// One page of one invoice. The file itself is deleted from the store, so the
-// question says so; the invoice and its amounts are untouched.
+// One page of one invoice moves to the recycle bin without changing amounts.
 async function deletePhoto(button) {
   if (button.disabled || ctx.modalBusy || !ctx.api) return;
   const invoice = ctx.data.invoices.find(i => i.id === button.dataset.invoice);
@@ -775,7 +792,7 @@ async function deletePhoto(button) {
   const page = (invoice.attachmentIds || []).length > 1
     ? "צילום עמוד " + button.dataset.page
     : "צילום החשבונית";
-  if (!confirm(`למחוק את ${page} של ${invoiceLabel(invoice)}? הקובץ יימחק מהאחסון ולא ניתן לשחזר אותו. פרטי החשבונית והתשלום יישארו.`))
+  if (!confirm(`להעביר את ${page} של ${invoiceLabel(invoice)} לסל המחזור? אפשר לשחזר במשך 30 יום. פרטי החשבונית והתשלום יישארו.`))
     return;
   const inDetails = Boolean($(".invoice-detail-modal"));
   button.disabled = true;
@@ -796,11 +813,7 @@ async function deletePhoto(button) {
     ctx.mergeRecord(r.record, "invoices");
     await ctx.drafts.remove(key);
     ctx.render();
-    toast(
-      r.fileDeleted
-        ? "הצילום נמחק מהמערכת ומהאחסון"
-        : "הצילום הוסר מהחשבונית. אותו קובץ מצורף גם לחשבונית אחרת, ולכן הוא נשמר שם.",
-    );
+    toast("הצילום הועבר לסל המחזור · ניתן לשחזר במשך 30 יום");
   } catch (err) {
     if (err.status && err.status < 500 && ![429, 408].includes(err.status))
       await ctx.drafts.remove(key);
@@ -813,6 +826,22 @@ async function deletePhoto(button) {
   if (!fresh) return ctx.closeModal();
   if (inDetails) detail(fresh);
   else documentList(fresh.id);
+}
+async function restorePhoto(invoice, documentId) {
+  ctx.setModalBusy(true);
+  const key = "action-" + invoice.id + "-restore-document-" + documentId;
+  try {
+    const pending = await ctx.drafts.load(key) || pendingMutation(`invoices/${invoice.id}/documents/${documentId}/restore`, null, invoice.version, "POST");
+    await ctx.drafts.save(key, pending);
+    const result = await ctx.api.save(pending);
+    ctx.mergeRecord(result.record, "invoices");
+    await ctx.drafts.remove(key);
+    ctx.render();
+    toast("הצילום שוחזר לחשבונית");
+  } catch (err) {
+    if (err.status && err.status < 500 && ![429, 408].includes(err.status)) await ctx.drafts.remove(key);
+    throw err;
+  } finally { ctx.setModalBusy(false); }
 }
 async function openDocument(doc) {
   if (doc.disabled || !ctx.api) return;
