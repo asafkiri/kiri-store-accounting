@@ -1,4 +1,5 @@
 import { previewDocument } from "./preview.js";
+import { mountInvoicePhoto } from "./invoice-photo.js";
 import { batchPaymentForm } from "./batch-payment.js";
 import { shareDocuments } from "./document-sharing.js";
 import { createNavigation } from "./navigation.js";
@@ -92,6 +93,8 @@ let auth,
   codeSession,
   loginBusy = false;
 ctx.dialog = (title, body) => {
+  ctx.disposeModal?.();
+  ctx.disposeModal = null;
   ctx.modalBack = null;
   const modal = $("#modal");
   modal.innerHTML = `<div class="modal-content"><header class="modal-heading"><div class="modal-navigation"><button class="secondary" data-close-modal>חזור</button><button class="secondary" data-modal-home>${icon("home")} בית</button></div><h2 id="modal-title">${e(title)}</h2></header>${body}</div>`;
@@ -111,6 +114,8 @@ ctx.setModalBusy = (value) => {
   document.querySelectorAll("#modal [data-close-modal],#modal [data-modal-home]").forEach(b => { b.disabled = value; });
 };
 ctx.closeModal = () => {
+  ctx.disposeModal?.();
+  ctx.disposeModal = null;
   ctx.modalBack = null;
   $("#modal").close();
   ctx.modalBusy = false;
@@ -644,6 +649,12 @@ function detail(i) {
   const supplier = ctx.data.suppliers.find((s) => s.id === i.supplierId);
   const root = ctx.dialog("פרטי החשבונית", invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
   root.classList.add("invoice-detail-modal");
+  const api = ctx.api;
+  ctx.disposeModal = mountInvoicePhoto(root, i, {
+    load: id => api.request("documents/" + id, { blob: true, timeout: 50_000 }),
+    preview: ctx.previewBlob,
+    isCurrent: () => ctx.api === api,
+  });
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
     if (!b) return;
@@ -768,6 +779,8 @@ $("#modal").addEventListener("cancel", (ev) => {
 });
 $("#modal").addEventListener("close", () => {
   if ($("#modal").open) return;
+  ctx.disposeModal?.();
+  ctx.disposeModal = null;
   $("#modal").replaceChildren();
   void ctx.updateDraftNames().then(() => ctx.render());
 });

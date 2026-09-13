@@ -1515,6 +1515,98 @@ async function workspaceRoute(page, route) {
 }
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: compact invoice shows photos automatically, pages safely and releases previews on exit`, { timeout: 60000 }, async t => {
+    const documents = await sharingDocuments();
+    const { server, data, requests } = workspaceFixture({ documents });
+    data.invoices.forEach(i => { i.documentNumber = ""; });
+    const original = structuredClone(data.invoices);
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.addInitScript(() => {
+      window.photoUrls = new Set();
+      const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL);
+      URL.createObjectURL = blob => { const url = create(blob); window.photoUrls.add(url); return url; };
+      URL.revokeObjectURL = url => { window.photoUrls.delete(url); revoke(url); };
+    });
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    // A legible, fictional portrait document makes cropping and visual QA useful.
+    const paper = await page.evaluate(() => {
+      const canvas = document.createElement("canvas"); canvas.width = 720; canvas.height = 960;
+      const c = canvas.getContext("2d"); c.fillStyle = "white"; c.fillRect(0, 0, 720, 960);
+      c.fillStyle = "#1c3551"; c.textAlign = "right"; c.font = "bold 42px Arial"; c.fillText("תנובה", 656, 86);
+      c.font = "26px Arial"; c.fillText("חשבונית לדוגמה", 656, 135); c.fillText("08.09.2026", 656, 180);
+      c.strokeStyle = "#cad4df"; c.lineWidth = 2;
+      for (const y of [218, 286, 354, 422, 490, 558, 676]) { c.beginPath(); c.moveTo(64, y); c.lineTo(656, y); c.stroke(); }
+      c.font = "25px Arial";
+      for (const [name, amount, y] of [["תיאור הפריט", "סכום", 260], ["מוצרי חלב", "540.00", 328], ["גבינות", "480.00", 396], ["מוצרים נוספים", "234.00", 464]]) {
+        c.textAlign = "right"; c.fillText(name, 646, y); c.textAlign = "left"; c.fillText(amount, 74, y);
+      }
+      c.textAlign = "right"; c.font = "bold 30px Arial"; c.fillText("סה״כ לתשלום", 646, 630);
+      c.textAlign = "left"; c.fillText("1,254.00 ₪", 74, 630);
+      c.textAlign = "center"; c.font = "23px Arial"; c.fillText("מסמך דוגמה לבדיקת התצוגה בלבד", 360, 855);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+    documents.set("a".repeat(64), new Blob([Buffer.from(paper, "base64")], { type: "image/png" }));
+    await workspaceRoute(page, "invoices");
+    await page.locator('#invoice-search').fill("תנובה 1,254");
+    await page.locator('[data-action="detail"][data-id="INV-101"]').click();
+    const ready = () => page.waitForFunction(() => document.querySelector('[data-photo-stage][aria-busy="false"] img')?.naturalWidth > 0);
+    await ready();
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 1, "opening loads only the first photo");
+    assert.equal(await page.locator('[data-photo-previous]').isDisabled(), true);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      const summary = await page.locator('.invoice-hero').boundingBox(), photo = await page.locator('[data-photo-stage]').boundingBox();
+      assert.ok(summary.height < 220, "supplier, date, status and amount stay together");
+      assert.ok(photo.y >= summary.y + summary.height && photo.y + photo.height < 740, "the document is visible in the opening phone screen");
+      assert.ok(await page.locator('#modal').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+      assert.ok((await page.locator('.invoice-detail-primary').boundingBox()).height >= 52);
+      assert.equal(await page.locator('[data-photo-stage] img').evaluate(el => getComputedStyle(el).objectFit), 'contain');
+    }
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/invoice-compact-${engine.name()}.png` });
+    await page.locator('[data-photo-open]').click();
+    await page.locator('.preview-dialog img').waitFor();
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 1, "zoom reuses the original authenticated download");
+    await page.locator('[data-preview-close]').click();
+    await page.waitForFunction(() => window.photoUrls.size === 1);
+    await page.locator('[data-photo-next]').click();
+    await page.getByRole('button', { name: 'פתח את כל עמודי המסמך', exact: true }).waitFor();
+    assert.equal(await page.locator('[data-photo-next]').isDisabled(), true);
+    assert.equal(await page.evaluate(() => window.photoUrls.size), 0);
+    await page.locator('[data-photo-open]').click();
+    await page.locator('.preview-dialog a').waitFor();
+    await page.locator('[data-preview-close]').click();
+    let fail = true;
+    await page.route('**/api/v1/documents/' + 'a'.repeat(64), async route => {
+      if (fail) { fail = false; return route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }); }
+      return route.continue();
+    });
+    await page.locator('[data-photo-previous]').click();
+    await page.locator('[data-photo-retry]').waitFor();
+    assert.ok(await page.locator('.invoice-detail-primary').isVisible(), "photo failure does not hide payment actions");
+    await page.locator('[data-photo-retry]').click(); await ready();
+    let delayed, release;
+    const seen = new Promise(resolve => { delayed = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    await page.route('**/api/v1/documents/' + 'b'.repeat(64), async route => { delayed(); await gate; await route.continue(); });
+    await page.locator('[data-photo-next]').click(); await seen;
+    await page.locator('[data-photo-previous]').click(); await ready();
+    const response = page.waitForResponse(r => r.url().endsWith('b'.repeat(64)));
+    release(); await response;
+    assert.match(await page.locator('[data-photo-counter]').innerText(), /עמוד 1 מתוך 2/);
+    assert.equal(await page.locator('[data-photo-stage] img').count(), 1, "a late second page cannot replace the selected first page");
+    await page.locator('[data-close-modal]').click();
+    await page.waitForFunction(() => window.photoUrls.size === 0);
+    assert.deepEqual(data.invoices, original, "viewing never changes invoice or payment records");
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: batch payment selects supplier invoices, resumes after lost response and confirms the total once`, { timeout: 60000 }, async t => {
     const { server, data, requests, month, previous } = workspaceFixture();
     const base = data.invoices[0];
@@ -2273,6 +2365,9 @@ for (const engine of [chromium, webkit]) {
     assert.match(await page.locator('.check-reference').innerText(), /00012345/);
     await page.locator('[data-action="detail"]').click();
     assert.match(await page.locator('#modal').innerText(), /00012345/);
+    await page.locator('[data-photo-open]').waitFor();
+    const previewDownloads = requests.filter(r => r.path.startsWith('/api/v1/documents/')).length;
+    assert.equal(previewDownloads, 1, 'the checked invoice displays its photo before sharing starts');
     await page.locator('[data-close-modal]').first().click();
     await workspaceRoute(page, "documents");
     await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
@@ -2281,7 +2376,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-action="share-month"]').click();
     const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 2, 'one PDF per invoice, all suppliers and pages regardless of folder/search');
-    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3);
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length - previewDownloads, 3);
     await send.click();
     assert.equal(await page.locator('[data-share-error]').isVisible(), false, 'cancel is not an error or a download');
     assert.ok(await page.locator('.share-dialog').isVisible());
@@ -2295,7 +2390,7 @@ for (const engine of [chromium, webkit]) {
     assert.ok(shared.every(file => file.type === 'application/pdf' && file.name.endsWith('.pdf')));
     assert.deepEqual(await Promise.all(shared.map(async file => (await PDFDocument.load(Uint8Array.from(file.bytes))).getPageCount())), [1, 3], 'WebP becomes one page; JPEG plus a two-page native PDF stays together');
     assert.equal(shared[1].name, `תנובה_${month}-08_1254.00ILS.pdf`);
-    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length, 3, 'share retry reuses prepared PDFs');
+    assert.equal(requests.filter(r => r.path.startsWith('/api/v1/documents/')).length - previewDownloads, 3, 'share retry reuses prepared PDFs');
     await mkdir('test-artifacts', { recursive: true });
     await writeFile(`test-artifacts/invoice-sharing-${engine.name()}.pdf`, Uint8Array.from(shared[1].bytes));
     for (const width of [320, 390]) {

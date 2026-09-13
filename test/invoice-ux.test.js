@@ -88,7 +88,7 @@ test("paid details show the payment while corrections and per-page deletions rem
   for (const action of ["pay", "edit", "unpay", "delete"]) assert.ok(more.querySelector(`[data-detail-action="${action}"]`));
   assert.ok(more.querySelector("[data-delete-document]"));
   assert.equal(page.querySelector(".attachment-row [data-delete-document]"), null);
-  assert.ok(page.querySelector(".attachment-row [data-open-document]"));
+  assert.ok(page.querySelector("[data-invoice-photo]"));
   const unpaid = dom(invoiceDetails(rows[0], suppliers[0]));
   assert.equal(unpaid.querySelector(".invoice-detail-primary").textContent, "סמן ששילמתי");
   assert.deepEqual(rows[2], original);
