@@ -1515,6 +1515,67 @@ async function workspaceRoute(page, route) {
 }
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: new daily closing stays blank after a saved closing while explicit edits retain its amounts`, { timeout: 60000 }, async t => {
+    const { server, data, requests } = workspaceFixture();
+    const { today } = await import('../src/format.js');
+    const date = today(), previousDay = new Date(date + 'T12:00:00Z');
+    previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+    const newDate = previousDay.toISOString().slice(0, 10);
+    const original = { id: date, date, cashAgorot: 15000, ravKavAgorot: 60000, notes: 'סגירה שנשמרה', version: 4 };
+    data.dailyCash = [structuredClone(original)];
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on('pageerror', err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, 'cash');
+    const openNew = async () => {
+      await page.locator('[data-action="cash"]').first().click();
+      await page.locator('#modal [name=cash]').waitFor({ state: 'visible' });
+      for (const name of ['cash', 'ravKav', 'notes']) assert.equal(await page.locator(`#modal [name=${name}]`).inputValue(), '', `${name} must not come from the saved closing`);
+      assert.equal(await page.locator('#modal [name=date]').inputValue(), date);
+      assert.equal(await page.locator('#modal [name=date]').evaluate(el => el.readOnly), false);
+    };
+    const writes = () => requests.filter(r => r.method === 'PUT' && r.path.startsWith('/api/v1/daily-cash/'));
+    await openNew();
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/new-daily-close-${engine.name()}.png`, fullPage: true });
+    await page.locator('#modal [type=submit]').click();
+    await page.locator('#modal [data-form-error]').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#modal [data-form-error]').innerText(), /כבר קיימת סגירה/);
+    assert.equal(writes().length, 0, 'a blank new form cannot overwrite the saved day');
+    await page.locator('#modal [name=date]').fill(newDate);
+    await page.locator('#modal [name=cash]').fill('42.50');
+    await page.locator('#modal [name=ravKav]').fill('12.30');
+    await page.locator('#modal [type=submit]').click();
+    await page.locator('.save-confirmation').waitFor();
+    assert.equal(writes()[0].body.expectedVersion, 0);
+    assert.deepEqual(data.dailyCash.find(r => r.id === date), original);
+    const added = structuredClone(data.dailyCash.find(r => r.id === newDate));
+    assert.equal(added.cashAgorot, 4250); assert.equal(added.ravKavAgorot, 1230);
+    await page.locator('[data-saved-done]').click();
+    await openNew();
+    await page.locator('#modal [data-close-modal]').click();
+    await page.locator(`[data-action="cash-edit"][data-id="${date}"]`).click();
+    await page.locator('#modal [name=cash]').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#modal [name=cash]').inputValue(), '150.00');
+    assert.equal(await page.locator('#modal [name=ravKav]').inputValue(), '600.00');
+    assert.equal(await page.locator('#modal [name=notes]').inputValue(), original.notes);
+    assert.equal(await page.locator('#modal [name=date]').evaluate(el => el.readOnly), true);
+    await page.locator('#modal [name=cash]').fill('175.50');
+    await page.locator('#modal [type=submit]').click();
+    await page.locator('.save-confirmation').waitFor();
+    assert.equal(writes()[1].body.expectedVersion, original.version);
+    assert.equal(data.dailyCash.find(r => r.id === date).cashAgorot, 17550);
+    assert.equal(data.dailyCash.find(r => r.id === date).ravKavAgorot, 60000);
+    assert.deepEqual(data.dailyCash.find(r => r.id === newDate), added);
+    await page.locator('[data-saved-done]').click();
+    await openNew();
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: number-free invoice search, readable rows and Back through retained answers`, { timeout: 60000 }, async t => {
     const { server, data, month, requests } = workspaceFixture();
     data.invoices.forEach(i => { i.documentNumber = ""; });
