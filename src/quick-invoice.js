@@ -12,6 +12,8 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
   draft.quick ||= { confirmed: {} };
   const q = draft.quick, f = draft.fields;
   q.confirmed ||= {};
+  if (!typedSteps.includes(q.step)) delete q.step;
+  if (q.editing === "documentNumber") delete q.editing;
   const rate = ctx.data.settings?.find(s => s.id === "accounting")?.defaultVatBasisPoints ?? 1800;
   const root = ctx.dialog("פרטי החשבונית", `<form class="quick-invoice" id="invoice-form"><div data-quick-content></div>${footer("אשר ושמור חשבונית")}</form>`);
   root.classList.add("quick-modal-content");
@@ -54,26 +56,36 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     if (reduction) f.deductions.push({ label: "הפחתה מהתשלום (ללא שינוי במע״מ)", amount: moneyInput(reduction), included: "no", paymentOnly: true });
     f.final = moneyInput(f.documentType === "credit" ? Math.abs(base) + reduction : base - reduction);
   };
+  const updateBack = () => {
+    if (!form.isConnected) return;
+    // A retained, uncertain save must close safely instead of re-entering the
+    // questions. The shared draft lock calls this whenever that state changes.
+    const locked = draft.pending || draft.cancelPending || draft.conflict;
+    const firstStep = current === typedSteps[0] && !q.editing;
+    ctx.modalBack = !locked && !firstStep ? () => void backQuestion() : null;
+    const back = $("[data-close-modal]", root);
+    if (back) back.textContent = locked ? "חזור" : firstStep ? "יציאה מהקליטה" : q.editing ? (invoiceQuestions(draft).length ? "חזרה לשאלות" : "חזרה לסיכום") : "חזור לשאלה הקודמת";
+  };
   const render = () => {
     deriveMissingAmounts(draft);
     const questions = invoiceQuestions(draft);
-    current = draft.pending || draft.cancelPending || draft.conflict ? null : q.editing || questions[0];
-    ctx.modalBack = q.editing ? () => { delete q.editing; render(); } : null;
+    current = draft.pending || draft.cancelPending || draft.conflict ? null : q.editing || q.step || questions[0];
+    updateBack();
     submit.hidden = Boolean(current);
     $("[data-discard-draft]", form).textContent = "בטל את קליטת החשבונית";
     if (!current) {
       q.paymentBaseFinal ??= f.final;
       const existing = twin();
-      content.innerHTML = `<div class="quick-summary-heading">${photo()}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת</button></div>
+      content.innerHTML = `<div class="quick-summary-heading">${photo()}</div>
         ${duplicateNotice(existing, { supplierName: ctx.data.suppliers.find(s => s.id === existing?.supplierId)?.name || f.supplierName, allowed: Boolean(f.duplicateAllowed) })}
         <div class="quick-summary-grid">
-        ${row("supplierName", "ספק", f.supplierName)}${row("documentType", "סוג", types[f.documentType])}
-        ${row("documentNumber", "מספר חשבונית", f.documentNumber?.trim() || "ללא מספר")}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
+        ${row("supplierName", "ספק", f.supplierName)}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
         </div><div class="quick-total">${row("totalAgorot", "סכום החשבונית", money(signed(amountOrNull(f.total))))}</div>
         <details class="quick-amount-details"><summary>מע״מ ופירוט הסכומים</summary>${row("subtotalAgorot", "לפני מע״מ", money(signed(amountOrNull(f.subtotal))))}${row("vatAgorot", "מע״מ", money(signed(amountOrNull(f.vat))))}</details>
         ${f.deductions.filter(d => !d.paymentOnly).length ? `<details class="quick-deductions"><summary>הפחתות במסמך (${f.deductions.filter(d => !d.paymentOnly).length})</summary>${f.deductions.map((d, i) => d.paymentOnly ? "" : row("deduction:" + i, d.label, money(amountOrNull(d.amount)) + (d.included === "yes" ? " · כלולה" : " · נוספת"))).join("")}</details>` : ""}
-        <details class="quick-extras" ${q.paymentReduction || f.notes ? "open" : ""}><summary>הפחתה מהתשלום או הערה (רשות)</summary><div class="quick-reduction"><label for="payment-reduction">הפחתה מהתשלום <small>בלי שינוי במע״מ</small></label><input id="payment-reduction" name="paymentReduction" inputmode="decimal" value="${e(q.paymentReduction || "")}" placeholder="0.00" aria-label="הפחתה מהתשלום בשקלים"></div>
+        <details class="quick-extras" ${q.paymentReduction || f.notes || f.documentType !== "invoice" ? "open" : ""}><summary>זיכוי, הפחתה או הערה (רשות)</summary>${row("documentType", "סוג המסמך", types[f.documentType])}<div class="quick-reduction"><label for="payment-reduction">הפחתה מהתשלום <small>בלי שינוי במע״מ</small></label><input id="payment-reduction" name="paymentReduction" inputmode="decimal" value="${e(q.paymentReduction || "")}" placeholder="0.00" aria-label="הפחתה מהתשלום בשקלים"></div>
         <label class="quick-notes"><span>הערה לחשבונית</span><textarea name="notes" rows="1" maxlength="4000" placeholder="רשות">${e(f.notes)}</textarea></label>
+        <button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת</button>
         </details>
         <div class="quick-payable"><span>${f.documentType === "credit" ? "סכום הזיכוי" : "לתשלום"}</span><strong data-quick-final>${e(money(signed(amountOrNull(f.final))))}</strong><button type="button" class="text-button" data-edit-question="finalAgorot">שנה</button></div>
         ${q.confirmed.arithmetic ? '<p class="small warning">נשמרים הסכומים שאישרת, למרות הפער בחיבור המע״מ.</p>' : ""}`;
@@ -84,10 +96,10 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         catch (err) { showError(err); }
       };
     } else {
-      const titles = { supplierName: "מי הספק?", documentNumber: "מה מספר החשבונית?", invoiceDate: "מה תאריך החשבונית?", documentType: "איזו חשבונית זאת?", totalAgorot: "מה הסכום כולל מע״מ?", vatAgorot: "כמה מע״מ יש בחשבונית?", subtotalAgorot: "מה הסכום לפני מע״מ?", finalAgorot: "מה הסכום הסופי לתשלום?", arithmetic: "הסכומים אינם מסתכמים", finalArithmetic: "מה הסכום לתשלום?" };
+      const titles = { supplierName: "מי הספק?", invoiceDate: "מה תאריך החשבונית?", documentType: "איזו חשבונית זאת?", totalAgorot: "מה הסכום כולל מע״מ?", vatAgorot: "כמה מע״מ יש בחשבונית?", subtotalAgorot: "מה הסכום לפני מע״מ?", finalAgorot: "מה הסכום הסופי לתשלום?", arithmetic: "הסכומים אינם מסתכמים", finalArithmetic: "מה הסכום לתשלום?" };
       let body = "", footerButton = true;
-      const fieldName = { documentNumber: "documentNumber", invoiceDate: "invoiceDate", totalAgorot: "total", subtotalAgorot: "subtotal", finalAgorot: "final" }[current];
-      const label = { documentNumber: "מספר החשבונית", invoiceDate: "תאריך החשבונית", totalAgorot: "הסכום כולל מע״מ", subtotalAgorot: "הסכום לפני מע״מ", finalAgorot: "הסכום לתשלום" }[current];
+      const fieldName = { invoiceDate: "invoiceDate", totalAgorot: "total", subtotalAgorot: "subtotal", finalAgorot: "final" }[current];
+      const label = { invoiceDate: "תאריך החשבונית", totalAgorot: "הסכום כולל מע״מ", subtotalAgorot: "הסכום לפני מע״מ", finalAgorot: "הסכום לתשלום" }[current];
       if (fieldName) body = input(label, fieldName, f[fieldName], current === "invoiceDate" ? "date" : "text");
       if (current === "invoiceDate" && !q.editing) body = '<p class="muted">מולא תאריך היום. אם בחשבונית רשום תאריך אחר, שנה אותו.</p>' + body;
       if (current === "supplierName") body = supplierPickerMarkup(f);
@@ -119,9 +131,9 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           choice("final-calculate", "חשב לפי הסכום וההפחתות", true) + choice("final-keep", "בדקתי — השאר את הסכום הסופי");
         footerButton = false;
       }
-      const left = questions.filter(k => typedSteps.includes(k)).length;
-      const progress = q.editing ? "שינוי פרט" : left ? `שאלה ${typedSteps.length - left + 1} מתוך ${typedSteps.length}` : "בדיקה נוספת";
-      content.innerHTML = `<div class="quick-progress"><span>${progress}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${body}${footerButton ? choice("next", "אשר והמשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${questions.length ? "חזרה לשאלות" : "חזרה לסיכום"}</button>` : ""}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></section>`;
+      const stepIndex = typedSteps.indexOf(current);
+      const progress = q.editing ? "שינוי פרט" : stepIndex >= 0 ? `שאלה ${stepIndex + 1} מתוך ${typedSteps.length}` : "בדיקה נוספת";
+      content.innerHTML = `<div class="quick-progress"><span>${progress}</span>${photo()}</div><section class="quick-question" aria-live="polite"><h3 tabindex="-1">${e(titles[current] || "איך לחשב את ההפחתה?")}</h3>${body}${footerButton ? choice("next", "אשר והמשך", true) : ""}${q.editing ? `<button type="button" class="text-button" data-quick-choice="back-summary">${questions.length ? "חזרה לשאלות" : "חזרה לסיכום"}</button>` : ""}<details class="quick-more"><summary>אפשרויות נוספות</summary><button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת של החשבונית</button></details></section>`;
       if (current === "supplierName") supplierPicker = bindSupplierPicker(ctx, form, draft, {
         collect: () => { f.supplierId = form.elements.supplierId.value; f.supplierName = form.elements.supplierName.value; return f; },
         persist: () => binding?.persist(),
@@ -135,6 +147,22 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     binding?.lock();
     const modal = root.closest("dialog");
     if (modal) modal.scrollTop = 0;
+  };
+  const backQuestion = async () => {
+    if (advancing || draft.pending || draft.cancelPending || draft.conflict) return;
+    advancing = true;
+    try {
+      error.hidden = true;
+      if (q.editing) delete q.editing;
+      else {
+        const index = typedSteps.indexOf(current);
+        q.step = typedSteps[index < 0 ? typedSteps.length - 1 : Math.max(0, index - 1)];
+      }
+      // Keep the typed values and the current question together on reload.
+      await binding.persist(true);
+      if (form.isConnected) render();
+    } catch (err) { showError(err); }
+    finally { advancing = false; }
   };
   const answer = async action => {
     if (advancing || draft.pending) return;
@@ -162,6 +190,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       if (["totalAgorot", "subtotalAgorot", "finalAgorot"].includes(key)) {
         const name = { totalAgorot: "total", subtotalAgorot: "subtotal", finalAgorot: "final" }[key];
         parseMoney(f[name], key === "subtotalAgorot");
+        if (key === "subtotalAgorot") q.subtotalDerived = false;
         if (key === "finalAgorot") {
           const reduction = parseMoney(q.paymentReduction || "0");
           q.paymentBaseFinal = moneyInput(parseMoney(f.final) + (f.documentType === "credit" ? -reduction : reduction));
@@ -179,6 +208,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
           const values = vatFromInclusive(parseMoney(f.total), action === "vat-zero" ? 0 : rate);
           f.vat = moneyInput(values.vatAgorot);
           f.subtotal = moneyInput(values.subtotalAgorot); q.confirmed.subtotalAgorot = true;
+          q.subtotalDerived = true;
         } else if (action === "vat-manual") f.vat = moneyInput(Math.abs(parseMoney(form.elements.vat.value)));
         else throw Error("הקלד את המע״מ שרשום בחשבונית, או בחר חישוב לפי האחוז.");
         delete q.confirmed.arithmetic;
@@ -199,6 +229,11 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         delete q.paymentBaseFinal;
       }
       q.confirmed[key] = true;
+      if (!q.editing && typedSteps.includes(key)) {
+        const next = typedSteps[typedSteps.indexOf(key) + 1];
+        if (next) q.step = next;
+        else delete q.step;
+      }
       delete q.editing;
       deriveMissingAmounts(draft);
       await binding.persist(true);
@@ -211,7 +246,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
     if (current || invoiceQuestions(draft).length) throw Error("יש להשלים את הפרטים לפני שמירה.");
     adjustment();
     return buildMutation({ ...f, review: "on" });
-  }, { onError: async err => {
+  }, { onLock: updateBack, onError: async err => {
     if (["SUPPLIER_EXISTS", "SUPPLIER_CHANGED", "SUPPLIER_MISSING"].includes(err.code)) {
       draft.supplierConflict = err.details?.supplierId ? { id: err.details.supplierId } : null;
       f.supplierId = ""; q.editing = "supplierName"; render(); await supplierPicker?.recover(err);

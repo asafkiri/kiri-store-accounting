@@ -1,4 +1,4 @@
-import { escapeHtml as e, money, displayDate, totals, types, today, monthLabel, invoiceLabel } from "./format.js";
+import { escapeHtml as e, money, displayDate, types, today, monthLabel } from "./format.js";
 import { icon, field } from "./ui.js";
 
 export const summaryMoney = value => value === null ? "נדרש תיקון זיכוי" : money(value);
@@ -30,10 +30,9 @@ export function groupInvoices(items) {
   return [...months].sort(([a], [b]) => b.localeCompare(a));
 }
 
-export function documentCards(items) {
+export function documentCards(items, ctx = {}) {
   return items.map(i => `<article class="document-card status-${i.status === "paid" ? "paid" : "unpaid"}">
-    <button class="document-card-heading" data-action="documents" data-id="${e(i.id)}">${icon("invoice")}<div><strong>${e(invoiceLabel(i))}</strong><span class="document-meta">${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</span><span class="document-meta">${i.attachmentIds.length} קבצים · פתח חשבונית</span></div><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? "שולם" : "לתשלום"}</span>${icon("arrow")}</button>
-    <button class="text-button" data-action="share-invoice" data-id="${e(i.id)}">${icon("share")} שתף חשבונית</button>
+    <button class="document-card-heading" data-action="documents" data-id="${e(i.id)}">${icon("invoice")}<div><strong>${ctx.folderPath?.supplierId ? e(displayDate(i.invoiceDate)) : e(ctx.data?.suppliers.find(s => s.id === i.supplierId)?.name || "ספק")}</strong>${!ctx.folderPath?.supplierId ? `<span class="document-meta">${e(displayDate(i.invoiceDate))}</span>` : ""}<span class="document-meta">${e(money(i.finalAgorot))} · ${i.attachmentIds.length} קבצים</span>${i.documentType && i.documentType !== "invoice" ? `<span class="document-meta">${e(types[i.documentType])}</span>` : ""}</div><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? "שולם" : "לתשלום"}</span>${icon("arrow")}</button>
   </article>`).join("");
 }
 
@@ -42,10 +41,8 @@ export function folderLocation(ctx) {
   if (!path.month) return "";
   const supplier = ctx.data.suppliers.find(s => s.id === path.supplierId);
   return `<section class="folder-location" aria-label="התיקייה הנוכחית">
-    <button class="secondary folder-back" data-action="folder-back">${icon("arrow")} ${path.supplierId ? "חזרה לספקים" : "חזרה לחודשים"}</button>
-    <p>${ctx.route === "documents" ? "צילומים" : "חשבוניות"} / ${e(monthLabel(path.month))}${path.supplierId ? " / " + e(supplier?.name || "ספק") : ""}</p>
-    <h2 tabindex="-1" data-folder-heading>${e(path.supplierId ? supplier?.name || "ספק" : monthLabel(path.month))}</h2>
-    <span class="muted">${path.supplierId ? "חשבוניות הספק בחודש זה" : "בחר ספק לפתיחת החשבוניות שלו"}</span>
+    <h1 tabindex="-1" data-folder-heading>${e(path.supplierId ? supplier?.name || "ספק" : monthLabel(path.month))}</h1>
+    <p>${path.supplierId ? e(monthLabel(path.month)) : "בחר ספק"}</p>
   </section>`;
 }
 
@@ -55,24 +52,23 @@ export function invoiceFolders(items, ctx, renderCards, { photos = false } = {})
   const path = ctx.folderPath || {}, supplierMap = new Map(ctx.data.suppliers.map(s => [s.id, s]));
   const visible = path.month ? items.filter(i => i.invoiceDate?.startsWith(path.month)) : items;
   const groups = groupInvoices(visible);
-  const folder = (action, value, label, description, rows, glyph, cls) => `<button class="folder-row ${cls}" data-action="${action}" data-value="${e(value)}" aria-label="פתח ${e(label)}">
-    <span class="folder-symbol">${icon(glyph)}</span><span class="folder-title"><strong>${e(label)}</strong><small>${e(description)}</small><span class="folder-total">${e(summaryMoney(totals(rows).final))}</span></span>${icon("arrow")}</button>`;
+  const folder = (action, value, label, description, glyph, cls) => `<button class="folder-row ${cls}" data-action="${action}" data-value="${e(value)}" aria-label="פתח ${e(label)}">
+    <span class="folder-symbol">${icon(glyph)}</span><span class="folder-title"><strong>${e(label)}</strong><small>${e(description)}</small></span>${icon("arrow")}</button>`;
   let body;
   if (!path.month) {
     body = groups.map(([month, suppliers]) => {
       const rows = [...suppliers.values()].flat();
-      return folder("folder-month", month, monthLabel(month), `${suppliers.size} ספקים · ${rows.length} חשבוניות${photos ? " עם צילומים" : ""}`, rows, "folder", "month-folder");
+      return folder("folder-month", month, monthLabel(month), `${suppliers.size} ספקים · ${rows.length} חשבוניות${photos ? " עם צילומים" : ""}`, "folder", "month-folder");
     }).join("");
   } else if (!path.supplierId) {
     body = [...(groups[0]?.[1] || [])].sort(([a], [b]) => (supplierMap.get(a)?.name || "ספק").localeCompare(supplierMap.get(b)?.name || "ספק", "he")).map(([id, rows]) => {
       const unpaid = rows.filter(i => i.status === "unpaid").length;
-      return folder("folder-supplier", id, supplierMap.get(id)?.name || "ספק", `${rows.length} חשבוניות · ${unpaid ? unpaid + " לתשלום" : "הכול שולם"}`, rows, "suppliers", "supplier-folder");
+      return folder("folder-supplier", id, supplierMap.get(id)?.name || "ספק", `${rows.length} חשבוניות · ${unpaid ? unpaid + " לתשלום" : "הכול שולם"}`, "suppliers", "supplier-folder");
     }).join("");
   } else {
-    const rows = visible.filter(i => i.supplierId === path.supplierId), supplier = supplierMap.get(path.supplierId);
+    const rows = visible.filter(i => i.supplierId === path.supplierId);
     const limit = ctx.limit || 80;
-    body = `${!photos && supplier && !supplier.deletedAt ? `<div class="supplier-tools"><button class="text-button" data-action="supplier-edit" data-id="${e(supplier.id)}">פרטי ספק ועריכה</button></div>` : ""}
-      <div class="invoice-list">${renderCards(rows.slice(0, limit), { ...ctx, limit: Number.MAX_SAFE_INTEGER })}</div>${rows.length > limit ? '<button class="secondary" data-action="more">הצג עוד חשבוניות</button>' : ""}${!rows.length ? '<p class="notice">אין חשבוניות שמתאימות לסינון בתיקייה הזאת.</p>' : ""}`;
+    body = `<div class="invoice-list">${renderCards(rows.slice(0, limit), { ...ctx, limit: Number.MAX_SAFE_INTEGER })}</div>${rows.length > limit ? '<button class="secondary" data-action="more">הצג עוד חשבוניות</button>' : ""}${!rows.length ? '<p class="notice">אין חשבוניות שמתאימות לסינון בתיקייה הזאת.</p>' : ""}`;
   }
-  return `<div class="invoice-folders">${body || '<p class="notice">אין חשבוניות שמתאימות לסינון בתיקייה הזאת.</p>'}</div>`;
+  return `<div class="invoice-folders ${!path.supplierId && body ? "folder-list" : ""}">${body || '<p class="notice">אין חשבוניות שמתאימות לסינון בתיקייה הזאת.</p>'}</div>`;
 }

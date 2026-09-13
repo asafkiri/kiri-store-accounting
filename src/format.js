@@ -59,12 +59,11 @@ export const types = {
   delivery: "תעודת משלוח",
   receipt: "קבלה",
 };
-// The number is no longer typed during intake, so every screen names a document
-// by what it is and adds the number only when there is one. It stays printed on
-// the paper and on the photograph either way.
+// Blank document numbers are normal. Keep existing numbers for legacy records
+// and exports without labelling every new invoice as missing a detail.
 export const invoiceLabel = (invoice) =>
   (types[invoice?.documentType] || "חשבונית") +
-  (invoice?.documentNumber?.trim() ? " " + invoice.documentNumber.trim() : " ללא מספר");
+  (invoice?.documentNumber?.trim() ? " " + invoice.documentNumber.trim() : "");
 export const escapeHtml = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -73,9 +72,33 @@ export const escapeHtml = (value) =>
         c
       ],
   );
+function matchesDate(value, term) {
+  if (!value) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const iso = term.match(/^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?$/);
+  if (iso) return Number(iso[1]) === year && Number(iso[2]) === month && (!iso[3] || Number(iso[3]) === day);
+  const local = term.match(/^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{4}|\d{2}))?$/);
+  if (local) return Number(local[1]) === day && Number(local[2]) === month &&
+    (!local[3] || Number(local[3]) === (local[3].length === 2 ? year % 100 : year));
+  return /^\d{4}$/.test(term) && Number(term) === year;
+}
+const searchText = value => String(value ?? "").normalize("NFKC").replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").toLocaleLowerCase("he");
+function matchesSearch(invoice, terms, supplierName) {
+  const text = searchText([supplierName, invoice.notes].join(" "));
+  return terms.every(term => {
+    if (matchesDate(invoice.invoiceDate, term)) return true;
+    // Numeric terms match shekel amounts exactly, never an unrelated substring
+    // of agorot or a document number. Both the printed and payable total count.
+    if (/^-?[\d,.]+$/.test(term)) {
+      try { const amount = parseMoney(term); return [invoice.finalAgorot, invoice.totalAgorot].includes(amount); }
+      catch { return false; }
+    }
+    return text.includes(term);
+  });
+}
 export function filterInvoices(items, f, suppliers) {
   const names = new Map(suppliers.map((s) => [s.id, s.name]));
-  const q = (f.q || "").trim().toLocaleLowerCase("he");
+  const terms = searchText(f.q).replace(/₪/g, "").trim().split(/\s+/).filter(Boolean);
   return items
     .filter(
       (i) =>
@@ -86,11 +109,7 @@ export function filterInvoices(items, f, suppliers) {
         (!f.supplierId || i.supplierId === f.supplierId) &&
         (!f.status || i.status === f.status) &&
         (!f.method || i.payment?.method === f.method) &&
-        (!q ||
-          [names.get(i.supplierId), i.documentNumber, i.notes, i.payment?.method === "check" ? i.payment.checkNumber : ""]
-            .join(" ")
-            .toLocaleLowerCase("he")
-            .includes(q)),
+        matchesSearch(i, terms, names.get(i.supplierId)),
     )
     .sort(
       (a, b) =>

@@ -1,7 +1,7 @@
 import { previewDocument } from "./preview.js";
 import { shareDocuments } from "./document-sharing.js";
 import { createNavigation } from "./navigation.js";
-import { invoiceDetails, attachmentRows, retentionNote } from "./invoice-details.js";
+import { invoiceDetails, attachmentRows, attachmentRemovalRows, retentionNote } from "./invoice-details.js";
 import {
   initializeAuth,
   onAuthStateChanged,
@@ -252,6 +252,11 @@ function navigate(route, { reset = false } = {}) {
 }
 function bindShell() {
   const root = $("#app");
+  const invoiceOptions = $(".invoice-options");
+  const rememberOptions = () => {
+    if (invoiceOptions?.isConnected) ctx.filters.optionsOpen = invoiceOptions.open;
+  };
+  if (invoiceOptions) invoiceOptions.ontoggle = rememberOptions;
   root.onclick = async (ev) => {
     const nav = ev.target.closest("[data-route]");
     if (nav) {
@@ -270,6 +275,7 @@ function bindShell() {
   };
   for (const el of root.querySelectorAll(".filters input,.filters select"))
     el.onchange = () => {
+      rememberOptions();
       ctx.filters[el.name] = el.value;
       if (el.name === "month") {
         ctx.filters.from = "";
@@ -285,6 +291,7 @@ function bindShell() {
   const search = $("#invoice-search") || $("#supplier-search") || $("#check-search");
   if (search)
     search.oninput = () => {
+      rememberOptions();
       ctx.filters.q = search.value;
       ctx.limit = 80;
       const pos = search.selectionStart;
@@ -381,12 +388,22 @@ async function action(type, data = {}) {
       ctx.render();
       break;
     case "open-unpaid":
-      navigation.remember();
-      ctx.filters = { status: "unpaid" };
-      ctx.folderPath = {};
+      navigation.visit(() => {
+        ctx.filters = { status: "unpaid", view: "list" };
+        ctx.folderPath = {};
+        ctx.limit = 80;
+        ctx.render();
+        window.scrollTo(0, 0);
+      });
+      return;
+    case "archive":
+      return navigation.back(() => { ctx.filters = {}; ctx.folderPath = {}; ctx.render(); });
+    case "clear-search":
+      ctx.filters.q = "";
       ctx.limit = 80;
       ctx.render();
-      break;
+      $("#invoice-search,#supplier-search,#check-search")?.focus({ preventScroll: true });
+      return;
     case "period-mode": {
       if (data.value === "range") {
         const range = monthRange(ctx.filters.month || today().slice(0, 7));
@@ -608,7 +625,7 @@ async function simpleMutation(actionName, record) {
 }
 function detail(i) {
   const supplier = ctx.data.suppliers.find((s) => s.id === i.supplierId);
-  const root = ctx.dialog(invoiceLabel(i), invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
+  const root = ctx.dialog("פרטי החשבונית", invoiceDetails(i, supplier, { retentionDays: ctx.retentionDays }));
   root.classList.add("invoice-detail-modal");
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-detail-action]");
@@ -629,8 +646,8 @@ function documentList(invoiceId) {
   if (!i) return;
   const supplier = ctx.data.suppliers.find(s => s.id === i.supplierId);
   const files = i.attachmentIds || [];
-  const root = ctx.dialog("צילומי " + invoiceLabel(i),
-    `<button class="secondary" data-close-modal>חזרה לחשבוניות</button><p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${retentionNote(ctx.retentionDays)}`);
+  const root = ctx.dialog("צילומי החשבונית",
+    `<p>${e(supplier?.name || "ספק")} · ${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</p><div class="attachment-links">${attachmentRows(i, index => "פתח עמוד / קובץ " + (index + 1))}</div>${files.length ? `<button class="primary" data-share-this-invoice>${icon("share")} שתף את כל קבצי החשבונית</button>` : '<p class="notice">לא נשאר צילום בחשבונית הזאת.</p>'}<button class="text-button" data-invoice-details>פרטי החשבונית והתשלום</button>${files.length ? `<details class="document-actions"><summary>פעולות נוספות</summary><div class="invoice-more-actions">${attachmentRemovalRows(i)}</div></details>` : ""}${retentionNote(ctx.retentionDays)}`);
   if (files.length)
     $("[data-share-this-invoice]", root).onclick = () => shareDocuments(ctx, { invoiceId: i.id });
   $("[data-invoice-details]", root).onclick = () => detail(i);

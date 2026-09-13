@@ -11,7 +11,6 @@ import {
   types,
   filterInvoices,
   totals,
-  invoiceLabel,
 } from "./format.js";
 const act = (action, label, cls = "primary", glyph = "plus", extra = "") =>
   `<button class="${cls}" data-action="${action}" ${extra}>${glyph ? icon(glyph) : ""}${e(label)}</button>`;
@@ -51,7 +50,9 @@ export function invoiceCards(items, ctx) {
       .map((i) => {
         const name =
           ctx.data.suppliers.find((s) => s.id === i.supplierId)?.name || "ספק";
-        return `<article class="invoice-card status-${i.status === "paid" ? "paid" : "unpaid"}"><button class="invoice-main" data-action="detail" data-id="${e(i.id)}"><div><span class="supplier-name">${e(name)}</span><span class="document-meta">${e(invoiceLabel(i))} · ${e(displayDate(i.invoiceDate))}</span>${i.attachmentIds?.length ? `<span class="document-meta">${i.attachmentIds.length === 1 ? "מסמך מצורף" : i.attachmentIds.length + " מסמכים מצורפים"}</span>` : ""}${i.payment?.method === "check" ? `<span class="check-reference">צ׳ק ${e(i.payment.checkNumber || "ללא מספר")} · נמסר ${e(displayDate(i.payment.paymentDate))}${i.payment.checkDueDate ? " · פירעון " + e(displayDate(i.payment.checkDueDate)) : ""}</span>` : ""}${creditSignIssues(i).length ? '<span class="badge unpaid">זיכוי דורש תיקון</span>' : ""}${i.notes ? `<span class="invoice-note">${e(i.notes)}</span>` : ""}</div><strong class="amount">${e(money(i.finalAgorot))}</strong></button><div class="invoice-bottom"><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? icon("check") + "שולם · " + e(methods[i.payment?.method] || "") : "לא שולם"}</span>${i.attachmentIds?.length ? act("documents", "צילומי החשבונית", "text-button attachment-shortcut", "image", `data-id="${e(i.id)}"`) : ""}${i.status === "paid" ? `<span class="muted small">${e(displayDate(i.payment?.paymentDate))}</span>` : act("pay", "סמן כשולם", "pay-button", "check", `data-id="${e(i.id)}"`)}</div></article>`;
+        const inSupplier = ctx.folderPath?.supplierId === i.supplierId;
+        const paid = i.status === "paid";
+        return `<article class="invoice-card status-${paid ? "paid" : "unpaid"}"><button class="invoice-main" data-action="detail" data-id="${e(i.id)}" aria-label="פתח ${e(types[i.documentType] || "חשבונית")} של ${e(name)}, ${e(displayDate(i.invoiceDate))}, ${e(money(i.finalAgorot))}, ${paid ? "שולם" : "לא שולם"}"><span class="invoice-identity"><span class="supplier-name">${e(inSupplier ? displayDate(i.invoiceDate) : name)}</span>${!inSupplier ? `<span class="document-meta">${e(displayDate(i.invoiceDate))}</span>` : ""}${i.documentType && i.documentType !== "invoice" ? `<span class="document-meta">${e(types[i.documentType])}</span>` : ""}${i.attachmentIds?.length ? `<span class="document-meta attachment-indicator">${icon("image")}${i.attachmentIds.length === 1 ? "מסמך מצורף" : i.attachmentIds.length + " מסמכים מצורפים"}</span>` : ""}${ctx.route === "checks" && i.payment?.method === "check" ? `<span class="check-reference">צ׳ק ${e(i.payment.checkNumber || "ללא מספר")} · נמסר ${e(displayDate(i.payment.paymentDate))}</span>` : ""}${creditSignIssues(i).length ? '<span class="badge unpaid">זיכוי דורש תיקון</span>' : ""}</span><span class="invoice-values"><strong class="amount">${e(money(i.finalAgorot))}</strong><span class="badge ${paid ? "paid" : "unpaid"}">${paid ? icon("check") + "שולם" : "לא שולם"}</span></span>${icon("arrow")}</button></article>`;
       })
       .join("") +
     (items.length > ctx.limit
@@ -59,25 +60,26 @@ export function invoiceCards(items, ctx) {
       : "")
   );
 }
-function filters(ctx, { status = false, period = true } = {}) {
+function filters(ctx, { status = false, period = true, invoiceActions = false } = {}) {
   const f = ctx.filters;
-  return `<details class="filter-panel" ${f.supplierId || f.method || (status && f.status) || (period && (f.from || f.to || f.month)) ? "open" : ""}><summary>${period ? "אפשרויות סינון נוספות" : "סינון לפי ספק או תשלום"}</summary><div class="filters advanced-filters">${period ? field("חודש מסוים", "month", f.month || "", { type: "month" }) + `<div class="date-range">${field("מתאריך", "from", f.from || "", { type: "date" })}${field("עד תאריך", "to", f.to || "", { type: "date" })}</div>` : ""}${select("ספק", "supplierId", f.supplierId || "", { "": "כל הספקים", ...Object.fromEntries(ctx.data.suppliers.filter(s => !s.deletedAt).map(s => [s.id, s.name])) })}${select("אמצעי תשלום", "method", f.method || "", { "": "כל האמצעים", ...methods })}${status ? select("מצב", "status", f.status || "", { "": "הכול", paid: "שולם", unpaid: "לא שולם" }) : ""}<button class="text-button" data-action="clear-filters">נקה סינון</button></div></details>`;
+  const active = f.supplierId || f.method || f.status || (period && (f.from || f.to || f.month));
+  return `<details class="filter-panel ${invoiceActions ? "invoice-options" : ""}" ${(invoiceActions ? f.optionsOpen : active) ? "open" : ""}><summary>${invoiceActions ? "אפשרויות נוספות" : period ? "אפשרויות סינון נוספות" : "סינון לפי ספק או תשלום"}${invoiceActions && active ? '<span class="filter-active">סינון פעיל</span>' : ""}</summary>${invoiceActions ? `<div class="invoice-options-actions">${act("invoice", "הוספה ידנית", "secondary", "plus")}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}<button class="text-button" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>${act("refresh", "רענן נתונים", "text-button", "refresh")}</div><h2 class="filter-title">סינון החשבוניות</h2>` : ""}<div class="filters advanced-filters">${period ? field("חודש מסוים", "month", f.month || "", { type: "month" }) + `<div class="date-range">${field("מתאריך", "from", f.from || "", { type: "date" })}${field("עד תאריך", "to", f.to || "", { type: "date" })}</div>` : ""}${select("ספק", "supplierId", f.supplierId || "", { "": "כל הספקים", ...Object.fromEntries(ctx.data.suppliers.filter(s => !s.deletedAt).map(s => [s.id, s.name])) })}${select("אמצעי תשלום", "method", f.method || "", { "": "כל האמצעים", ...methods })}${status ? select("מצב", "status", f.status || "", { "": "הכול", paid: "שולם", unpaid: "לא שולם" }) : ""}<button class="text-button" data-action="clear-filters">נקה סינון</button></div></details>`;
 }
-const searchBox = (ctx, id, label) => `<label class="search">${icon("search")}<input id="${id}" placeholder="${label}" value="${e(ctx.filters.q || "")}" aria-label="${label}"></label>`;
+const searchBox = (ctx, id, label) => `<div class="search">${icon("search")}<input id="${id}" placeholder="${label}" value="${e(ctx.filters.q || "")}" aria-label="${label}">${ctx.filters.q ? `<button class="icon-button clear-search" data-action="clear-search" aria-label="נקה חיפוש">${icon("close")}</button>` : ""}</div>`;
 export function invoicesView(ctx) {
   const f = ctx.filters, path = ctx.folderPath || {}, inFolder = Boolean(path.month);
+  const searching = Boolean(f.q?.trim()), direct = searching || f.view === "list";
   const items = filterInvoices(ctx.data.invoices, { ...f, ...(path.month ? { month: path.month } : {}), ...(path.supplierId ? { supplierId: path.supplierId } : {}) }, ctx.data.suppliers);
   const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
   const openTotals = totals(allOpen), itemTotals = totals(items);
-  return `<div class="page-heading"><div><h1>חשבוניות</h1></div>${act("refresh", "רענן", "icon-button", "refresh", 'aria-label="רענן נתונים"')}</div>
-    ${!inFolder ? `<section class="invoice-entry" aria-label="הוספת חשבונית"><button class="primary scan-primary" data-action="scan">${icon("camera")}<span><strong>צלם חשבונית</strong><small>המצלמה נפתחת בלחיצה</small></span>${icon("plus")}</button><div class="entry-secondary">${act("invoice", "הוספה ידנית", "text-button", null)}${act("manage-suppliers", "ניהול ספקים", "text-button", "suppliers")}</div></section>` : ""}
+  return `${inFolder ? folderLocation(ctx) : `<div class="page-heading"><h1>${f.view === "list" ? "חשבוניות בכל החודשים" : "חשבוניות"}</h1></div>`}
+    ${searchBox(ctx, "invoice-search", "חפש ספק, תאריך או סכום")}
     ${draftReminders(ctx)}
-    ${!inFolder ? `<button class="payable-summary" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים</small></span><strong>${e(summaryMoney(openTotals.final))}</strong>${icon("arrow")}</button><button class="secondary check-search-link" data-route="checks">${icon("search")} חיפוש צ׳ק — למי הוא נמסר?</button>` : ""}
-    ${folderLocation(ctx)}
-    ${!inFolder ? '<div class="section-label browser-heading"><h2>בחר תיקיית חודש</h2></div>' : ""}
-    ${statusTabs(f.status)}${searchBox(ctx, "invoice-search", "חפש ספק, חשבונית או צ׳ק")}${filters(ctx)}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
-    <div class="list-heading"><span>${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>
-    ${items.length || inFolder ? invoiceFolders(items, ctx, invoiceCards) : empty(f.q || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", f.q || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "סרוק חשבונית, בדוק את הפרטים ושמור. היא תופיע בחודש ובספק המתאימים.", f.q || f.month || f.supplierId || f.status ? act("clear-filters", "הצג את כל החשבוניות", "secondary", null) : "")}`;
+    ${!inFolder && !direct ? `<button class="payable-summary payable-compact" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים · ${e(summaryMoney(openTotals.final))}</small></span>${icon("arrow")}</button>` : ""}
+    ${path.supplierId || direct ? statusTabs(f.status) : ""}
+    ${filters(ctx, { invoiceActions: true, status: !path.supplierId && !direct })}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
+    ${direct || path.supplierId ? `<div class="list-heading" role="status"><span>${searching ? "תוצאות חיפוש · " : ""}${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>` : ""}
+    ${items.length || (inFolder && !direct) ? direct ? `<div class="invoice-list">${invoiceCards(items, ctx)}</div>` : invoiceFolders(items, ctx, invoiceCards) : empty(searching || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", searching || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "צלם חשבונית ממסך הבית, מלא את הפרטים ושמור.", searching || f.month || f.supplierId || f.status ? act("clear-filters", "נקה חיפוש וסינון", "secondary", null) : "")}`;
 }
 export function suppliersView(ctx) {
   const q = (ctx.filters.q || "").toLowerCase();
@@ -95,13 +97,13 @@ export function supplierTrashView(ctx) {
 }
 export function documentsView(ctx) {
   const path = ctx.folderPath || {};
+  const searching = Boolean(ctx.filters.q?.trim());
   const items = filterInvoices(ctx.data.invoices, { ...ctx.filters, ...(path.month ? { month: path.month } : {}), ...(path.supplierId ? { supplierId: path.supplierId } : {}) }, ctx.data.suppliers).filter(i => i.attachmentIds?.length);
   const monthInvoices = path.month ? ctx.data.invoices.filter(i => !i.deletedAt && i.invoiceDate?.startsWith(path.month) && i.attachmentIds?.length) : [];
-  return `<div class="page-heading"><h1>צילומי חשבוניות</h1>${!path.month ? act("scan", "צלם", "secondary", "camera") : ""}</div>
-    ${folderLocation(ctx)}${!path.month ? '<p class="page-intro">בחר חודש, אחר כך ספק וחשבונית. מתוך החודש אפשר לשתף את כל הצילומים עם רואה החשבון.</p>' : ""}
+  return `${path.month ? folderLocation(ctx) : `<div class="page-heading"><h1>צילומי חשבוניות</h1>${act("scan", "צלם", "secondary", "camera")}</div><p class="page-intro">בחר חודש לשליחה לרואה החשבון.</p>`}
     ${path.month && monthInvoices.length ? `<section class="month-share"><strong>שליחה לרואה החשבון</strong><p>${monthInvoices.length} חשבוניות עם צילומים · כל הספקים בחודש ${e(monthLabel(path.month))}</p>${act("share-month", "שתף את כל צילומי החודש", "primary", "share", `data-month="${e(path.month)}"`)}</section>` : ""}
-    ${searchBox(ctx, "invoice-search", "חפש ספק או מספר חשבונית")}<div class="list-heading"><span>${items.length} חשבוניות עם צילומים בתצוגה</span></div>
-    ${items.length || path.month ? invoiceFolders(items, ctx, documentCards, { photos: true }) : empty("אין עדיין צילומי חשבוניות בתצוגה", ctx.filters.q ? "נסה שם ספק או מספר חשבונית אחר." : "אחרי סריקה, בדיקת הפרטים ושמירת החשבונית — הצילומים שלה יופיעו כאן.")}`;
+    ${searchBox(ctx, "invoice-search", "חפש ספק, תאריך או סכום")}<div class="list-heading"><span>${items.length} חשבוניות עם צילומים בתצוגה</span></div>
+    ${items.length || (path.month && !searching) ? searching ? `<div class="invoice-list">${documentCards(items, ctx)}</div>` : invoiceFolders(items, ctx, documentCards, { photos: true }) : empty(searching ? "לא נמצאו צילומים שמתאימים לחיפוש" : "אין עדיין צילומי חשבוניות בתצוגה", searching ? "נסה ספק, תאריך או סכום אחר." : "אחרי צילום, מילוי הפרטים ושמירת החשבונית — הצילומים שלה יופיעו כאן.")}`;
 }
 export function checksView(ctx) {
   const q = (ctx.filters.q || "").trim().replace(/\s/g, "").toLowerCase();
@@ -218,5 +220,8 @@ export function shell(ctx) {
     ["more", "עוד אפשרויות", "settings"],
   ];
   const selected = ["home", "more"].includes(ctx.route) ? ctx.route : null;
-  return `<div class="app-shell" data-section="${e(ctx.route)}" data-paid-color="${e(ctx.paidColor || "green")}"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${selected === route ? "active" : ""}" ${selected === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav></aside><div class="workspace"><header class="topbar">${ctx.route === "home" ? '<span class="topbar-brand">החשבונות של החנות</span>' : `<button class="secondary app-back" data-action="back">חזור</button><button class="secondary" data-route="home">${icon("home")} בית</button>`}<span id="connection-status" class="connection" role="status">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
+  const inFolder = ["invoices", "documents"].includes(ctx.route) && ctx.folderPath?.month;
+  const inList = ctx.route === "invoices" && !inFolder && ctx.filters.view === "list";
+  const backLabel = inFolder ? (ctx.folderPath.supplierId ? "חזרה לספקים" : "חזרה לחודשים") : inList ? "חזרה לחודשים" : "חזור";
+  return `<div class="app-shell" data-section="${e(ctx.route)}" data-paid-color="${e(ctx.paidColor || "green")}"><aside class="sidebar"><div class="brand"><span class="brand-mark">ק</span><span>החשבונות<br><strong>של החנות</strong></span></div><nav aria-label="ניווט ראשי">${nav.map(([route, label, glyph]) => `<button data-route="${route}" class="${selected === route ? "active" : ""}" ${selected === route ? 'aria-current="page"' : ""}>${icon(glyph)}<span>${label}</span></button>`).join("")}</nav></aside><div class="workspace"><header class="topbar">${ctx.route === "home" ? '<span class="topbar-brand">החשבונות של החנות</span>' : `<button class="secondary app-back" data-action="${inFolder ? "folder-back" : inList ? "archive" : "back"}">${backLabel}</button><button class="secondary" data-route="home">${icon("home")} בית</button>`}<span id="connection-status" class="connection" role="status">${ctx.loading ? "טוען…" : navigator.onLine ? "" : "אין חיבור לרשת"}</span></header>${ctx.draftWarning ? `<p class="notice warning" role="status">${e(ctx.draftWarning)}</p>` : ""}<main id="main" tabindex="-1">${content}</main><footer class="workspace-footer">${ctx.lastRefresh ? "נטען מהשרת · " + new Date(ctx.lastRefresh).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" }) : "ממתין לטעינת הנתונים"}</footer></div></div>`;
 }
