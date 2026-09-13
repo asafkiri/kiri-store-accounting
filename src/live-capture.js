@@ -1,14 +1,15 @@
 import { $ } from "./ui.js";
 import { imageWorker } from "./image-worker.js";
 import { validateFile } from "./image-upload.js";
-import { DISPLAY_CONFIDENCE, LOCK_CONFIDENCE } from "./scan-worker.js";
+import { DISPLAY_CONFIDENCE } from "./scan-worker.js";
+import { captureStability } from "./capture-stability.js";
 
 // Live camera view: getUserMedia inside the app, document detection on small
 // frames in the worker, a polygon like the phone's own scanner, and automatic
 // capture once the page holds still. The full frame is handed over as a File
 // with a hint, so the review screen refines instead of re-detecting.
 // Frames never leave the device and nothing is stored until the page is approved.
-const DETECT_EDGE = 320, DETECT_INTERVAL = 100, POLYGON_FRAMES = 2, LOCK_FRAMES = 6, LOCK_JITTER = .015, LOCK_AREA = .2;
+const DETECT_EDGE = 320, DETECT_INTERVAL = 100, POLYGON_FRAMES = 2, CAPTURE_EDGE = 3000;
 const MIN_LONG_EDGE = 1600, OPEN_TIMEOUT = 3000, IDLE_TIMEOUT = 90_000, HOLD_FRAMES = 3, BORDER_HINT_MS = 3000, NO_DOCUMENT_HINT_MS = 4000;
 export const HINTS = {
   opening: "פותח מצלמה…",
@@ -16,6 +17,9 @@ export const HINTS = {
   small: "קרב את הטלפון לתעודה",
   border: "הרחק מעט את הטלפון, שכל התעודה תיראה במסך",
   settling: "החזק את הטלפון יציב",
+  ready: "התעודה זוהתה — מצלם אוטומטית בעוד רגע",
+  uncertain: "כוון את המסגרת אל הדף, או לחץ לצילום",
+  focusing: "ממתין למיקוד. אפשר גם ללחוץ לצילום",
   locked: "מצלם…",
   noDocument: "לא נמצאה תעודה. אפשר ללחוץ על כפתור הצילום למטה",
   borderLong: "התעודה לא נכנסת כולה? הרחק מעט את הטלפון, או לחץ על כפתור הצילום למטה ונשמור את מה שנראה",
@@ -28,7 +32,6 @@ export const liveCameraSupported = () => Boolean(navigator.mediaDevices?.getUser
 let liveCameraUnavailable = false;
 export const isLiveCameraUnavailable = () => liveCameraUnavailable;
 export const markLiveCameraUnavailable = () => { liveCameraUnavailable = true; };
-const polygonArea = points => Math.abs(points.reduce((s, p, i) => { const q = points[(i + 1) % points.length]; return s + p.x * q.y - q.x * p.y; }, 0)) / 2;
 const median = values => { const sorted = [...values].sort((a, b) => a - b); return sorted[sorted.length >> 1]; };
 
 export function liveCapture(ctx, root, options = {}) {
@@ -42,11 +45,12 @@ export function liveCapture(ctx, root, options = {}) {
       <div class="live-stage"><div class="live-frame" data-live-frame>
         <video data-live-video playsinline autoplay muted></video>
         <canvas data-live-frozen hidden></canvas>
-        <svg class="live-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon data-live-polygon points="" fill="rgba(56,132,255,.28)" stroke="#4d9cff" stroke-width="2" vector-effect="non-scaling-stroke" hidden></polygon></svg>
+        <svg class="live-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon data-live-polygon points="" fill="rgba(56,132,255,.08)" stroke="#4d9cff" stroke-width="2" vector-effect="non-scaling-stroke" hidden></polygon></svg>
         <div class="live-overlay" data-live-paused hidden><p>${HINTS.paused}</p><button type="button" class="primary" data-live-resume>הקש להפעלת המצלמה</button></div>
         <div class="live-overlay" data-live-unavailable hidden><p>${HINTS.unavailable}</p><label class="primary upload-label">צלם עם מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-fallback hidden></label></div>
         <pre class="live-debug" data-live-debug ${debug ? "" : "hidden"}></pre>
       </div></div>
+      <div class="live-progress" aria-hidden="true"><span data-live-progress></span></div>
       <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>
       ${options.alternatives ? '<div class="live-alternatives"><label class="text-button upload-label">בחר PDF / תמונה<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-live-gallery hidden></label><button type="button" class="text-button" data-live-manual>הקלד חשבונית ידנית</button></div>' : ""}`;
     if (scanView) scanView.hidden = true;
@@ -58,22 +62,28 @@ export function liveCapture(ctx, root, options = {}) {
     const frame = $("[data-live-frame]", view), stage = $(".live-stage", view), polygon = $("[data-live-polygon]", view);
     const paused = $("[data-live-paused]", view), unavailable = $("[data-live-unavailable]", view), shutter = $("[data-live-shutter]", view);
     const debugBox = $("[data-live-debug]", view);
+    const progressBar = $("[data-live-progress]", view), stability = captureStability();
     const small = document.createElement("canvas"), smallPen = small.getContext("2d", { willReadFrequently: true });
     let worker = options.worker || null, stream = null, tracks = [], disposed = false, running = false, capturing = false;
-    let inFlight = false, lastDetect = 0, frameSize = null, smoothed = null, missed = 0, shown = 0, window_ = [], wakeLock = null;
+    let inFlight = false, lastDetect = 0, frameSize = null, smoothed = null, missed = 0, shown = 0, wakeLock = null;
     let idleTimer = null, borderSince = 0, noneSince = 0, resolvedOnce = false, unavailableShown = false, frameLoop = null, openTimer = null;
     // start() is re-entrant only through its guards: `starting` blocks a second
     // tap while the camera opens, and release() bumps `openSession` so an
     // in-flight start() abandons a stream that was paused or disposed meanwhile.
-    let starting = false, openSession = 0;
+    let starting = false, openSession = 0, waitingForFocus = false;
     const timings = [];
     const setStatus = text => { if (status.textContent !== text) status.textContent = text; };
+    const setProgress = progress => {
+      progressBar.style.transform = `scaleX(${progress})`;
+      polygon.setAttribute("stroke", progress > 0 ? "#5de0ad" : "#4d9cff");
+    };
     // SVG elements have no `hidden` property; the attribute drives the CSS.
     const showPolygon = visible => polygon.toggleAttribute("hidden", !visible);
     const stopFrameLoop = () => { if (frameLoop && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(frameLoop); else if (frameLoop) cancelAnimationFrame(frameLoop); frameLoop = null; };
     const stopTracks = () => { for (const track of tracks) { try { track.stop(); } catch { /* already ended */ } } tracks = []; stream = null; video.srcObject = null; };
     const release = () => {
       running = false; openSession++; stopFrameLoop(); stopTracks();
+      stability.reset(); setProgress(0);
       clearTimeout(idleTimer); clearTimeout(openTimer); idleTimer = openTimer = null;
       small.width = small.height = 0;
       wakeLock?.release?.().catch(() => {}); wakeLock = null;
@@ -117,7 +127,7 @@ export function liveCapture(ctx, root, options = {}) {
       release(); paused.hidden = false; showPolygon(false); shutter.disabled = true;
       setStatus(HINTS.paused);
     };
-    const resetTracking = () => { smoothed = null; missed = 0; shown = 0; window_ = []; showPolygon(false); borderSince = 0; noneSince = 0; };
+    const resetTracking = () => { smoothed = null; missed = 0; shown = 0; waitingForFocus = false; stability.reset(); setProgress(0); showPolygon(false); borderSince = 0; noneSince = 0; };
     const updateDebug = (ms, result) => {
       if (debugBox.hidden) return;
       timings.push(ms); if (timings.length > 50) timings.shift();
@@ -131,8 +141,10 @@ export function liveCapture(ctx, root, options = {}) {
       if (disposed || !running || capturing) return;
       const detected = result.corners && result.confidence >= DISPLAY_CONFIDENCE;
       const now = performance.now();
+      const lock = stability.update(result, now, { width: video.videoWidth, height: video.videoHeight });
+      setProgress(waitingForFocus ? 0 : lock.progress);
       if (!detected) {
-        window_ = []; shown = 0; missed++;
+        shown = 0; missed++;
         if (missed > HOLD_FRAMES) { showPolygon(false); smoothed = null; }
         borderSince = 0;
         if (!noneSince) noneSince = now;
@@ -144,22 +156,15 @@ export function liveCapture(ctx, root, options = {}) {
       const close = smoothed && corners.every((p, i) => Math.hypot(p.x - smoothed[i].x, p.y - smoothed[i].y) <= .03);
       smoothed = close ? smoothed.map((p, i) => ({ x: p.x + (corners[i].x - p.x) * .5, y: p.y + (corners[i].y - p.y) * .5 })) : corners.map(p => ({ ...p }));
       if (shown >= POLYGON_FRAMES) drawPolygon(smoothed);
-      const area = polygonArea(corners);
-      if (result.borderSides > 0) {
-        window_ = [];
+      if (lock.state === "border") {
         if (!borderSince) borderSince = now;
         setStatus(now - borderSince >= BORDER_HINT_MS ? HINTS.borderLong : HINTS.border);
         return;
       }
       borderSince = 0;
-      if (area < LOCK_AREA) { window_ = []; setStatus(HINTS.small); return; }
-      if (result.confidence < LOCK_CONFIDENCE) { window_ = []; setStatus(HINTS.settling); return; }
-      window_.push(corners);
-      if (window_.length > LOCK_FRAMES) window_.shift();
-      const centre = [0, 1, 2, 3].map(i => ({ x: median(window_.map(q => q[i].x)), y: median(window_.map(q => q[i].y)) }));
-      const steady = window_.every(q => q.every((p, i) => Math.hypot(p.x - centre[i].x, p.y - centre[i].y) <= LOCK_JITTER));
-      if (!steady) { window_ = [corners]; setStatus(HINTS.settling); return; }
-      if (window_.length < LOCK_FRAMES) { setStatus(HINTS.settling); return; }
+      if (lock.state === "small") { setStatus(HINTS.small); return; }
+      if (lock.state === "uncertain") { setStatus(HINTS.uncertain); return; }
+      if (lock.state !== "ready") { setStatus(waitingForFocus ? HINTS.focusing : lock.progress ? HINTS.ready : HINTS.settling); return; }
       void capture({ corners, polarity: result.polarity, frame: { width: video.videoWidth, height: video.videoHeight } });
     };
     const detectFrame = async () => {
@@ -175,8 +180,11 @@ export function liveCapture(ctx, root, options = {}) {
       let image;
       try { image = smallPen.getImageData(0, 0, small.width, small.height); } catch { return; }
       inFlight = true; lastDetect = now;
+      const session = openSession;
       try {
         const result = await worker.request("detect", { image }, 5000);
+        // A worker reply from before pause/resume or a rotation is obsolete.
+        if (session !== openSession || vw !== video.videoWidth || vh !== video.videoHeight) return;
         updateDebug(performance.now() - now, result);
         handleResult(result);
       } catch {
@@ -188,37 +196,44 @@ export function liveCapture(ctx, root, options = {}) {
       frameLoop = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(step) : requestAnimationFrame(step);
     };
     const captureFrame = () => new Promise((done, fail) => {
-      // Grab the frame at presentation time, at the track's own resolution.
-      const grab = () => {
-        try {
-          const vw = video.videoWidth, vh = video.videoHeight;
-          const full = document.createElement("canvas"); full.width = vw; full.height = vh;
-          const pen = full.getContext("2d"); pen.drawImage(video, 0, 0, vw, vh);
-          full.toBlob(blob => { full.width = full.height = 0; blob ? done(blob) : fail(Error("Capture failed")); }, "image/jpeg", .92);
-        } catch (error) { fail(error); }
-      };
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(grab); else requestAnimationFrame(grab);
+      // Encode the exact frozen image. Waiting for a different video frame
+      // after showing "captured" could save a blur as the user moves the phone.
+      frozen.toBlob(blob => blob ? done(blob) : fail(Error("Capture failed")), "image/jpeg", .94);
     });
     const capture = async hint => {
       if (disposed || capturing || !running) return;
-      capturing = true; shutter.disabled = true; setStatus(HINTS.locked);
-      if (hint) { polygon.setAttribute("fill", "rgba(56,132,255,.45)"); drawPolygon(hint.corners); }
-      // Freeze what the user sees before the encoder runs.
-      try {
-        frozen.width = video.videoWidth; frozen.height = video.videoHeight;
-        frozen.getContext("2d").drawImage(video, 0, 0); frozen.hidden = false;
-      } catch { /* keep the live video visible */ }
+      const session = openSession;
+      capturing = true; shutter.disabled = true;
       stopFrameLoop();
       try {
+        const vw = video.videoWidth, vh = video.videoHeight, scale = Math.min(1, CAPTURE_EDGE / Math.max(vw, vh));
+        frozen.width = Math.round(vw * scale); frozen.height = Math.round(vh * scale);
+        frozen.getContext("2d").drawImage(video, 0, 0, frozen.width, frozen.height);
+        if (hint && worker) {
+          const qualityScale = Math.min(1, 640 / Math.max(frozen.width, frozen.height));
+          small.width = Math.round(frozen.width * qualityScale); small.height = Math.round(frozen.height * qualityScale);
+          smallPen.drawImage(frozen, 0, 0, small.width, small.height);
+          const quality = await worker.request("quality", { image: smallPen.getImageData(0, 0, small.width, small.height), points: hint.corners }, 5000);
+          if (disposed || session !== openSession) return;
+          if (!quality.sharp) {
+            capturing = false; frozen.width = frozen.height = 0; stability.reset(); setProgress(0);
+            waitingForFocus = true;
+            shutter.disabled = false; setStatus(HINTS.focusing); scheduleFrames(); return;
+          }
+        }
+        waitingForFocus = false; frozen.hidden = false; setProgress(hint ? 1 : 0); setStatus(HINTS.locked);
+        if (hint) drawPolygon(hint.corners);
         const blob = await captureFrame();
-        if (disposed) return;
+        if (disposed || session !== openSession) return;
         const file = new File([blob], `capture-${Date.now()}.jpg`, { type: "image/jpeg" });
         validateFile(file);
         const handedWorker = worker; worker = null;
         finish({ file, hint, worker: handedWorker });
       } catch {
+        if (disposed || session !== openSession) return;
         capturing = false; frozen.hidden = true; frozen.width = frozen.height = 0;
-        polygon.setAttribute("fill", "rgba(56,132,255,.28)"); resetTracking();
+        if (worker?.stopped) worker = imageWorker();
+        resetTracking();
         shutter.disabled = false; setStatus(HINTS.none);
         if (!disposed) scheduleFrames();
       }
@@ -254,7 +269,15 @@ export function liveCapture(ctx, root, options = {}) {
           if (!current()) return;
           if (Math.max(video.videoWidth, video.videoHeight) < MIN_LONG_EDGE) { showUnavailable(); return; }
         }
-        try { await tracks[0].applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch { /* not every camera exposes focus */ }
+        // Request only controls the camera advertises, so unsupported optional
+        // exposure/white balance settings cannot prevent focusing.
+        let capabilities = {};
+        try { capabilities = tracks[0].getCapabilities?.() || {}; } catch { /* optional camera controls */ }
+        const continuous = Object.fromEntries(["focusMode", "exposureMode", "whiteBalanceMode"]
+          .filter(name => capabilities[name]?.includes("continuous")).map(name => [name, "continuous"]));
+        if (Object.keys(continuous).length) {
+          try { await tracks[0].applyConstraints({ advanced: [continuous] }); } catch { /* keep camera defaults */ }
+        }
         if (!current()) return;
         if (video.paused) { try { await video.play(); } catch { if (current()) showPaused(); return; } }
         if (!current()) return;

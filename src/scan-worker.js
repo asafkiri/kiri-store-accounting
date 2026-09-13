@@ -209,8 +209,12 @@ function locateEdges(F, a, b, R, N, pol, minWeight) {
       const xx = Math.round(x + nx * d), yy = Math.round(y + ny * d);
       if (xx < 2 || xx >= F.w - 2 || yy < 2 || yy >= F.h - 2) continue;
       probe(F, xx, yy, sample);
-      let v = sample[0];
       const dl = sample[1] * nx + sample[2] * ny, ds = sample[3] * nx + sample[4] * ny;
+      // W is capped for Hough voting, so it has a flat plateau around strong
+      // edges. Using that cap here picked the first (outermost) pixel of the
+      // plateau on every refinement and let corners drift into the counter.
+      // Locate the actual peak of the gradient perpendicular to this side.
+      let v = Math.abs(dl) / F.sigL + Math.abs(ds) / F.sigS;
       // The saturation cue may stand in for a weak luminance step, never for a
       // clear step of the wrong sign (the outer rim of the page's own shadow).
       if (pol.lum && Math.sign(dl) !== pol.lum && (Math.abs(dl) >= 1.5 * F.sigL || !(pol.chr && Math.sign(ds) === pol.chr))) v = 0;
@@ -399,7 +403,11 @@ function detectQuad(image, stats = null) {
       const xx = Math.round(p.x), yy = Math.round(p.y);
       if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
       const k = yy * w + xx;
-      if (W[k] < VOTE_MIN || (paperL !== null && Math.abs(L[k] - paperL) <= tolerance)) smooth++;
+      // A flat dark area can be perfectly smooth yet belong to the counter.
+      // Allow substantial paper shadows, but don't count dark background as
+      // positive evidence merely because it has no texture.
+      const backgroundLike = paperL !== null && L[k] < paperL * .55;
+      if (!backgroundLike && (W[k] < VOTE_MIN || (paperL !== null && Math.abs(L[k] - paperL) <= tolerance))) smooth++;
     }
     return inside ? smooth / inside : 0;
   };
@@ -499,7 +507,11 @@ function detectQuad(image, stats = null) {
         if (trace) trace.stage = "ok";
         // Sides taken from the frame carry no evidence of their own.
         const score = Math.min(1, minSupport / .8) * Math.min(1, contrast / 4) * Math.min(1, smooth / .7) * (1 - .15 * borders);
-        const key = area * (.5 + score);
+        // A larger rectangle is often the counter or till behind the invoice.
+        // Do not saturate interior evidence at .7 when ranking candidates: a
+        // page with a clean interior must beat its extension onto a dark table.
+        // Area remains a tie-breaker against printed boxes inside the page.
+        const key = area * score * smooth * Math.sqrt(smooth);
         if (!best || key > best.key) best = { q, key, score, borders, winding: signs[0], polarity };
       }
     }
@@ -560,6 +572,33 @@ export function detectDocument(image, stats = null) {
 }
 export function detectCorners(image) {
   return detectDocument(image).corners;
+}
+
+// Contrast-normalised sharpness of print inside the page, excluding its outer
+// edges (a sharp counter must not disguise blurred invoice text). The caller
+// supplies a 640px snapshot, only when the geometry is ready to capture.
+export function captureQuality(image, corners) {
+  if (!validCorners(corners)) return { sharp: true, detail: null };
+  const { width: w, height: h } = image, gray = grayImage(image);
+  const quad = corners.map(p => ({ x: p.x * (w - 1), y: p.y * (h - 1) }));
+  const margin = Math.max(w, h) * .025;
+  const sides = quad.map((a, i) => ({ a, b: quad[(i + 1) % 4], length: distance(a, quad[(i + 1) % 4]) }));
+  let gradient = 0, laplacian = 0, count = 0;
+  const x0 = Math.max(1, Math.floor(Math.min(...quad.map(p => p.x)))), x1 = Math.min(w - 2, Math.ceil(Math.max(...quad.map(p => p.x))));
+  const y0 = Math.max(1, Math.floor(Math.min(...quad.map(p => p.y)))), y1 = Math.min(h - 2, Math.ceil(Math.max(...quad.map(p => p.y))));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const p = { x, y };
+    if (sides.some(s => cross(s.a, s.b, p) < margin * s.length)) continue;
+    const i = y * w + x, gx = gray[i + 1] - gray[i - 1], gy = gray[i + w] - gray[i - w];
+    const g = gx * gx + gy * gy;
+    if (g < 100) continue;
+    const lap = gray[i + 1] + gray[i - 1] + gray[i + w] + gray[i - w] - 4 * gray[i];
+    gradient += g; laplacian += lap * lap; count++;
+  }
+  const detail = count >= 24 ? laplacian / gradient : null;
+  // With no measurable detail there is no evidence of focus. The manual
+  // shutter remains available for a blank page or unusually faint print.
+  return { sharp: detail !== null && detail >= .3, detail };
 }
 // Solve the eight projective coefficients with partial pivoting. h[8] = 1.
 export function homography(from, to) {
@@ -865,6 +904,7 @@ function detectWithHint(thumbnail, hint) {
 }
 async function handle({ type, file, image, points, frame, hint }) {
   let thumbnail;
+  if (type === "quality") return captureQuality(image, points);
   if (type === "detect") {
     // Stateless: one small video frame in, corners out. Never touches the
     // retained photo, so the live view can share a worker with the review.

@@ -31,6 +31,8 @@ export function installScannerFixtures(window = globalThis.window) {
   const PROCEDURAL = {
     "beige-texture": { background: "beige", castShadow: true, paper: [163, 164, 162], lowerBand: true, marks: true, corners: [{ x: .24, y: .09 }, { x: .68, y: .10 }, { x: .71, y: .94 }, { x: .22, y: .93 }] },
     "dark-counter": { background: "dark", paper: WHITE, corners: SAMPLE_QUAD },
+    "counter-edge-below": { background: "dark", counter: "bottom", paper: WHITE, corners: SAMPLE_QUAD },
+    "metal-behind-page": { background: "dark", counter: "metal", paper: WHITE, corners: SAMPLE_QUAD },
     "wood-grain": { background: "wood", paper: [245, 243, 238], corners: SAMPLE_QUAD },
     "white-table-soft-shadow": { background: "white", edgeShadow: true, paper: [245, 244, 240], corners: SAMPLE_QUAD },
     "cut-off": { background: "dark", paper: WHITE, corners: [{ x: .15, y: .08 }, { x: 1.12, y: .05 }, { x: 1.10, y: .93 }, { x: .13, y: .90 }] },
@@ -128,6 +130,21 @@ export function installScannerFixtures(window = globalThis.window) {
       data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
     }
     ctx.putImageData(pixels, 0, 0);
+    if (spec.counter) {
+      // A larger rectangle behind the page, with sides aligned to the paper.
+      // The old area-only ranking preferred its bottom edge or its top panel.
+      const outline = spec.counter === "bottom"
+        ? [quad[0], quad[1], { x: quad[2].x, y: H * .96 }, { x: quad[3].x, y: H * .94 }]
+        : [{ x: quad[0].x, y: H * .025 }, { x: quad[1].x, y: H * .045 }, quad[2], quad[3]];
+      ctx.beginPath(); outline.forEach((p, i) => ctx[i ? "lineTo" : "moveTo"](p.x, p.y)); ctx.closePath();
+      ctx.fillStyle = spec.counter === "bottom" ? "#676767" : "#8a8580"; ctx.fill();
+      ctx.save(); ctx.clip();
+      for (let y = 0; y < H; y += 9 * k) {
+        ctx.strokeStyle = y % (18 * k) < 9 * k ? "#a0a0a0" : "#484848"; ctx.lineWidth = 1.5 * k;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y + 12 * k); ctx.stroke();
+      }
+      ctx.restore();
+    }
     if (!spec.paper) return { canvas, corners };
     // The drawn outline: the straight quad, or each side curled along its normal by 1.5% × sin(πt)
     // for the crumpled sheet (the corners themselves stay on the ground truth).
