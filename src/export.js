@@ -54,7 +54,7 @@ export function cashCsv(items) {
     "\uFEFF" +
     [
       ["תאריך", "קופה", "רב־קו", "הערות"],
-      ...items.map((r) => [
+      ...items.filter(r => !r.deletedAt).map((r) => [
         r.date,
         moneyInput(r.cashAgorot),
         moneyInput(r.ravKavAgorot),

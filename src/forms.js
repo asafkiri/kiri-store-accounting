@@ -9,6 +9,7 @@ import {
   types,
   monthLabel,
   invoiceLabel,
+  displayDate,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
@@ -82,7 +83,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       )
         el.disabled = Boolean(draft.pending);
     submit.textContent = draft.pending
-      ? "נסה להשלים את השמירה"
+      ? options.retryLabel || "נסה להשלים את השמירה"
       : submit.dataset.label;
     cancelButton.hidden = !draft.pending;
     cancelButton.disabled = submit.disabled;
@@ -140,6 +141,16 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       draft.cancelPending = null;
       if (result.status === "committed") {
         mergeAttemptResult(ctx, result);
+        if (key === "cash" && draft.operation === "delete") {
+          try { await ctx.drafts.remove(key); } catch { /* The receipt still makes retries safe. */ }
+          disposed = true;
+          ctx.setModalBusy(false);
+          ctx.closeModal();
+          ctx.render();
+          toast(result.record.deletedAt ? "הסגירה כבר נמחקה והסיכומים עודכנו" : "המחיקה הקודמת הושלמה. בינתיים נרשמה סגירה חדשה בתאריך הזה.");
+          ctx.refresh(false);
+          return result;
+        }
         draft.conflict = true;
         draft.conflictPath = result.path;
         draft.conflictMessage =
@@ -196,7 +207,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       if (
         draft.pending ||
         submit.disabled ||
-        (!options.skipDiscardConfirmation && !confirm("למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו."))
+        (!options.skipDiscardConfirmation && !confirm(options.discardConfirmation || "למחוק את הטיוטה מהמכשיר? רשומות שכבר נשמרו בחנות יישארו."))
       )
         return;
       disposed = true;
@@ -271,10 +282,15 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
       ctx.mergeRecord(result.record, draft.pending.path);
       disposed = true;
       ctx.setModalBusy(false);
-      if (ctx.showSaved && ["invoice", "payment", "cash"].includes(key)) ctx.showSaved(key, result.record);
+      const deletingCash = key === "cash" && draft.operation === "delete";
+      if (deletingCash) {
+        ctx.closeModal();
+        toast(result.record.deletedAt ? "הסגירה נמחקה והסיכומים עודכנו" : "המחיקה הקודמת הושלמה. בינתיים נרשמה סגירה חדשה בתאריך הזה.");
+      }
+      else if (ctx.showSaved && ["invoice", "payment", "cash"].includes(key)) ctx.showSaved(key, result.record);
       else ctx.closeModal();
       ctx.render();
-      if (!ctx.showSaved || !["invoice", "payment", "cash"].includes(key)) toast(
+      if (!deletingCash && (!ctx.showSaved || !["invoice", "payment", "cash"].includes(key))) toast(
         result.supplierAction === "created"
           ? `נפתח ספק חדש: ${result.relatedRecords[0].record.name}. אפשר לערוך אותו דרך ניהול ספקים.`
           : key === "supplier" && draft.operation === "delete" ? "הספק הועבר לסל המחזור · ניתן לשחזר במשך 30 יום"
@@ -841,6 +857,10 @@ export async function cashForm(ctx, record = null, resumeDate = null) {
   const key = "cash",
     old = await ctx.drafts.load(key);
   const targetDate = record?.id || resumeDate || today();
+  if (old?.operation === "delete" && old.recordId === targetDate && (record || resumeDate))
+    return cashRemovalForm(ctx, record, old);
+  // A deleted day can be entered again, but never prefill its old amounts.
+  if (record?.deletedAt) record = null;
   const draft = (await matchingDraft(
     ctx,
     key,
@@ -860,8 +880,8 @@ export async function cashForm(ctx, record = null, resumeDate = null) {
   };
   const f = draft.fields;
   const root = ctx.dialog(
-    "רישום סגירה יומית",
-    `${staleNotice(old, record, draft)}<form><p class="muted">שני סכומים נפרדים. הקופה אינה כוללת רב־קו.</p><div class="form-grid">${field("תאריך", "date", f.date, { type: "date", required: true, wide: true })}${field("קופה", "cash", f.cash, { wide: true })}${field("רב־קו", "ravKav", f.ravKav, { wide: true })}${textArea("notes", f.notes, "הערה (רשות)")}</div>${footer("שמור סגירה יומית")}</form>`,
+    record ? "עריכת סגירה יומית" : "רישום סגירה יומית",
+    `${staleNotice(old, record, draft)}<form><p class="muted">שני סכומים נפרדים. הקופה אינה כוללת רב־קו.</p><div class="form-grid">${field("תאריך", "date", f.date, { type: "date", required: true, wide: true })}${field("קופה", "cash", f.cash, { wide: true })}${field("רב־קו", "ravKav", f.ravKav, { wide: true })}${textArea("notes", f.notes, "הערה (רשות)")}</div>${footer("שמור סגירה יומית", record ? "בטל שינויים שלא נשמרו" : "מחק טיוטה")}${record ? '<section class="supplier-removal"><button class="text-button danger" type="button" data-remove-cash>מחק סגירה מהחנות</button><p class="small muted">הסגירה תוסר מהרשימה ומהסיכומים.</p></section>' : ""}</form>`,
   );
   const form = $("form", root);
   if (draft.version) form.elements.date.readOnly = true;
@@ -880,19 +900,42 @@ export async function cashForm(ctx, record = null, resumeDate = null) {
       const existing = ctx.data.dailyCash.find((r) => r.id === values.date);
       if (draft.version && values.date !== draft.recordId)
         throw Error("לרישום בתאריך אחר יש לפתוח סגירה יומית חדשה.");
-      if (existing && (!draft.version || existing.id !== draft.recordId))
+      if (existing && !existing.deletedAt && (!draft.version || existing.id !== draft.recordId))
         throw Error("כבר קיימת סגירה בתאריך הזה. יש לפתוח אותה לעריכה.");
+      const replaceDeleted = existing?.deletedAt && !draft.version;
       draft.recordId = values.date;
       return pendingMutation(
-        "daily-cash/" + values.date,
+        "daily-cash/" + values.date + (replaceDeleted ? "/restore" : ""),
         {
           date: values.date,
           cashAgorot: parseMoney(values.cash, true),
           ravKavAgorot: parseMoney(values.ravKav, true),
           notes: values.notes,
         },
-        existing?.id === draft.recordId ? draft.version : 0,
+        replaceDeleted ? existing.version : draft.version,
+        replaceDeleted ? "POST" : "PUT",
       );
     },
+    { discardConfirmation: record ? "לבטל את השינויים שלא נשמרו? הסגירה השמורה תישאר בחנות." : undefined },
   );
+  const remove = form.querySelector("[data-remove-cash]");
+  if (remove) remove.onclick = async () => {
+    if (draft.pending || draft.cancelPending || draft.conflict || form.querySelector("[type=submit]").disabled) return;
+    try {
+      // Keep any unsaved edits for review before the delete attempt takes over.
+      if (hasDraftContent(key, draft)) await retainDraft(ctx, key, draft);
+      await cashRemovalForm(ctx, record);
+    } catch (err) { toast(errorText(err), true); }
+  };
+}
+
+async function cashRemovalForm(ctx, record, existing = null) {
+  const draft = existing || {
+    operation: "delete", mode: "edit", recordId: record.id, version: record.version,
+    fields: { date: record.date, cash: moneyInput(record.cashAgorot), ravKav: moneyInput(record.ravKavAgorot) },
+  };
+  const root = ctx.dialog("מחיקת סגירה יומית", `<form class="delete-form"><p>למחוק את הסגירה של <strong>${e(displayDate(draft.fields.date))}</strong>?</p><p>קופה: ${e(draft.fields.cash || "לא הוזן")} · רב־קו: ${e(draft.fields.ravKav || "לא הוזן")}</p><p class="muted">הסגירה תימחק מהחנות ותוסר מהרשימה ומהסיכומים בכל המכשירים.</p>${footer("כן, מחק סגירה", "לא, חזור")}</form>`);
+  bindDraft(ctx, root.querySelector("form"), "cash", draft, () => draft.fields,
+    () => pendingMutation("daily-cash/" + draft.recordId, null, draft.version, "DELETE"),
+    { skipDiscardConfirmation: true, retryLabel: "נסה שוב למחוק" });
 }
