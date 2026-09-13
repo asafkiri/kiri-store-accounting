@@ -102,7 +102,10 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       const label = { invoiceDate: "תאריך החשבונית", totalAgorot: "הסכום כולל מע״מ", subtotalAgorot: "הסכום לפני מע״מ", finalAgorot: "הסכום לתשלום" }[current];
       if (fieldName) body = input(label, fieldName, f[fieldName], current === "invoiceDate" ? "date" : "text");
       if (current === "invoiceDate" && !q.editing) body = '<p class="muted">מולא תאריך היום. אם בחשבונית רשום תאריך אחר, שנה אותו.</p>' + body;
-      if (current === "supplierName") body = supplierPickerMarkup(f);
+      if (current === "supplierName") {
+        body = supplierPickerMarkup(f);
+        footerButton = false;
+      }
       if (current === "documentType") {
         body = choice("invoice", "חשבונית", true) + choice("credit", "חשבונית זיכוי");
         footerButton = false;

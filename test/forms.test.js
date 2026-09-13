@@ -445,19 +445,18 @@ const typedSupplier = async (ctx, name) => {
 const supplierAction = (name) =>
   document.querySelector(`[data-supplier-action="${name}"]`);
 
-test("changing a pending supplier clears its stale option and choosing an existing one cancels creation", async () => {
+test("choosing an existing supplier replaces a pending supplier creation in the detailed editor", async () => {
   const { ctx, drafts, saved } = setup();
   await typedSupplier(ctx, "שם חדש");
   supplierAction("create").click();
   await tick();
   const oldId = drafts.get("invoice").newSupplier.id;
-  fill("supplierId", "supplier-001");
+  fill("supplierName", "");
+  supplierAction("confirm").click();
   await tick();
   assert.equal(drafts.get("invoice").newSupplier, undefined);
-  assert.equal(
-    document.querySelector(`[name=supplierId] option[value="${oldId}"]`),
-    null,
-  );
+  assert.equal(document.querySelector('[name=supplierId]').value, "supplier-001");
+  assert.notEqual(document.querySelector('[name=supplierId]').value, oldId);
   document.querySelector("[name=review]").checked = true;
   submit();
   await tick();
@@ -526,7 +525,7 @@ test("unknown scanned supplier is editable, stays pending through refresh, and s
     };
   };
   await typedSupplier(ctx, "מרינה");
-  assert.match(document.body.textContent, /ספק חדש: מרינה/);
+  assert.match(supplierAction("create").textContent, /פתח ספק חדש.*מרינה/);
   assert.equal(document.querySelector("[name=supplierName]").value, "מרינה");
   assert.equal(saved.length, 0);
   fill("supplierName", "מרינה סניף בדיקה");
@@ -558,18 +557,17 @@ test("unknown scanned supplier is editable, stays pending through refresh, and s
   );
 });
 
-test("normalized match needs explicit confirmation; rejecting it asks for a distinct name", async () => {
+test("normalized match is visible for selection and requires a distinct name for creation", async () => {
   const { ctx, drafts, saved } = setup();
   ctx.data.suppliers = [
     { id: "supplier-marina", name: "מרינה בע״מ", active: true, version: 1 },
   ];
   await typedSupplier(ctx, "מרינה");
   assert.equal(document.querySelector("[name=supplierId]").value, "");
-  assert.match(document.body.textContent, /זה הספק.*מרינה בע״מ.*שכבר קיים/);
+  assert.match(supplierAction("confirm").textContent, /מרינה בע״מ/);
   assert.equal(supplierAction("create"), null);
-  supplierAction("reject").click();
   assert.equal(saved.length, 0);
-  assert.match(document.body.textContent, /שם שמבדיל/);
+  assert.match(document.body.textContent, /הקלד שם שונה/);
   fill("supplierName", "מרינה");
   supplierAction("confirm").click();
   await tick();
@@ -587,7 +585,7 @@ test("inactive supplier offers reactivation inside the invoice and does not imme
   ];
   await typedSupplier(ctx, "מרינה");
   assert.equal(document.querySelector("[name=supplierId]").value, "");
-  assert.match(document.body.textContent, /סומן כלא פעיל.*להפעיל אותו מחדש/);
+  assert.match(supplierAction("reactivate").textContent, /לא פעיל.*הפעל מחדש ובחר/);
   supplierAction("reactivate").click();
   await tick();
   assert.equal(saved.length, 0);
@@ -705,6 +703,7 @@ test("concurrent supplier conflict preserves invoice fields and offers explicit 
 test("credit entry accepts magnitudes and stores a negative reviewed amount", async () => {
   const { ctx, saved } = setup();
   await typedSupplier(ctx, "ספק בדיקה");
+  supplierAction("confirm").click();
   fill("documentType", "credit");
   assert.equal(document.querySelector("[data-credit-notice]").hidden, false);
   assert.match(document.querySelector("[data-credit-notice]").textContent, /כמספר חיובי/);

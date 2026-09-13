@@ -586,7 +586,7 @@ for (const engine of [chromium, webkit]) {
     const question = () => page.locator(".quick-question h3").innerText();
     assert.match(await question(), /מי הספק/);
     await page.locator("[name=supplierName]").fill("אסם");
-    await page.locator('[data-quick-choice="next"]').tap();
+    await page.locator('[data-supplier-action="confirm"]').tap();
     // The document number is never asked; the amount follows the supplier.
     assert.match(await question(), /הסכום כולל מע״מ/);
     // The upload landed while the supplier was being typed, and the same button
@@ -1515,6 +1515,86 @@ async function workspaceRoute(page, route) {
 }
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: supplier selection lists names immediately and filters live without duplicate creation or extra confirmation`, { timeout: 60000 }, async t => {
+    const { server, data, requests } = workspaceFixture();
+    data.suppliers.push(
+      { id: 'supplier-berman', name: 'ברמן', active: true, version: 1 },
+      { id: 'supplier-yotvata', name: 'יטבתה', active: true, version: 1 },
+      { id: 'supplier-strauss', name: 'שטראוס', active: true, version: 1 },
+      { id: 'supplier-long', name: 'חברת המזון והמשקאות של החנות המשפחתית בע״מ', active: true, version: 1 },
+      { id: 'supplier-inactive', name: 'ספק ישן', active: false, version: 3 },
+      { id: 'supplier-deleted', name: 'ספק שנמחק', active: false, deletedAt: 12345, version: 2 },
+    );
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on('pageerror', err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, 'invoices');
+    await page.locator('.invoice-options > summary').click();
+    await page.locator('[data-action="invoice"]').click();
+    const input = page.locator('[name=supplierName]'), rows = page.locator('.supplier-result');
+    await rows.first().waitFor();
+    assert.equal(await rows.count(), 8);
+    assert.equal(await page.locator('[data-supplier-picker] details, [data-quick-choice="next"]').count(), 0);
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/supplier-list-${engine.name()}.png` });
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      assert.ok((await rows.first().boundingBox()).height >= 56);
+    }
+    await input.fill('ת');
+    assert.ok(await rows.count() > 1);
+    await input.pressSequentially('נו');
+    assert.equal(await rows.count(), 1);
+    assert.equal(await rows.locator('strong').innerText(), 'תנובה');
+    assert.equal(await input.inputValue(), 'תנו', 'the search does not replace the letters while typing');
+    assert.equal(await input.evaluate(el => el === document.activeElement), true);
+    assert.ok(await page.locator('[data-supplier-action="create"]').isVisible());
+    await page.screenshot({ path: `test-artifacts/supplier-filter-${engine.name()}.png` });
+    await rows.first().tap();
+    await page.locator('[name=total]').waitFor();
+    assert.match(await page.locator('.quick-progress').innerText(), /שאלה 2 מתוך 4/);
+    await page.locator('[name=total]').fill('118');
+    await page.locator('[data-close-modal]').click();
+    await input.waitFor();
+    assert.equal(await input.inputValue(), 'תנובה');
+    assert.equal(await page.locator('[data-supplier-action="create"]').count(), 0);
+    assert.equal(await page.locator('#modal [name=supplierId]').inputValue(), 'supplier-tnuva');
+    await input.fill('  תנובה בע״מ  ');
+    assert.equal(await rows.count(), 1);
+    assert.equal(await page.locator('[data-supplier-action="create"]').count(), 0);
+    await input.fill('ספק שאין בחנות');
+    assert.equal(await rows.count(), 0);
+    assert.ok(await page.locator('[data-supplier-action="create"]').isVisible());
+    await page.screenshot({ path: `test-artifacts/supplier-new-${engine.name()}.png` });
+    await input.fill('תנו');
+    await page.locator('[data-close-modal]').click();
+    await page.locator('[data-action="invoice"]').click();
+    await input.waitFor();
+    assert.equal(await input.inputValue(), 'תנו');
+    assert.equal(await rows.count(), 1);
+    await input.press('Enter');
+    await page.locator('[name=total]').waitFor();
+    assert.equal(await page.locator('[name=total]').inputValue(), '118');
+    await page.locator('[data-close-modal]').click();
+    await input.waitFor();
+    await input.fill('תנו');
+    await page.locator('[data-supplier-action="create"]').tap();
+    await page.locator('[name=total]').waitFor();
+    await page.locator('[data-close-modal]').click();
+    await page.locator('[data-supplier-action="keep-new"]').waitFor();
+    await page.locator('[data-supplier-action="keep-new"]').tap();
+    await page.locator('[name=total]').waitFor();
+    assert.equal(await page.locator('[name=total]').inputValue(), '118');
+    assert.equal(requests.filter(r => r.method === 'PUT').length, 0);
+    assert.equal(await page.locator('[name=documentNumber]').count(), 0);
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: new daily closing stays blank after a saved closing while explicit edits retain its amounts`, { timeout: 60000 }, async t => {
     const { server, data, requests } = workspaceFixture();
     const { today } = await import('../src/format.js');
@@ -1706,7 +1786,7 @@ for (const engine of [chromium, webkit]) {
     assert.ok(await page.locator('[name="to"]').isVisible(), "setting the first filter does not close the panel");
     await page.locator('[data-action="invoice"]').click();
     await page.locator('[name="supplierName"]').fill('תנובה');
-    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[data-supplier-action="confirm"]').click();
     await page.locator('[name="total"]').fill('118');
     await page.locator('[data-quick-choice="next"]').click();
     await page.locator('[name="vat"]').fill('18');
@@ -1989,7 +2069,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator(".quick-question").waitFor();
     assert.match(await page.locator("#modal").innerText(), /פרטי החשבונית/, "typed entry is not a review");
     await page.locator("[name=supplierName]").fill("תנובה");
-    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[data-supplier-action="confirm"]').click();
     await page.locator("[name=total]").fill("118");
     await page.locator('[data-quick-choice="next"]').click();
     await page.locator('[data-quick-choice="vat-rate"]').waitFor();
