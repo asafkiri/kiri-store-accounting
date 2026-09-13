@@ -59,7 +59,7 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
       content.innerHTML = `<div class="quick-summary-heading">${photo()}<button type="button" class="text-button quick-full-editor" data-full-invoice>עריכה מפורטת</button></div>
         <div class="quick-summary-grid">
         ${row("supplierName", "ספק", f.supplierName)}${row("documentType", "סוג", types[f.documentType])}
-        ${row("documentNumber", "מספר חשבונית", f.documentNumber)}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
+        ${row("documentNumber", "מספר חשבונית", f.documentNumber?.trim() || "ללא מספר")}${row("invoiceDate", "תאריך", displayDate(f.invoiceDate))}
         </div><div class="quick-total">${row("totalAgorot", "סכום החשבונית", money(signed(amountOrNull(f.total))))}</div>
         <details class="quick-amount-details"><summary>מע״מ ופירוט הסכומים</summary>${row("subtotalAgorot", "לפני מע״מ", money(signed(amountOrNull(f.subtotal))))}${row("vatAgorot", "מע״מ", money(signed(amountOrNull(f.vat))))}</details>
         ${f.deductions.filter(d => !d.paymentOnly).length ? `<details class="quick-deductions"><summary>הפחתות במסמך (${f.deductions.filter(d => !d.paymentOnly).length})</summary>${f.deductions.map((d, i) => d.paymentOnly ? "" : row("deduction:" + i, d.label, money(amountOrNull(d.amount)) + (d.included === "yes" ? " · כלולה" : " · נוספת"))).join("")}</details>` : ""}
@@ -140,7 +140,6 @@ export function quickInvoiceReview(ctx, draft, { bindDraft, footer, buildMutatio
         f.supplierName = form.elements.supplierName.value.trim(); f.supplierId = form.elements.supplierId.value;
         if (!f.supplierId || draft.supplierConflict) throw Error("בחר ספק קיים או אשר פתיחת ספק חדש.");
       }
-      if (key === "documentNumber" && !f.documentNumber.trim()) throw Error("יש להזין את מספר החשבונית.");
       if (key === "invoiceDate" && !validInvoiceDate(f.invoiceDate)) throw Error("יש להזין תאריך תקין.");
       if (key === "documentType") {
         if (!["invoice", "credit"].includes(action)) throw Error("בחר חשבונית או חשבונית זיכוי.");

@@ -29,12 +29,18 @@ const submit = () => document.querySelector("form").dispatchEvent(new Event("sub
 const title = () => document.querySelector(".quick-question h3")?.textContent;
 const progress = () => document.querySelector(".quick-progress span")?.textContent;
 const answerSupplier = async () => { fill("supplierName", "ספק בדיקה"); await choose("next"); };
-// The five answers of an ordinary invoice, typed from the paper.
-const typeInvoice = async ({ number = "7001", total = "118", vat = "18" } = {}) => {
+// The four answers of an ordinary invoice, typed from the paper. The document
+// number is not among them; it is added from the summary when it is wanted.
+const typeInvoice = async ({ total = "118", vat = "18" } = {}) => {
   await answerSupplier();
-  fill("documentNumber", number); await choose("next");
   fill("total", total); await choose("next");
   fill("vat", vat); await choose("vat-manual");
+  await choose("next");
+};
+const editNumber = async number => {
+  document.querySelector('[data-edit-question="documentNumber"]').click();
+  await tick();
+  fill("documentNumber", number);
   await choose("next");
 };
 
@@ -44,33 +50,31 @@ test("inclusive VAT uses exact agorot, configurable rates and never applies the 
   assert.deepEqual(vatFromInclusive(535835, 0), { vatAgorot: 0, subtotalAgorot: 535835 });
   const v = vatFromInclusive(535835, 1800); assert.equal(v.vatAgorot + v.subtotalAgorot, 535835);
 });
-test("typed from the paper: five questions in a fixed order, then one deliberate save", async () => {
+test("typed from the paper: four questions in a fixed order, then one deliberate save", async () => {
   const { ctx, writes, cache } = setup();
   await invoiceForm(ctx, null, ["a".repeat(64)], { quick: true });
-  assert.equal(title(), "מי הספק?"); assert.equal(progress(), "שאלה 1 מתוך 5");
+  assert.equal(title(), "מי הספק?"); assert.equal(progress(), "שאלה 1 מתוך 4");
   assert.match(document.body.textContent, /פרטי החשבונית|מי הספק/);
   await answerSupplier();
-  assert.equal(title(), "מה מספר החשבונית?"); assert.equal(progress(), "שאלה 2 מתוך 5");
-  await choose("next");
-  assert.equal(title(), "מה מספר החשבונית?", "an empty number does not pass");
-  assert.equal(document.querySelector("[data-form-error]").hidden, false);
-  fill("documentNumber", "7001"); await choose("next");
-  assert.equal(title(), "מה הסכום כולל מע״מ?"); assert.equal(progress(), "שאלה 3 מתוך 5");
+  // The document number is never asked: it is the slowest thing to type and it
+  // is already printed on the paper and on its photograph.
+  assert.equal(title(), "מה הסכום כולל מע״מ?"); assert.equal(progress(), "שאלה 2 מתוך 4");
   fill("total", "118"); await choose("next");
-  assert.equal(title(), "כמה מע״מ יש בחשבונית?"); assert.equal(progress(), "שאלה 4 מתוך 5");
+  assert.equal(title(), "כמה מע״מ יש בחשבונית?"); assert.equal(progress(), "שאלה 3 מתוך 4");
   assert.ok(document.querySelector("[name=vat]"), "the VAT is a box to type into");
   assert.match(document.querySelector('[data-quick-choice="vat-rate"]').textContent, /18%[\s\S]*18\.00/, "the rate shortcut shows what it would give");
   fill("vat", "18"); submit(); await tick();
-  assert.equal(title(), "מה תאריך החשבונית?", "Enter confirms the typed VAT"); assert.equal(progress(), "שאלה 5 מתוך 5");
+  assert.equal(title(), "מה תאריך החשבונית?", "Enter confirms the typed VAT"); assert.equal(progress(), "שאלה 4 מתוך 4");
   assert.equal(document.querySelector("[name=invoiceDate]").value, today(), "today is offered, not assumed");
   assert.match(document.querySelector(".quick-question").textContent, /מולא תאריך היום/);
   await choose("next");
   assert.equal(document.querySelector(".quick-question"), null, "then the summary");
   assert.ok(document.querySelector(".quick-summary-grid"));
+  assert.match(document.querySelector(".quick-summary-grid").textContent, /מספר חשבונית[\s\S]*ללא מספר/, "the summary offers the number without demanding it");
   assert.equal(writes.length, 0);
   submit(); await tick();
   const saved = writes[0].body.data;
-  assert.equal(saved.supplierId, "supplier-001"); assert.equal(saved.documentNumber, "7001");
+  assert.equal(saved.supplierId, "supplier-001"); assert.equal(saved.documentNumber, "", "an invoice saves without a number");
   assert.equal(saved.invoiceDate, today()); assert.equal(saved.documentType, "invoice");
   assert.equal(saved.totalAgorot, 11800); assert.equal(saved.vatAgorot, 1800);
   assert.equal(saved.subtotalAgorot, 10000); assert.equal(saved.finalAgorot, 11800);
@@ -81,7 +85,7 @@ test("typed from the paper: five questions in a fixed order, then one deliberate
 test("typed VAT: the rate is one tap, a VAT above the total is refused, and zero is explicit", async () => {
   const { ctx, writes } = setup();
   await invoiceForm(ctx, null, [], { quick: true });
-  await answerSupplier(); fill("documentNumber", "7002"); await choose("next");
+  await answerSupplier();
   fill("total", "118"); await choose("next");
   fill("vat", "200"); await choose("vat-manual");
   assert.equal(title(), "כמה מע״מ יש בחשבונית?");
@@ -93,7 +97,7 @@ test("typed VAT: the rate is one tap, a VAT above the total is refused, and zero
   assert.equal(writes[0].body.data.subtotalAgorot, 10000);
   const zero = setup();
   await invoiceForm(zero.ctx, null, [], { quick: true });
-  await answerSupplier(); fill("documentNumber", "7003"); await choose("next");
+  await answerSupplier();
   fill("total", "50"); await choose("next"); await choose("vat-zero"); await choose("next");
   submit(); await tick();
   assert.equal(zero.writes[0].body.data.vatAgorot, 0);
@@ -103,7 +107,7 @@ test("a configured rate is offered by its own percentage", async () => {
   const { ctx, writes } = setup();
   ctx.data.settings = [{ id: "accounting", defaultVatBasisPoints: 1700 }];
   await invoiceForm(ctx, null, [], { quick: true });
-  await answerSupplier(); fill("documentNumber", "7005"); await choose("next");
+  await answerSupplier();
   fill("total", "117"); await choose("next");
   assert.match(document.querySelector('[data-quick-choice="vat-rate"]').textContent, /17%[\s\S]*17\.00/);
   await choose("vat-rate"); await choose("next"); submit(); await tick();
@@ -113,7 +117,7 @@ test("a configured rate is offered by its own percentage", async () => {
 test("a typed draft resumes in its questions, not in the full form, and the type changes only from the summary", async () => {
   const { ctx, writes } = setup();
   await invoiceForm(ctx, null, [], { quick: true });
-  await answerSupplier(); fill("documentNumber", "7004"); await choose("next");
+  await answerSupplier();
   await invoiceForm(ctx); // reopened the way a draft reminder does, without the option
   assert.equal(title(), "מה הסכום כולל מע״מ?", "resumes where it stopped");
   assert.equal(document.querySelector("[name=review]"), null, "not the full form");
@@ -144,9 +148,9 @@ test("a new supplier is opened from the first question and created only with the
   await invoiceForm(ctx, null, [], { quick: true });
   fill("supplierName", "ספק חדש");
   document.querySelector('[data-supplier-action="create"]').click(); await tick();
-  assert.equal(title(), "מה מספר החשבונית?", "opening the supplier answers the question");
+  assert.equal(title(), "מה הסכום כולל מע״מ?", "opening the supplier answers the question");
   assert.equal(cache.get("invoice").newSupplier.name, "ספק חדש");
-  fill("documentNumber", "7006"); await choose("next"); fill("total", "118"); await choose("next");
+  fill("total", "118"); await choose("next");
   await choose("vat-rate"); await choose("next");
   assert.equal(writes.length, 0);
   submit(); await tick();
@@ -175,4 +179,16 @@ test("empty forms make no banners; a photo linked to its invoice makes one, and 
   assert.deepEqual(await actionableDraftNames(ctx.drafts, ctx.data), ["invoice"], "one reminder for one invoice");
   document.querySelector("[data-discard-draft]").click(); await tick();
   assert.deepEqual(await actionableDraftNames(ctx.drafts, ctx.data), []);
+});
+
+test("the number is still one tap away on the summary, for the invoices that need it", async () => {
+  const { ctx, writes } = setup();
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  assert.match(document.querySelector(".quick-summary-grid").textContent, /ללא מספר/);
+  await editNumber("7009");
+  assert.equal(document.querySelector(".quick-question"), null, "typing it returns to the summary");
+  assert.match(document.querySelector(".quick-summary-grid").textContent, /7009/);
+  submit(); await tick();
+  assert.equal(writes[0].body.data.documentNumber, "7009");
 });

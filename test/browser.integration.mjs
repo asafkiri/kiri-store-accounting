@@ -556,7 +556,7 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(await page.evaluate(() => window.scanRequests.map(r => r.path)), ["documents"], "the pages go up once and nothing reads them");
     await page.locator(".quick-question").waitFor();
     assert.match(await page.locator(".quick-question h3").innerText(), /מי הספק/);
-    assert.match(await page.locator(".quick-progress").innerText(), /שאלה 1 מתוך 5/);
+    assert.match(await page.locator(".quick-progress").innerText(), /שאלה 1 מתוך 4/);
     assert.equal(await page.locator('.quick-invoice [type="submit"]').isVisible(), false, "no save before the questions");
     assert.equal(await page.evaluate(() => window.invoiceSaves.length), 0);
     assert.deepEqual(errors, []);
@@ -585,13 +585,11 @@ for (const engine of [chromium, webkit]) {
     assert.match(await question(), /מי הספק/);
     await page.locator("[name=supplierName]").fill("אסם");
     await page.locator('[data-quick-choice="next"]').tap();
-    assert.match(await question(), /מספר החשבונית/);
+    // The document number is never asked; the amount follows the supplier.
+    assert.match(await question(), /הסכום כולל מע״מ/);
     // The upload landed while the supplier was being typed, and the same button
     // now opens the stored page instead of the one on the device.
     await page.locator("[data-open-document]").waitFor();
-    await page.locator("[name=documentNumber]").fill("MANUAL-PHOTO-1");
-    await page.locator('[data-quick-choice="next"]').tap();
-    assert.match(await question(), /הסכום כולל מע״מ/);
     await page.locator("[name=total]").fill("10");
     await page.locator('[data-quick-choice="next"]').tap();
     assert.match(await question(), /כמה מע״מ/);
@@ -1253,8 +1251,6 @@ for (const engine of [chromium, webkit]) {
     });
     // Choosing the supplier answers the first question; the rest are typed.
     const answerTheRest = async () => {
-      await page.locator("[name=documentNumber]").fill(crypto.randomUUID().slice(0, 8));
-      await page.locator('[data-quick-choice="next"]').tap();
       await page.locator("[name=total]").fill("12");
       await page.locator('[data-quick-choice="next"]').tap();
       await page.locator('[data-quick-choice="vat-rate"]').tap();
@@ -1763,8 +1759,6 @@ for (const engine of [chromium, webkit]) {
     assert.match(await page.locator("#modal").innerText(), /פרטי החשבונית/, "typed entry is not a review");
     await page.locator("[name=supplierName]").fill("תנובה");
     await page.locator('[data-quick-choice="next"]').click();
-    await page.locator("[name=documentNumber]").fill("TYPED-118");
-    await page.locator('[data-quick-choice="next"]').click();
     await page.locator("[name=total]").fill("118");
     await page.locator('[data-quick-choice="next"]').click();
     await page.locator('[data-quick-choice="vat-rate"]').waitFor();
@@ -1801,6 +1795,14 @@ for (const engine of [chromium, webkit]) {
     await page.locator(".quick-summary-grid").waitFor();
     assert.equal(await page.locator('[name="paymentReduction"]').inputValue(), "100");
     assert.equal(requests.some(r => r.path.startsWith("/api/v1/scan")), false, "nothing reads the document");
+    // The number was never asked for. It is offered on the summary, reading
+    // "ללא מספר" until it is typed, for the invoices that need to carry it.
+    assert.match(await page.locator('[data-edit-question="documentNumber"]').innerText(), /ללא מספר/);
+    await page.locator('[data-edit-question="documentNumber"]').click();
+    await page.locator("[name=documentNumber]").fill("TYPED-118");
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator(".quick-summary-grid").waitFor();
+    assert.match(await page.locator('[data-edit-question="documentNumber"]').innerText(), /TYPED-118/);
     await page.locator('.quick-invoice [type="submit"]').click();
     await page.locator('.save-confirmation').waitFor();
     await page.locator('[data-saved-done]').click();

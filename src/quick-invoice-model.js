@@ -26,8 +26,11 @@ export function validInvoiceDate(value) {
 // every time, so the form is a habit rather than a puzzle. A step stays until
 // it is answered: a value the form arrived with, today's date, is confirmed
 // rather than assumed. The document type is not asked; it is an invoice unless
-// changed on the summary, where a credit note is the rare exception.
-export const typedSteps = ["supplierName", "documentNumber", "totalAgorot", "vatAgorot", "invoiceDate"];
+// changed on the summary, where a credit note is the rare exception. Neither is
+// the document number: it is the slowest thing to type and it is already on the
+// paper and its photograph, so it is offered on the summary for the invoices
+// that need it, and left empty otherwise.
+export const typedSteps = ["supplierName", "totalAgorot", "vatAgorot", "invoiceDate"];
 export function invoiceQuestions(draft) {
   const f = draft.fields, confirmed = draft.quick?.confirmed || {};
   const questions = [];

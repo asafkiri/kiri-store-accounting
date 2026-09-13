@@ -1,4 +1,4 @@
-import { escapeHtml as e, money, displayDate, totals, types, today, monthLabel } from "./format.js";
+import { escapeHtml as e, money, displayDate, totals, types, today, monthLabel, invoiceLabel } from "./format.js";
 import { icon, field } from "./ui.js";
 
 export const summaryMoney = value => value === null ? "נדרש תיקון זיכוי" : money(value);
@@ -32,7 +32,7 @@ export function groupInvoices(items) {
 
 export function documentCards(items) {
   return items.map(i => `<article class="document-card status-${i.status === "paid" ? "paid" : "unpaid"}">
-    <button class="document-card-heading" data-action="documents" data-id="${e(i.id)}">${icon("invoice")}<div><strong>${e(types[i.documentType] || "חשבונית")} ${e(i.documentNumber)}</strong><span class="document-meta">${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</span><span class="document-meta">${i.attachmentIds.length} קבצים · פתח חשבונית</span></div><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? "שולם" : "לתשלום"}</span>${icon("arrow")}</button>
+    <button class="document-card-heading" data-action="documents" data-id="${e(i.id)}">${icon("invoice")}<div><strong>${e(invoiceLabel(i))}</strong><span class="document-meta">${e(displayDate(i.invoiceDate))} · ${e(money(i.finalAgorot))}</span><span class="document-meta">${i.attachmentIds.length} קבצים · פתח חשבונית</span></div><span class="badge ${i.status === "paid" ? "paid" : "unpaid"}">${i.status === "paid" ? "שולם" : "לתשלום"}</span>${icon("arrow")}</button>
     <button class="text-button" data-action="share-invoice" data-id="${e(i.id)}">${icon("share")} שתף חשבונית</button>
   </article>`).join("");
 }

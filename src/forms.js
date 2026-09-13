@@ -8,6 +8,7 @@ import {
   methods,
   types,
   monthLabel,
+  invoiceLabel,
 } from "./format.js";
 import { pendingMutation } from "./api.js";
 import { supplierPickerMarkup, bindSupplierPicker } from "./supplier-picker.js";
@@ -537,7 +538,7 @@ export async function invoiceForm(
     record ? "עריכת חשבונית" : "הוספת חשבונית",
     `${staleNotice(old, record, draft)}<form id="invoice-form">
     <div class="form-grid">${supplierPickerMarkup(f)}
-      ${field("מספר חשבונית", "documentNumber", f.documentNumber, { required: true })}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true })}
+      ${field("מספר חשבונית (רשות)", "documentNumber", f.documentNumber)}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true })}
       ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal)}${field("מע״מ כפי שרשום", "vat", f.vat, { hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
       ${field("סכום כולל מע״מ", "total", f.total, { required: true, wide: true })}
     </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
@@ -688,7 +689,7 @@ export async function paymentForm(ctx, record, { onBack = null } = {}) {
   const supplier = ctx.data.suppliers.find(s => s.id === record.supplierId)?.name || "הספק";
   const root = ctx.dialog(
     "סימון חשבונית כשולמה",
-    `<form class="payment-form"><div class="payment-amount"><span><strong>${e(supplier)}</strong> · חשבונית ${e(record.documentNumber)}</span><strong>${e(money(record.finalAgorot))}</strong></div>
+    `<form class="payment-form"><div class="payment-amount"><span><strong>${e(supplier)}</strong> · ${e(invoiceLabel(record))}</span><strong>${e(money(record.finalAgorot))}</strong></div>
       <input type="hidden" name="method" value="${e(f.method)}">
       <section data-payment-methods><h3>איך שילמת?</h3><div class="payment-methods">${Object.entries(methods).map(([value, label]) => `<button type="button" class="secondary" data-payment-method="${value}" aria-pressed="${value === f.method}">${e(label)}</button>`).join("")}</div></section>
       <section data-payment-details><div class="payment-selected"><strong data-selected-method></strong><button type="button" class="text-button" data-change-method>שנה אמצעי תשלום</button></div>
