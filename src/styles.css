@@ -1950,3 +1950,62 @@ dialog.crop-modal {
   .quick-summary-grid { grid-template-columns: 1fr; }
   .quick-summary-grid .quick-summary-row { border-inline-end: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* Daily browsing: clear rows, one current heading, and secondary actions tucked away. */
+:root { --blue: #185aaa; }
+.primary { box-shadow: none; }
+.page-heading h1, .folder-location h1 { letter-spacing: normal; }
+.search .clear-search { min-width: 56px; min-height: 56px; padding: 12px; color: #185aaa; }
+.invoice-options > summary { color: #185aaa; justify-content: start; }
+.invoice-options[open] { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.invoice-options-actions, .invoice-more-actions { display: grid; gap: 12px; }
+.invoice-options-actions { margin: 8px 0 20px; }
+.invoice-options-actions > button, .invoice-more-actions > button { justify-content: start; text-align: start; }
+.filter-title { margin-bottom: 14px; font-size: 20px; }
+.filter-active { margin-inline-start: auto; color: #73470b; background: #fff4de; border-radius: 6px; padding: 3px 8px; font-size: 16px; }
+.payable-compact { min-height: 72px; padding: 12px 14px; margin-bottom: 8px; border: 0; border-radius: 12px; }
+.payable-compact small { font-size: 17px; }
+.folder-location { padding: 0; border: 0; border-radius: 0; background: transparent; margin-bottom: 16px; }
+.folder-location h1 { color: var(--section-color); font-size: 28px; line-height: 1.3; overflow-wrap: anywhere; }
+.folder-location > p { font-size: 18px; margin: 6px 0 0; }
+.folder-list, .invoice-list { gap: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: white; }
+.invoice-list:empty { display: none; }
+.folder-list .folder-row { background: white; border: 0; border-radius: 0; min-height: 92px; padding: 16px; }
+.folder-list .folder-row + .folder-row { border-top: 1px solid var(--line); }
+.folder-list .folder-symbol { padding: 10px; border-radius: 10px; }
+.folder-title small { font-size: 17px; }
+.invoice-list .invoice-card { border: 0; border-inline-start: 3px solid #c18125; border-radius: 0; box-shadow: none; }
+.invoice-list .invoice-card.status-paid { border-inline-start-color: var(--paid-line); }
+.invoice-list .invoice-card + .invoice-card { border-top: 1px solid var(--line); }
+.invoice-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) 20px; align-items: center; gap: 12px; padding: 16px; min-height: 104px; text-align: start; }
+.invoice-identity { display: flex; flex-direction: column; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
+.invoice-values { display: flex; align-items: end; flex-direction: column; gap: 8px; min-width: 0; max-width: 100%; }
+.invoice-values .amount { font-size: 23px; font-variant-numeric: tabular-nums; white-space: normal; overflow-wrap: anywhere; }
+.invoice-main > svg { width: 20px; color: var(--muted); }
+.attachment-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 16px; }
+.attachment-indicator svg { width: 18px; height: 18px; }
+.invoice-main .document-meta { font-size: 18px; }
+.invoice-main .attachment-indicator { font-size: 16px; }
+.invoice-main .badge { padding: 4px 8px; font-size: 17px; white-space: nowrap; }
+.invoice-hero { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.invoice-hero-amount { margin-top: 14px; }
+.invoice-detail-modal .attachment-links { margin-block: 20px; }
+.attachment-row { grid-template-columns: minmax(0, 1fr); }
+.attachment-row > button { width: 100%; }
+.invoice-edit-actions { display: block; border-top: 1px solid var(--line); margin-top: 20px; }
+.invoice-more-actions { padding-block: 12px; }
+.document-actions { margin-top: 12px; }
+.quick-summary-heading:empty { display: none; }
+.quick-more { margin-top: 18px; }
+.quick-extras .quick-summary-row { border: 0; border-radius: 0; }
+.modal-navigation > [data-close-modal] { max-width: 75%; text-align: start; }
+@media (max-width: 680px) {
+  .app-shell[data-section="invoices"] #main, .app-shell[data-section="documents"] #main { padding-top: 18px; }
+  .invoice-main { grid-template-columns: minmax(0, 1fr) minmax(0, auto) 18px; padding: 14px 12px; gap: 10px; }
+  .invoice-values .amount { font-size: 21px; }
+  .invoice-main .supplier-name { font-size: 20px; }
+}
+@media (max-width: 350px) {
+  .invoice-main { grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 8px; }
+  .invoice-main > svg { display: none; }
+}

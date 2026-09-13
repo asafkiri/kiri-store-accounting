@@ -89,6 +89,7 @@ function bindDraft(ctx, form, key, draft, collect, onSubmit, options = {}) {
     recovery.hidden = !draft.cancelPending;
     recovery.textContent =
       "אפשר לערוך או למחוק את הטיוטה. לפני שמירה חדשה נבדוק אם הניסיון הקודם כבר נשמר.";
+    options.onLock?.();
   };
   const showConflict = () => {
     error.hidden = false;

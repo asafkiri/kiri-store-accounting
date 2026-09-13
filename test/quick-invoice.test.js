@@ -29,18 +29,11 @@ const submit = () => document.querySelector("form").dispatchEvent(new Event("sub
 const title = () => document.querySelector(".quick-question h3")?.textContent;
 const progress = () => document.querySelector(".quick-progress span")?.textContent;
 const answerSupplier = async () => { fill("supplierName", "ספק בדיקה"); await choose("next"); };
-// The four answers of an ordinary invoice, typed from the paper. The document
-// number is not among them; it is added from the summary when it is wanted.
+// The four answers of an ordinary invoice. Its number remains blank.
 const typeInvoice = async ({ total = "118", vat = "18" } = {}) => {
   await answerSupplier();
   fill("total", total); await choose("next");
   fill("vat", vat); await choose("vat-manual");
-  await choose("next");
-};
-const editNumber = async number => {
-  document.querySelector('[data-edit-question="documentNumber"]').click();
-  await tick();
-  fill("documentNumber", number);
   await choose("next");
 };
 
@@ -70,7 +63,8 @@ test("typed from the paper: four questions in a fixed order, then one deliberate
   await choose("next");
   assert.equal(document.querySelector(".quick-question"), null, "then the summary");
   assert.ok(document.querySelector(".quick-summary-grid"));
-  assert.match(document.querySelector(".quick-summary-grid").textContent, /מספר חשבונית[\s\S]*ללא מספר/, "the summary offers the number without demanding it");
+  assert.doesNotMatch(document.querySelector(".quick-summary-grid").textContent, /מספר חשבונית|ללא מספר/);
+  assert.equal(document.querySelector('[data-edit-question="documentNumber"],[name="documentNumber"]'), null);
   assert.equal(writes.length, 0);
   submit(); await tick();
   const saved = writes[0].body.data;
@@ -162,6 +156,7 @@ test("lost approval response retries the exact mutation after reload without ano
   await invoiceForm(ctx, null, [], { quick: true });
   await typeInvoice();
   fill("paymentReduction", "10"); submit(); await tick();
+  assert.equal(ctx.modalBack, null, "an unresolved write cannot return to editable questions");
   await invoiceForm(ctx);
   assert.equal(document.querySelector('[name="paymentReduction"]').disabled, true);
   submit(); await tick();
@@ -181,16 +176,64 @@ test("empty forms make no banners; a photo linked to its invoice makes one, and 
   assert.deepEqual(await actionableDraftNames(ctx.drafts, ctx.data), []);
 });
 
-test("the number is still one tap away on the summary, for the invoices that need it", async () => {
-  const { ctx, writes } = setup();
+test("Back walks through prior answers, retains an unfinished value on reload, and recalculates a derived subtotal", async () => {
+  const { ctx, writes, cache } = setup();
   await invoiceForm(ctx, null, [], { quick: true });
   await typeInvoice();
-  assert.match(document.querySelector(".quick-summary-grid").textContent, /ללא מספר/);
-  await editNumber("7009");
-  assert.equal(document.querySelector(".quick-question"), null, "typing it returns to the summary");
-  assert.match(document.querySelector(".quick-summary-grid").textContent, /7009/);
+  await ctx.modalBack(); await tick();
+  assert.equal(title(), "מה תאריך החשבונית?");
+  assert.equal(progress(), "שאלה 4 מתוך 4");
+  fill("invoiceDate", "2026-09-02");
+  await ctx.modalBack(); await tick();
+  assert.equal(title(), "כמה מע״מ יש בחשבונית?");
+  assert.equal(document.querySelector('[name="vat"]').value, "18.00");
+  await ctx.modalBack(); await tick();
+  assert.equal(progress(), "שאלה 2 מתוך 4");
+  fill("total", "236");
+  await invoiceForm(ctx);
+  assert.equal(title(), "מה הסכום כולל מע״מ?");
+  assert.equal(document.querySelector('[name="total"]').value, "236");
+  assert.equal(cache.get("invoice").fields.invoiceDate, "2026-09-02");
+  await choose("next");
+  fill("vat", "36"); await choose("vat-manual");
+  assert.equal(document.querySelector('[name="invoiceDate"]').value, "2026-09-02");
+  await choose("next");
+  assert.equal(title(), undefined);
   submit(); await tick();
-  assert.equal(writes[0].body.data.documentNumber, "7009");
+  assert.equal(writes[0].body.data.documentNumber, "");
+  assert.equal(writes[0].body.data.subtotalAgorot, 20000);
+  assert.equal(writes[0].body.data.finalAgorot, 23600);
+  assert.equal(writes[0].body.data.invoiceDate, "2026-09-02");
+});
+
+test("Back from a question returns to supplier selection without clearing later values or saving an invoice", async () => {
+  const { ctx, writes } = setup();
+  await invoiceForm(ctx, null, [], { quick: true });
+  assert.equal(ctx.modalBack, null);
+  await answerSupplier();
+  fill("total", "118");
+  await ctx.modalBack(); await tick();
+  assert.equal(title(), "מי הספק?");
+  assert.equal(progress(), "שאלה 1 מתוך 4");
+  assert.equal(document.querySelector('[name="supplierName"]').value, "ספק בדיקה");
+  assert.equal(ctx.modalBack, null, "the first question is the explicit exit point");
+  await choose("next");
+  assert.equal(document.querySelector('[name="total"]').value, "118");
+  assert.equal(writes.length, 0);
+});
+
+test("a deliberate subtotal correction is preserved and needs review after changing the VAT", async () => {
+  const { ctx } = setup();
+  await invoiceForm(ctx, null, [], { quick: true });
+  await typeInvoice();
+  document.querySelector('[data-edit-question="subtotalAgorot"]').click();
+  fill("subtotal", "99"); await choose("next");
+  await choose("arithmetic-keep");
+  await ctx.modalBack(); await tick();
+  await ctx.modalBack(); await tick();
+  fill("vat", "17"); await choose("vat-manual"); await choose("next");
+  assert.equal(title(), "הסכומים אינם מסתכמים");
+  assert.match(document.querySelector('.quick-question').textContent, /99\.00/);
 });
 
 // The number is no longer typed during intake, so the invoice is recognised by

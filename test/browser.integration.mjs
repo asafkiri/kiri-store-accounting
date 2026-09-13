@@ -1513,6 +1513,92 @@ async function workspaceRoute(page, route) {
 }
 
 for (const engine of [chromium, webkit]) {
+  test(`${engine.name()}: number-free invoice search, readable rows and Back through retained answers`, { timeout: 60000 }, async t => {
+    const { server, data, month, requests } = workspaceFixture();
+    data.invoices.forEach(i => { i.documentNumber = ""; });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch();
+    const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", error => errors.push(error.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, "invoices");
+    await page.locator('#invoice-search').fill("תנובה 1,254");
+    assert.equal(await page.locator('.month-folder,.supplier-folder').count(), 0);
+    assert.equal(await page.locator('.invoice-card').count(), 1);
+    const invoice = page.locator('[data-action="detail"][data-id="INV-101"]');
+    assert.equal(await page.locator('.invoice-card button').count(), 1);
+    assert.doesNotMatch(await invoice.innerText(), /מספר|ללא מספר/);
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+      const identity = await invoice.locator('.invoice-identity').boundingBox();
+      const value = await invoice.locator('.invoice-values').boundingBox();
+      assert.ok(value.x + value.width <= identity.x + 1, "amount and identity do not overlap in RTL");
+      assert.ok((await invoice.boundingBox()).height >= 56);
+    }
+    await mkdir('test-artifacts', { recursive: true });
+    await page.screenshot({ path: `test-artifacts/invoice-search-${engine.name()}.png`, fullPage: true });
+    await invoice.click();
+    assert.ok(await page.locator('.invoice-detail-primary').isVisible());
+    assert.equal(await page.locator('[data-detail-action="edit"]').isVisible(), false);
+    await page.screenshot({ path: `test-artifacts/invoice-unpaid-${engine.name()}.png` });
+    await page.locator('[data-close-modal]').click();
+    assert.equal(await page.locator('#invoice-search').inputValue(), "תנובה 1,254");
+    await page.locator('#invoice-search').fill(month + "-05");
+    await page.locator('[data-action="detail"][data-id="INV-102"]').click();
+    assert.ok(await page.locator('.payment-receipt').isVisible());
+    assert.equal(await page.locator('[data-detail-action="pay"]').isVisible(), false);
+    await page.screenshot({ path: `test-artifacts/invoice-paid-${engine.name()}.png` });
+    await page.locator('.invoice-edit-actions > summary').click();
+    assert.ok(await page.locator('[data-detail-action="pay"]').isVisible());
+    await page.locator('[data-close-modal]').click();
+    await page.locator('[data-action="clear-search"]').click();
+    assert.equal(await page.locator('.month-folder').count(), 2);
+    await page.locator('[data-action="open-unpaid"]').click();
+    assert.equal(await page.locator('.invoice-card').count(), 1);
+    assert.equal(await page.locator('.month-folder').count(), 0);
+    await page.locator('[data-action="archive"]').click();
+    await page.locator('.month-folder').first().waitFor();
+    await page.locator('.invoice-options > summary').click();
+    await page.locator('[name="from"]').fill(month + '-01');
+    assert.ok(await page.locator('[name="to"]').isVisible(), "setting the first filter does not close the panel");
+    await page.locator('[data-action="invoice"]').click();
+    await page.locator('[name="supplierName"]').fill('תנובה');
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[name="total"]').fill('118');
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[name="vat"]').fill('18');
+    await page.locator('[data-quick-choice="vat-manual"]').click();
+    await page.locator('[name="invoiceDate"]').fill(month + '-02');
+    await page.locator('[data-close-modal]').click();
+    await page.locator('[name="vat"]').waitFor();
+    assert.equal(await page.locator('[name="vat"]').inputValue(), '18.00');
+    await page.evaluate(() => history.back());
+    await page.locator('[name="total"]').waitFor();
+    assert.match(await page.locator('.quick-progress').innerText(), /שאלה 2 מתוך 4/);
+    await page.locator('[name="total"]').fill('236');
+    await page.locator('[data-quick-choice="next"]').click();
+    await page.locator('[name="vat"]').fill('36');
+    await page.locator('[data-quick-choice="vat-manual"]').click();
+    assert.equal(await page.locator('[name="invoiceDate"]').inputValue(), month + '-02');
+    await page.locator('[data-quick-choice="next"]').click();
+    assert.equal(await page.locator('[name="documentNumber"],[data-edit-question="documentNumber"]').count(), 0);
+    await page.screenshot({ path: `test-artifacts/invoice-approval-${engine.name()}.png` });
+    await page.locator('.quick-invoice [type="submit"]').click();
+    await page.locator('.save-confirmation').waitFor();
+    const saved = data.invoices.find(i => i.totalAgorot === 23600);
+    assert.equal(saved.documentNumber, '');
+    assert.equal(saved.subtotalAgorot, 20000);
+    assert.equal(saved.vatAgorot, 3600);
+    assert.equal(saved.invoiceDate, month + '-02');
+    assert.equal(requests.filter(r => r.method === 'PUT' && r.path.includes('/invoices/')).length, 1);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const engine of [chromium, webkit]) {
   test(`${engine.name()}: accessible home, Back during payment, persistent confirmation and familiar paid color`, { timeout: 60000 }, async t => {
     const { server, data, requests, month } = workspaceFixture();
     for (let n = 0; n < 12; n++) data.invoices.push({ ...data.invoices[0], id: "EXTRA-" + n, documentNumber: "EXTRA-" + n, attachmentIds: [] });
@@ -1595,7 +1681,7 @@ for (const engine of [chromium, webkit]) {
 }
 
 for (const engine of [chromium, webkit]) {
-  test(`${engine.name()}: scan-first workspace, month/supplier photos, supplier deletion and date layout`, { timeout: 60000 }, async t => {
+  test(`${engine.name()}: uncluttered archive, month/supplier photos, supplier deletion and date layout`, { timeout: 60000 }, async t => {
     const { server, requests, month, previous } = workspaceFixture();
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     let browser;
@@ -1615,15 +1701,17 @@ for (const engine of [chromium, webkit]) {
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/home-${engine.name()}.png`, fullPage: true });
     await workspaceRoute(page, "invoices");
-    const scan = await page.locator(".scan-primary").boundingBox();
-    const manual = await page.locator('[data-action="invoice"]').boundingBox();
-    assert.ok(scan.width > manual.width * 2 && scan.height > manual.height);
-    assert.ok(scan.y < 280, "primary scanning is immediately available");
+    assert.equal(await page.locator(".scan-primary").count(), 0);
+    assert.equal(await page.locator('.invoice-options').getAttribute('open'), null);
+    assert.equal(await page.locator('[data-action="invoice"]').isVisible(), false);
     const monthFolders = page.locator(".month-folder");
     assert.equal(await monthFolders.count(), 2);
     assert.equal(await monthFolders.first().getAttribute("data-value"), month);
+    const firstFolder = await monthFolders.first().boundingBox();
+    assert.ok(firstFolder.y + firstFolder.height < 650, "the first month is visible before scrolling on a phone");
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/workspace-${engine.name()}.png`, fullPage: true });
+    await workspaceRoute(page, "home");
     await page.locator(".scan-primary").click();
     await page.locator(".scan-live").waitFor();
     assert.ok(await page.locator("[data-live-gallery]").count());
@@ -1640,7 +1728,7 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await supplier.locator('.document-card').count(), 1);
     const documentTitle = await supplier.locator(".document-card-heading > div > strong").boundingBox();
     const documentMeta = await supplier.locator(".document-card-heading > div > strong + .document-meta").boundingBox();
-    assert.ok(documentMeta.y >= documentTitle.y + documentTitle.height - 1, "invoice number and date occupy separate readable lines");
+    assert.ok(documentMeta.y >= documentTitle.y + documentTitle.height - 1, "date and amount occupy separate readable lines");
     await supplier.locator('[data-action="documents"]').click();
     assert.equal(await page.locator('#modal [data-open-document]').count(), 2);
     await page.locator('#modal [data-open-document]').first().click();
@@ -1648,22 +1736,22 @@ for (const engine of [chromium, webkit]) {
     assert.equal(requests.filter(r => r.path.startsWith("/api/v1/documents/")).length, 1);
     assert.ok(await page.locator("[data-preview-download]").isVisible());
     await page.locator("[data-preview-close]").click();
-    // Deleting one page: the row stays readable on a phone, the confirmation is
-    // a real browser prompt, and only the page asked for leaves the invoice.
-    const photoRow = page.locator("#modal .attachment-row").first();
-    const openBox = await photoRow.locator("[data-open-document]").boundingBox();
-    const deleteBox = await photoRow.locator("[data-delete-document]").boundingBox();
-    assert.ok(deleteBox.y >= openBox.y + openBox.height - 1, "deleting belongs under the page it deletes");
-    const nextOpen = await page.locator("#modal [data-open-document]").nth(1).boundingBox();
-    assert.ok(nextOpen.y >= deleteBox.y + deleteBox.height - 1, "the next page starts below the previous page's delete button");
+    // Viewing is immediate. A page deletion is deliberately reached through
+    // More actions, retains its page identity, and still needs confirmation.
+    const deletePhoto = page.locator("#modal [data-delete-document]").first();
+    assert.equal(await deletePhoto.isVisible(), false);
+    await page.locator(".document-actions > summary").click();
+    const deleteBox = await deletePhoto.boundingBox();
+    const lastOpen = await page.locator("#modal [data-open-document]").last().boundingBox();
+    assert.ok(deleteBox.y >= lastOpen.y + lastOpen.height - 1, "deletions stay below the viewing controls");
     assert.ok(deleteBox.height >= 44, "the delete button stays a comfortable tap target");
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), "no horizontal overflow");
     assert.match(await page.locator("#modal").innerText(), /נמחק מהמערכת ומהאחסון אוטומטית כעבור 8 שנים/);
     page.once("dialog", dialog => dialog.dismiss());
-    await photoRow.locator("[data-delete-document]").click();
+    await deletePhoto.click();
     assert.equal(requests.filter(r => r.method === "DELETE" && r.path.includes("/documents/")).length, 0, "a dismissed question deletes nothing");
     page.once("dialog", dialog => dialog.accept());
-    await photoRow.locator("[data-delete-document]").click();
+    await deletePhoto.click();
     await page.waitForFunction(() => document.querySelectorAll("#modal [data-open-document]").length === 1);
     const deletion = requests.find(r => r.method === "DELETE" && r.path.includes("/documents/"));
     assert.equal(deletion.path, "/api/v1/invoices/INV-101/documents/" + "a".repeat(64));
@@ -1712,6 +1800,7 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').count(), 0);
     await page.reload();
     await workspaceRoute(page, "invoices");
+    await page.locator('.invoice-options > summary').click();
     await page.locator('[data-action="manage-suppliers"]').click();
     assert.equal(await page.locator('[data-action="supplier-edit"][data-id="supplier-unused"]').count(), 0);
     await page.locator('[data-action="supplier-edit"][data-id="supplier-tnuva"]').click();
@@ -1745,10 +1834,12 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await page.locator(".draft-banner").count(), 0);
     assert.equal(await page.locator('.home-actions [data-route="documents"]').count(), 1);
     await workspaceRoute(page, "invoices");
+    await page.locator('.invoice-options > summary').click();
     await page.locator('[data-action="invoice"]').click();
     await page.locator("#invoice-form").waitFor();
     await page.locator("[data-close-modal]").click();
     assert.equal(await page.locator(".draft-banner").count(), 0);
+    await workspaceRoute(page, "home");
     await page.locator(".scan-primary").click();
     await page.locator(".scan-live").waitFor();
     assert.equal(await page.locator(".scan-view").isVisible(), false);
@@ -1785,7 +1876,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[name="notes"]').blur();
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/quick-invoice-${engine.name()}.png`, fullPage: true });
-    await page.locator("[data-close-modal]").click();
+    await page.locator("[data-modal-home]").click();
     await page.locator('.draft-banner[data-key="invoice"]').waitFor();
     assert.equal(await page.locator(".draft-banner").count(), 1);
     const color = await page.locator(".draft-banner").evaluate(el => getComputedStyle(el).color);
@@ -1795,20 +1886,15 @@ for (const engine of [chromium, webkit]) {
     await page.locator(".quick-summary-grid").waitFor();
     assert.equal(await page.locator('[name="paymentReduction"]').inputValue(), "100");
     assert.equal(requests.some(r => r.path.startsWith("/api/v1/scan")), false, "nothing reads the document");
-    // The number was never asked for. It is offered on the summary, reading
-    // "ללא מספר" until it is typed, for the invoices that need to carry it.
-    assert.match(await page.locator('[data-edit-question="documentNumber"]').innerText(), /ללא מספר/);
-    await page.locator('[data-edit-question="documentNumber"]').click();
-    await page.locator("[name=documentNumber]").fill("TYPED-118");
-    await page.locator('[data-quick-choice="next"]').click();
-    await page.locator(".quick-summary-grid").waitFor();
-    assert.match(await page.locator('[data-edit-question="documentNumber"]').innerText(), /TYPED-118/);
+    assert.equal(await page.locator('[data-edit-question="documentNumber"],[name=documentNumber]').count(), 0, "the number is absent from intake and approval");
+    assert.doesNotMatch(await page.locator('.quick-summary-grid').innerText(), /ללא מספר/);
     await page.locator('.quick-invoice [type="submit"]').click();
     await page.locator('.save-confirmation').waitFor();
     await page.locator('[data-saved-done]').click();
     await page.locator("#modal").waitFor({ state: "hidden" });
     await page.waitForFunction(() => !document.querySelector(".draft-banner"));
-    const saved = data.invoices.find(i => i.documentNumber === "TYPED-118");
+    const saved = data.invoices.find(i => i.totalAgorot === 11800 && i.documentNumber === "");
+    assert.ok(saved, "saved without typing a document number");
     assert.equal(saved.finalAgorot, 1800); assert.equal(saved.vatAgorot, 1800); assert.equal(saved.totalAgorot, 11800);
     assert.equal(saved.attachmentIds.length, 1);
     await workspaceRoute(page, "settings");
@@ -1855,7 +1941,7 @@ for (const engine of [chromium, webkit]) {
     await workspaceRoute(page, "documents");
     await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
     await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
-    await page.locator('#invoice-search').fill('INV-101');
+    await page.locator('#invoice-search').fill('1,254');
     await page.locator('[data-action="share-month"]').click();
     const send = page.locator('[data-share-send]'); await send.waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 3, 'all suppliers and pages, regardless of folder/search');
@@ -1877,10 +1963,12 @@ for (const engine of [chromium, webkit]) {
     }
     await page.screenshot({ path: `test-artifacts/share-${engine.name()}.png`, fullPage: true });
     await page.locator('[data-share-close]').click();
-    await page.locator('[data-action="share-invoice"]').click();
+    await page.locator('[data-action="documents"][data-id="INV-101"]').click();
+    await page.locator('[data-share-this-invoice]').click();
     await page.locator('[data-share-send]').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.share-files li').count(), 2);
     await page.locator('[data-share-close]').click();
+    await page.locator('#modal [data-close-modal]').click();
     // Empty filtered directories still expose the parent/back navigation.
     await page.locator('#invoice-search').fill('missing-invoice');
     assert.ok(await page.locator('[data-action="folder-back"]').isVisible());

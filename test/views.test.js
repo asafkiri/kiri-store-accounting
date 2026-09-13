@@ -93,7 +93,7 @@ test("the invoice and photo archive show only the current folder and retain a ba
       { id: "i3", supplierId: "s1", invoiceDate: "2026-08-10", documentType: "invoice", documentNumber: "3", status: "paid", finalAgorot: 300, attachmentIds: ["photo-c"] },
     ],
   } };
-  const render = (view = invoicesView) => new JSDOM(view(ctx)).window.document;
+  const render = (view = invoicesView) => new JSDOM(shell({ ...ctx, lastRefresh: 1, route: view === documentsView ? "documents" : "invoices" })).window.document;
   let doc = render();
   assert.deepEqual([...doc.querySelectorAll('.month-folder')].map(b => b.dataset.value), ["2026-09", "2026-08"]);
   assert.equal(doc.querySelectorAll('.invoice-card,.supplier-folder,details.month-folder').length, 0);
@@ -108,12 +108,12 @@ test("the invoice and photo archive show only the current folder and retain a ba
   doc = render(documentsView);
   assert.equal(doc.querySelectorAll('.document-card').length, 1);
   assert.equal(doc.querySelector('[data-action="documents"]').dataset.id, "i1");
-  assert.ok(doc.querySelector('[data-action="share-invoice"]'));
+  assert.equal(doc.querySelectorAll('.document-card button').length, 1, "the row opens the document; sharing is inside it");
   // Sharing the month must still include other suppliers when viewing one.
   assert.equal(doc.querySelector('[data-action="share-month"]').dataset.month, "2026-09");
   ctx.folderPath = {}; ctx.filters.q = "ספק א"; doc = render();
-  assert.equal(doc.querySelectorAll('.month-folder').length, 2);
-  assert.equal(doc.querySelectorAll('.invoice-card').length, 0);
+  assert.equal(doc.querySelectorAll('.month-folder').length, 0);
+  assert.equal(doc.querySelectorAll('.invoice-card').length, 2, "search reaches invoices directly across months");
 });
 
 test("the main navigation does not duplicate the invoices entry already offered on Home", async () => {

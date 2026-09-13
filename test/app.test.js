@@ -183,7 +183,8 @@ test("successful sync renders server data even when local draft reads fail", asy
   document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
-  assert.match(document.body.textContent, /SERVER-OK/);
+  assert.ok(document.querySelector('[data-action="detail"][data-id="persisted-001"]'));
+  assert.match(document.body.textContent, /10\.09\.2026/);
   assert.match(document.body.textContent, /טיוטות במכשיר/);
   assert.doesNotMatch(document.body.textContent, /InvalidStateError|לא התקבל עדכון מהשרת/);
 });
@@ -249,7 +250,7 @@ test("photo archive opens month, supplier, invoice and file without scanning aga
   document.querySelector('[data-route="invoices"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
-  document.querySelector('[data-action="documents"]').click();
+  document.querySelector('[data-action="detail"]').click();
   document.querySelector('[data-open-document]').click();
   await tick();
   assert.equal(document.querySelector("#modal").open, true);
@@ -268,12 +269,12 @@ test("folder back retains status, while choosing another period leaves the old f
   } });
   await globalThis.appAuthCallback({});
   document.querySelector('[data-route="invoices"]').click();
-  document.querySelector('[data-action="status"][data-value="paid"]').click();
+  const status = document.querySelector('[name="status"]'); status.value = 'paid'; status.dispatchEvent(new Event('change'));
   document.querySelector('[data-action="folder-month"][data-value="2026-09"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   document.querySelector('[data-action="folder-back"]').click();
   await tick();
-  assert.equal(document.querySelector('[data-action="status"][data-value="paid"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(document.querySelector('[name="status"]').value, 'paid');
   assert.equal(document.querySelectorAll('.invoice-card').length, 0);
   const month = document.querySelector('[name="month"]'); month.value = '2026-08'; month.dispatchEvent(new Event('change'));
   assert.equal(document.querySelectorAll('.month-folder').length, 1);
@@ -307,7 +308,7 @@ async function photoWorkspace(t, { fileDeleted = true, failWith = null } = {}) {
   });
   globalThis.confirm = () => true;
   await globalThis.appAuthCallback({});
-  document.querySelector('[data-route="invoices"]').click();
+  document.querySelector('[data-route="documents"]').click();
   document.querySelector('[data-action="folder-month"]').click();
   document.querySelector('[data-action="folder-supplier"]').click();
   document.querySelector('[data-action="documents"]').click();
