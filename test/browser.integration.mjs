@@ -766,7 +766,7 @@ for (const engine of [chromium, webkit]) {
     const page = await scannerPage(t, engine);
     const result = await page.evaluate(async () => {
       const { detectDocument, DETECT_EDGE } = await import("/scan-worker.js");
-      const positives = ["beige-texture", "dark-counter", "wood-grain", "white-table-soft-shadow", "cut-off", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
+      const positives = ["beige-texture", "dark-counter", "counter-edge-below", "metal-behind-page", "wood-grain", "white-table-soft-shadow", "cut-off", "long-1-5", "a4-angle", "shadow-across", "crumpled", "perspective", "rotated", "long"];
       const frame = (canvas, maxEdge) => {
         const scale = Math.min(1, maxEdge / Math.max(canvas.width, canvas.height));
         if (scale === 1) return canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height);
@@ -847,6 +847,46 @@ for (const engine of [chromium, webkit]) {
     }
   });
 
+  test(`${engine.name()}: capture quality waits for focused print and ignores a sharp outer edge`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    const result = await page.evaluate(async () => {
+      const { captureQuality } = await import("/scan-worker.js");
+      const made = window.makeDocumentCanvas("dark-counter", 1000, .85, 1);
+      const canvas = document.createElement("canvas"); canvas.width = 480; canvas.height = 640;
+      const pen = canvas.getContext("2d", { willReadFrequently: true });
+      pen.drawImage(made.canvas, 0, 0, canvas.width, canvas.height);
+      const sharp = pen.getImageData(0, 0, canvas.width, canvas.height);
+      let blurred = new ImageData(new Uint8ClampedArray(sharp.data), sharp.width, sharp.height);
+      // Portable Gaussian blur: canvas.filter is not exposed in every WebKit.
+      for (let pass = 0; pass < 8; pass++) {
+        const copy = new Uint8ClampedArray(blurred.data), { width: w, height: h, data } = blurred;
+        for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) for (let c = 0; c < 3; c++) {
+          let total = 0;
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++)
+            total += copy[((y + dy) * w + x + dx) * 4 + c] * (dx ? 1 : 2) * (dy ? 1 : 2);
+          data[(y * w + x) * 4 + c] = total / 16;
+        }
+      }
+      // Restore a sharp outer frame: only the blurred print should be scored.
+      const { data, width: w, height: h } = blurred;
+      const outline = made.corners.map(p => ({ x: p.x * (w - 1), y: p.y * (h - 1) }));
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const inside = outline.every((a, i) => {
+          const b = outline[(i + 1) % 4];
+          return ((b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)) / Math.hypot(b.x - a.x, b.y - a.y) > 3;
+        });
+        if (inside) continue;
+        const i = (y * w + x) * 4;
+        for (let c = 0; c < 4; c++) data[i + c] = sharp.data[i + c];
+      }
+      const blank = new ImageData(new Uint8ClampedArray(w * h * 4).fill(255), w, h);
+      return { sharp: captureQuality(sharp, made.corners), blurred: captureQuality(blurred, made.corners), blank: captureQuality(blank, made.corners) };
+    });
+    assert.equal(result.sharp.sharp, true, JSON.stringify(result));
+    assert.equal(result.blurred.sharp, false, JSON.stringify(result));
+    assert.equal(result.blank.sharp, false, "no focus evidence keeps the manual shutter available");
+  });
+
   // The in-app camera is exercised with a fake getUserMedia backed by
   // canvas.captureStream: a page slides across the frame, then holds still.
   const fakeCamera = () => {
@@ -867,13 +907,15 @@ for (const engine of [chromium, webkit]) {
     const pen = scene.getContext("2d"), smallPen = small.getContext("2d");
     // WebKit only captures frames from a canvas that is painted; keep both in the document, tiny and inert.
     for (const canvas of [scene, small]) { Object.assign(canvas.style, { position: "fixed", left: "0", top: "0", width: "18px", height: "24px", opacity: ".01", pointerEvents: "none" }); document.body.append(canvas); }
-    window.sceneMoving = true; let step = 0;
+    window.sceneMoving = true; window.sceneBlur = 0; let step = 0;
     // Redraw continuously: a captured canvas only produces frames when it is drawn to.
     setInterval(() => {
       step++;
       const dx = window.sceneMoving ? [0, 60, 120, 180][step % 4] - 90 : 0;
       pen.fillStyle = "#282624"; pen.fillRect(0, 0, scene.width, scene.height);
+      pen.filter = `blur(${window.sceneBlur}px)`;
       pen.drawImage(paper, dx, 0, scene.width, scene.height);
+      pen.filter = "none";
       smallPen.fillStyle = "#282624"; smallPen.fillRect(0, 0, small.width, small.height);
       smallPen.drawImage(paper, 300, -100, 700, 933);
     }, 66);
@@ -943,9 +985,18 @@ for (const engine of [chromium, webkit]) {
     assert.ok(Math.abs((layout.frame[2] - layout.frame[0]) / (layout.frame[3] - layout.frame[1]) - .75) < .02, `frame keeps the 3:4 video proportions: ${JSON.stringify(layout)}`);
     await mkdir("test-artifacts", { recursive: true });
     await page.screenshot({ path: `test-artifacts/live-camera-${engine.name()}.png` });
-    // 2. Still page: lock within a few detections, then the review opens with the hint.
+    // 2. The page stops moving but is out of focus: geometry alone must not
+    // trigger capture. The manual shutter remains an immediate alternative.
+    if (engine.name() === "chromium") {
+      await page.evaluate(() => { window.sceneMoving = false; window.sceneBlur = 12; });
+      await page.waitForFunction(() => window.workerLog.filter(entry => entry.type === "quality").length >= 2);
+      await page.waitForFunction(() => !document.querySelector("[data-live-shutter]").disabled);
+      assert.equal(await page.locator(".scan-crop").count(), 0, "blurred print is not captured automatically");
+      assert.match(await page.locator("[data-live-status]").textContent(), /מיקוד/);
+    }
+    // Focus returns: lock within a few detections, then review opens with the hint.
     const before = await detectCount();
-    await page.evaluate(() => { window.sceneMoving = false; });
+    await page.evaluate(() => { window.sceneMoving = false; window.sceneBlur = 0; });
     await page.waitForSelector(".scan-crop");
     assert.ok(await detectCount() - before <= 15, `locks within a few frames after the page holds still (${await detectCount() - before})`);
     assert.equal(await page.locator(".scan-live").count(), 0, "the live view closes when the review opens");
