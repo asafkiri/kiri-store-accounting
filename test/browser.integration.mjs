@@ -1026,6 +1026,21 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await tracksEnded(), true, "a hidden tab releases the camera");
     await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
     await page.waitForFunction(streams => window.liveStreams.length > streams && document.querySelector("[data-live-paused]").hidden && document.querySelector("[data-live-video]").videoWidth === 1800, streamsBefore);
+    // 4b. While the lens is still not sharp the focus probes keep running; a tap
+    // on the shutter must still capture at once, without the focus gate.
+    if (engine.name() === "chromium") {
+      await page.evaluate(() => { window.sceneMoving = false; window.sceneBlur = 12; });
+      await page.waitForFunction(() => window.workerLog.filter(entry => entry.type === "quality").length >= 3);
+      const inits = await page.evaluate(() => window.workerLog.filter(entry => entry.type === "init").length);
+      await page.locator("[data-live-shutter]").tap();
+      await page.waitForSelector(".scan-crop");
+      assert.equal(await page.evaluate(() => window.workerLog.filter(entry => entry.type === "init").at(-1).hint), false, "a manual capture carries no hint");
+      assert.equal(await page.evaluate(() => window.workerLog.filter(entry => entry.type === "init").length), inits + 1);
+      await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+      await page.locator("[data-crop-retake-button]").tap();
+      await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+      await page.evaluate(() => { window.sceneBlur = 0; });
+    }
     // 5. Approval saves the review's own result, byte for byte.
     await page.evaluate(() => { window.sceneMoving = false; });
     await page.waitForSelector(".scan-crop");

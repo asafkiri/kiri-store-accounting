@@ -11,6 +11,9 @@ import { captureStability } from "./capture-stability.js";
 // Frames never leave the device and nothing is stored until the page is approved.
 const DETECT_EDGE = 320, DETECT_INTERVAL = 100, POLYGON_FRAMES = 2, CAPTURE_EDGE = 3000;
 const MIN_LONG_EDGE = 1600, OPEN_TIMEOUT = 3000, IDLE_TIMEOUT = 90_000, HOLD_FRAMES = 3, BORDER_HINT_MS = 3000, NO_DOCUMENT_HINT_MS = 4000;
+// A page that holds still while the lens is still focusing is probed again
+// at this pace; the geometry hold is not restarted for the lens.
+const FOCUS_RETRY_MS = 250;
 export const HINTS = {
   opening: "פותח מצלמה…",
   none: "כוון את המצלמה אל התעודה",
@@ -70,7 +73,7 @@ export function liveCapture(ctx, root, options = {}) {
     // start() is re-entrant only through its guards: `starting` blocks a second
     // tap while the camera opens, and release() bumps `openSession` so an
     // in-flight start() abandons a stream that was paused or disposed meanwhile.
-    let starting = false, openSession = 0, waitingForFocus = false;
+    let starting = false, openSession = 0, waitingForFocus = false, focusProbeAt = 0, manualRequested = false;
     const timings = [];
     const setStatus = text => { if (status.textContent !== text) status.textContent = text; };
     const setProgress = progress => {
@@ -127,7 +130,7 @@ export function liveCapture(ctx, root, options = {}) {
       release(); paused.hidden = false; showPolygon(false); shutter.disabled = true;
       setStatus(HINTS.paused);
     };
-    const resetTracking = () => { smoothed = null; missed = 0; shown = 0; waitingForFocus = false; stability.reset(); setProgress(0); showPolygon(false); borderSince = 0; noneSince = 0; };
+    const resetTracking = () => { smoothed = null; missed = 0; shown = 0; waitingForFocus = false; manualRequested = false; stability.reset(); setProgress(0); showPolygon(false); borderSince = 0; noneSince = 0; };
     const updateDebug = (ms, result) => {
       if (debugBox.hidden) return;
       timings.push(ms); if (timings.length > 50) timings.shift();
@@ -165,6 +168,7 @@ export function liveCapture(ctx, root, options = {}) {
       if (lock.state === "small") { setStatus(HINTS.small); return; }
       if (lock.state === "uncertain") { setStatus(HINTS.uncertain); return; }
       if (lock.state !== "ready") { setStatus(waitingForFocus ? HINTS.focusing : lock.progress ? HINTS.ready : HINTS.settling); return; }
+      if (waitingForFocus && now - focusProbeAt < FOCUS_RETRY_MS) { setStatus(HINTS.focusing); return; }
       void capture({ corners, polarity: result.polarity, frame: { width: video.videoWidth, height: video.videoHeight } });
     };
     const detectFrame = async () => {
@@ -216,9 +220,14 @@ export function liveCapture(ctx, root, options = {}) {
           const quality = await worker.request("quality", { image: smallPen.getImageData(0, 0, small.width, small.height), points: hint.corners }, 5000);
           if (disposed || session !== openSession) return;
           if (!quality.sharp) {
-            capturing = false; frozen.width = frozen.height = 0; stability.reset(); setProgress(0);
-            waitingForFocus = true;
-            shutter.disabled = false; setStatus(HINTS.focusing); scheduleFrames(); return;
+            // The page is still; only the lens is not ready. Keep the geometry
+            // hold and probe again shortly instead of collecting it anew.
+            capturing = false; frozen.width = frozen.height = 0; setProgress(0);
+            waitingForFocus = true; focusProbeAt = performance.now();
+            shutter.disabled = false; setStatus(HINTS.focusing);
+            // A tap that landed during the probe still counts.
+            if (manualRequested) { manualRequested = false; void capture(null); return; }
+            scheduleFrames(); return;
           }
         }
         waitingForFocus = false; frozen.hidden = false; setProgress(hint ? 1 : 0); setStatus(HINTS.locked);
@@ -245,6 +254,9 @@ export function liveCapture(ctx, root, options = {}) {
       paused.hidden = true; unavailable.hidden = true; frozen.hidden = true; showPolygon(false); shutter.disabled = true;
       setStatus(HINTS.opening);
       stopTracks(); resetTracking(); frameSize = null; capturing = false;
+      // The worker script loads while the camera opens, so the first frame is
+      // detected as soon as video arrives.
+      if (!worker) worker = imageWorker();
       let media;
       try {
         media = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 3840 }, height: { ideal: 2160 }, frameRate: { ideal: 24, max: 30 } } });
@@ -312,13 +324,14 @@ export function liveCapture(ctx, root, options = {}) {
     window.addEventListener("pagehide", onHide);
     $("[data-live-cancel]", view).onclick = () => finish({ cancelled: true, unavailable: unavailableShown });
     $("[data-live-resume]", view).onclick = () => void start();
-    shutter.onclick = () => void capture(null);
+    shutter.onclick = () => { if (capturing && running && !disposed) manualRequested = true; else void capture(null); };
     for (const input of [$("[data-live-fallback]", view), $("[data-live-phone]", view)]) {
       input.onchange = () => {
         const file = input.files[0]; input.value = "";
         if (!file) return; // Cancelling the phone camera keeps the live view.
         try { validateFile(file); } catch (error) { setStatus(error.message); return; }
         release();
+        if (!options.keepWorker) { worker?.stop(); worker = null; }
         finish({ file, hint: null, worker: null, unavailable: unavailableShown });
       };
       // The phone camera must not run on top of the live stream.
