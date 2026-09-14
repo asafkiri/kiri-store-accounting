@@ -1131,7 +1131,7 @@ for (const engine of [chromium, webkit]) {
         isNativePlatform: () => true,
         Plugins: {
           KiriScanner: {
-            available: async () => { window.nativeCalls.push("available"); return { available: window.nativeScanner.available }; },
+            available: async () => { window.nativeCalls.push("available"); return { available: window.nativeScanner.available, status: window.nativeScanner.available ? 0 : 1 }; },
             scan: async options => { window.nativeCalls.push("scan:" + options.limit); return { pages: window.nativeScanner.pages }; },
           },
         },
@@ -1165,6 +1165,11 @@ for (const engine of [chromium, webkit]) {
     await withoutPlayServices.locator("label:has(#camera-file)").tap();
     await withoutPlayServices.waitForSelector(".scan-live");
     assert.deepEqual(await withoutPlayServices.evaluate(() => window.nativeCalls), ["available"]);
+    assert.match(
+      await withoutPlayServices.locator("#scan-status").textContent(),
+      /הסורק של הטלפון לא זמין · שירותי Google/,
+      "the phone says why it fell back instead of looking like a broken camera",
+    );
     await withoutPlayServices.locator("[data-live-cancel]").tap();
     await withoutPlayServices.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
     assert.deepEqual(await withoutPlayServices.evaluate(() => window.scannerCspViolations), []);

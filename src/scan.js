@@ -5,7 +5,7 @@ import { hasDraftContent } from "./draft-activity.js";
 import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
-import { nativeApp, nativeScannerAvailable, scanPages } from "./native-bridge.js";
+import { nativeApp, nativeWrapper, scannerBlocked, scanPages } from "./native-bridge.js";
 import { uploadScanPages } from "./scan-upload.js";
 export { readFile } from "./image-upload.js";
 
@@ -460,6 +460,14 @@ export async function scanDialog(ctx, options = {}) {
   // result needs no review screen, only the same draft the other paths fill.
   const captureNative = async () => {
     if (busy) return;
+    // A phone whose scanner cannot open says why, once, and the camera inside
+    // the app takes the page instead of a tap that seems to do nothing.
+    const blocked = await scannerBlocked();
+    if (blocked) {
+      status.hidden = false;
+      status.textContent = `הסורק של הטלפון לא זמין · ${blocked}. הצילום ייעשה במצלמה שבתוך האפליקציה.`;
+      return captureLive();
+    }
     busy = true;
     ctx.setModalBusy(true);
     paint();
@@ -478,11 +486,11 @@ export async function scanDialog(ctx, options = {}) {
   };
   cameraInput.closest("label").addEventListener("click", ev => {
     if (busy || cameraInput.disabled) return;
-    // The wrapper answers before the phone does, so the tap is taken here and
-    // a phone without the scanner falls back to the camera inside the app.
-    if (nativeApp()) {
+    // Inside the wrapper the tap is taken here even when the bridge is missing:
+    // captureNative says what is wrong before handing the page to the camera.
+    if (nativeApp() || nativeWrapper()) {
       ev.preventDefault();
-      void nativeScannerAvailable().then(available => (available ? captureNative() : captureLive()));
+      void captureNative();
       return;
     }
     if (!liveCameraSupported() || isLiveCameraUnavailable()) return;

@@ -72,12 +72,27 @@ public class KiriScannerPlugin extends Plugin {
         deleteRecursively(new File(getContext().getCacheDir(), SHARE_DIR));
     }
 
-    /** Google Play services carries the scanner; without it the app stays on its own camera. */
+    /**
+     * Google Play services carries the scanner; without it the app stays on its
+     * own camera. Only a missing or unusable installation rules the scanner out
+     * here — opening it is the real test, and an out-of-date Play services
+     * still scans. The status code travels with the answer so a phone that
+     * refuses can say why instead of silently falling back.
+     */
     @PluginMethod
     public void available(PluginCall call) {
-        int status = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(getContext());
         JSObject result = new JSObject();
-        result.put("available", status == ConnectionResult.SUCCESS);
+        int status;
+        try {
+            status = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(getContext());
+        } catch (Exception error) {
+            result.put("available", false);
+            result.put("status", -1);
+            call.resolve(result);
+            return;
+        }
+        result.put("available", status == ConnectionResult.SUCCESS || status == ConnectionResult.SERVICE_VERSION_UPDATE_REQUIRED);
+        result.put("status", status);
         call.resolve(result);
     }
 

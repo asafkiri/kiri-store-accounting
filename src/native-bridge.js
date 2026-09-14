@@ -10,14 +10,23 @@ const plugin = () => {
   return capacitor.Plugins?.KiriScanner || null;
 };
 export const nativeApp = () => Boolean(plugin());
+// The wrapper marks its own WebView, so the app knows it is running inside one
+// even when the bridge did not load — that is worth saying out loud instead of
+// looking like a phone whose camera simply failed.
+export const nativeWrapper = () =>
+  typeof navigator !== "undefined" && /KiriStoreAndroid/.test(navigator.userAgent || "");
 
 let scannerCheck = null;
-// Google Play services carries the scanner. A phone without it keeps the
-// in-app camera, so the answer is remembered for the session either way.
-export function nativeScannerAvailable() {
+// Why the phone's own scanner cannot take this page, as one short clause, or
+// null when it can. Asked once per session: a missing scanner stays missing.
+export function scannerBlocked() {
+  if (!nativeWrapper() && !nativeApp()) return Promise.resolve("האפליקציה אינה מותקנת כמעטפת");
   const api = plugin();
-  if (!api?.available) return Promise.resolve(false);
-  scannerCheck ||= api.available().then(result => Boolean(result?.available), () => false);
+  if (!api?.available) return Promise.resolve("הגשר של האפליקציה לא נטען");
+  scannerCheck ||= api.available().then(
+    result => (result?.available ? null : `שירותי Google בטלפון אינם מוכנים לסריקה${result?.status ? ` (קוד ${result.status})` : ""}`),
+    error => "בדיקת הסורק נכשלה: " + (error?.message || error),
+  );
   return scannerCheck;
 }
 
