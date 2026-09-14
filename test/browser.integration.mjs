@@ -1688,7 +1688,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-batch-method="check"]').click();
     await page.locator('[name="checkNumber"]').fill("001234");
     await page.locator('[name="paymentDate"]').fill(month + "-13");
-    await page.locator('.payment-optional > summary').click();
+    assert.equal(await page.locator('.payment-optional').evaluate(el => el.open), true, "optional payment details open by default");
     await page.locator('[name="checkDueDate"]').fill(month + "-28");
     await page.screenshot({ path: `test-artifacts/batch-payment-${engine.name()}.png` });
     for (const width of [320, 390]) {
@@ -2105,7 +2105,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-payment-method="check"]').click();
     await page.locator('[name="checkNumber"]').fill("00123456");
     await page.locator('[name="paymentDate"]').fill(month + "-09");
-    await page.locator(".payment-optional > summary").click();
+    assert.equal(await page.locator(".payment-optional").evaluate(el => el.open), true, "optional payment details open by default");
     await page.locator('[name="checkDueDate"]').fill("2026-12-01");
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 600 });

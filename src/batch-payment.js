@@ -31,7 +31,7 @@ export async function batchPaymentForm(ctx, supplierId) {
     <section data-batch-phase="details"><div class="payment-selected"><strong data-selected-method></strong><button type="button" class="text-button" data-change-method>שנה אמצעי תשלום</button></div>
     ${field("יום התשלום", "paymentDate", f.paymentDate, { type: "date", required: true })}
     <div data-batch-check>${field("מספר צ׳ק (רשות)", "checkNumber", f.checkNumber)}</div>
-    <details class="payment-optional" ${f.checkDueDate || f.notes ? "open" : ""}><summary>פרטים נוספים (רשות)</summary><div data-batch-due>${field("מועד פירעון הצ׳ק (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${field("הערה לתשלום (רשות)", "notes", f.notes)}</details>
+    <details class="payment-optional" open><summary>פרטים נוספים (רשות)</summary><div data-batch-due>${field("מועד פירעון הצ׳ק (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${field("הערה לתשלום (רשות)", "notes", f.notes)}</details>
     <p>פרטי התשלום יירשמו לכל החשבוניות שבחרת.</p><button type="button" class="text-button" data-change-selection>שנה בחירת חשבוניות</button></section>
     ${footer("אשר תשלום", "בטל את רישום התשלום")}</form>`);
   const form = $("form", root), submit = $("[type=submit]", form);
