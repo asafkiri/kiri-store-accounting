@@ -15,6 +15,11 @@ export const nativeApp = () => Boolean(plugin());
 // looking like a phone whose camera simply failed.
 export const nativeWrapper = () =>
   typeof navigator !== "undefined" && /KiriStoreAndroid/.test(navigator.userAgent || "");
+// The wrapper's WebView opens the phone camera for a file input only when the
+// accepted type is the whole family; a precise list sends it to the gallery.
+// Browsers keep the precise list, which is what their own pickers read.
+export const CAPTURE_ACCEPT = "image/jpeg,image/png,image/webp";
+export const captureAccept = () => (nativeWrapper() ? "image/*" : CAPTURE_ACCEPT);
 
 let scannerCheck = null;
 // Why the phone's own scanner cannot take this page, as one short clause, or

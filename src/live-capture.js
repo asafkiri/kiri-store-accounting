@@ -3,6 +3,7 @@ import { imageWorker } from "./image-worker.js";
 import { validateFile } from "./image-upload.js";
 import { DISPLAY_CONFIDENCE } from "./scan-worker.js";
 import { captureStability } from "./capture-stability.js";
+import { captureAccept } from "./native-bridge.js";
 
 // Live camera view: getUserMedia inside the app, document detection on small
 // frames in the worker, a polygon like the phone's own scanner, and automatic
@@ -51,11 +52,11 @@ export function liveCapture(ctx, root, options = {}) {
         <canvas data-live-frozen hidden></canvas>
         <svg class="live-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polygon data-live-polygon points="" fill="rgba(56,132,255,.08)" stroke="#4d9cff" stroke-width="2" vector-effect="non-scaling-stroke" hidden></polygon></svg>
         <div class="live-overlay" data-live-paused hidden><p>${HINTS.paused}</p><button type="button" class="primary" data-live-resume>הקש להפעלת המצלמה</button></div>
-        <div class="live-overlay" data-live-unavailable hidden><p>${HINTS.unavailable}</p><label class="primary upload-label">צלם עם מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-fallback hidden></label></div>
+        <div class="live-overlay" data-live-unavailable hidden><p>${HINTS.unavailable}</p><label class="primary upload-label">צלם עם מצלמת הטלפון<input type="file" accept="${captureAccept()}" capture="environment" data-live-fallback hidden></label></div>
         <pre class="live-debug" data-live-debug ${debug ? "" : "hidden"}></pre>
       </div></div>
       <div class="live-progress" aria-hidden="true"><span data-live-progress></span></div>
-      <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>
+      <div class="live-actions"><label class="secondary upload-label live-phone">מצלמת הטלפון<input type="file" accept="${captureAccept()}" capture="environment" data-live-phone hidden></label><button type="button" class="live-shutter" data-live-shutter aria-label="צלם" disabled><span></span></button><span class="live-actions-spacer"></span></div>
       ${options.alternatives ? '<div class="live-alternatives"><label class="text-button upload-label">בחר PDF / תמונה<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple data-live-gallery hidden></label><button type="button" class="text-button" data-live-manual>הקלד חשבונית ידנית</button></div>' : ""}`;
     if (scanView) scanView.hidden = true;
     const modal = root.closest("dialog"), previousScroll = modal?.scrollTop || 0;

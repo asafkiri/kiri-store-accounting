@@ -167,3 +167,14 @@ test("without any way to share, the reason is said in Hebrew", async t => {
   const { shareFiles } = await freshExport();
   await assert.rejects(shareFiles([new File(["a"], "a.pdf")]), /השיתוף אינו נתמך כאן/);
 });
+
+test("only the wrapper widens the accepted type, so its WebView opens the camera", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "navigator", previous); });
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (iPhone) Safari" }, configurable: true, writable: true });
+  const web = await freshBridge();
+  assert.equal(web.captureAccept(), "image/jpeg,image/png,image/webp");
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (Linux; Android 14) KiriStoreAndroid" }, configurable: true, writable: true });
+  const wrapper = await freshBridge();
+  assert.equal(wrapper.captureAccept(), "image/*", "a precise list sends the wrapper to the gallery instead");
+});
