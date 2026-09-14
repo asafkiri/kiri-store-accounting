@@ -39,9 +39,9 @@ test("a moving page and slow continuous drift never trigger capture", () => {
   }
 });
 
-// A trembling hand: the page jumps up and down by 2% of the long edge between
+// A trembling hand: the page jumps around by up to 2% of the long edge between
 // detections, more than the strict hold tolerates, yet it stays in place.
-const tremble = i => page(0, { corners: page().corners.map(p => ({ x: p.x, y: p.y + (i % 2 ? .02 : -.02) })) });
+const tremble = i => page(0, { corners: page().corners.map(p => ({ x: p.x, y: p.y + [0, .02, -.015, .01, -.02][i % 5] })) });
 
 test("a trembling hand that stays put is captured by the patient hold", () => {
   const tracker = captureStability();
@@ -50,6 +50,24 @@ test("a trembling hand that stays put is captured by the patient hold", () => {
   assert.ok(states.slice(0, 15).every(s => s.state === "settling"), "nothing before a second and a half");
   assert.ok(states[14].progress > .8 && states[14].progress < 1, "the bar fills while the patient hold builds up");
   assert.equal(states[15].state, "ready");
+});
+
+test("a step away from where the page was does not lock on the frame that steps", () => {
+  const wobble = (i, offset = 0) => page(0, { corners: page().corners.map(p => ({ x: p.x, y: p.y + offset + (i % 2 ? .01 : -.01) })) });
+  const tracker = captureStability();
+  for (let i = 0; i < 15; i++) feed(tracker, i * 100, wobble(i));
+  assert.equal(feed(tracker, 1500, wobble(15, .035)).state, "settling", "one detection 3.5% away is not evidence of a page at rest");
+  const later = captureStability();
+  for (let i = 0; i < 15; i++) feed(later, i * 100, wobble(i));
+  for (let i = 15; i < 30; i++) assert.notEqual(feed(later, i * 100, wobble(i, (i - 14) * .02)).state, "ready", `a pan starting after a tremble at ${i * 100}ms`);
+});
+
+test("the patient hold keeps tracking while the strict hold is ready", () => {
+  const tracker = captureStability();
+  for (let i = 0; i <= 14; i++) feed(tracker, i * 100);
+  assert.equal(feed(tracker, 1500).state, "ready");
+  // A bump of 4% after a long still phase is not captured on the spot.
+  assert.equal(feed(tracker, 1600, page(0, { corners: page().corners.map(p => ({ x: p.x, y: p.y + .04 })) })).state, "settling");
 });
 
 test("the patient hold never captures a page that creeps or is seen only now and then", () => {
