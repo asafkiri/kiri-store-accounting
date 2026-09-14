@@ -29,7 +29,7 @@ async function setup(t, sdk = {}) {
       'export const {initializeAuth,sendCode}=globalThis.appTestSdk; export const onAuthStateChanged=(_auth,fn)=>{globalThis.appAuthCallback=fn;}, signOut=async()=>{}; export {authMessage} from "' +
       resolveAuthPath() +
       '";',
-    "./export.js": "export const invoiceCsv=()=>'',cashCsv=()=>'',download=async(...args)=>globalThis.appTestSdk.download?.(...args);",
+    "./export.js": "export const invoiceCsv=()=>'',cashCsv=()=>'',canShareFiles=()=>false,shareFiles=async(...args)=>globalThis.appTestSdk.share?.(...args),download=async(...args)=>globalThis.appTestSdk.download?.(...args);",
     "./api.js":
       "export class Api { request(...args) { return globalThis.appTestSdk.request(...args); } save(pending) { return this.request(pending.path, { method: pending.method, body: pending.body }); } } export class ApiError extends Error {} export const pendingMutation=(path,data,expectedVersion=0,method='PUT',extra={})=>({path,method,body:{expectedVersion,mutationId:'test-mutation-'+path,...(data?{data}:{}),...extra}});",
     "./drafts.js":

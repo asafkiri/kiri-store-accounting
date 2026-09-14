@@ -1115,6 +1115,60 @@ for (const engine of [chromium, webkit]) {
     assert.ok(deniedChooser, "a denied permission hands the button to the phone camera");
     assert.deepEqual(await denied.evaluate(() => window.scannerCspViolations), []);
   });
+
+  // The Android wrapper is the same site with one plugin injected. Only the
+  // plugin is faked here; the page, its draft and its limits are the real ones.
+  test(`${engine.name()}: in the Android wrapper the phone's scanner fills the draft, and a phone without it keeps the in-app camera`, { timeout: 60000 }, async t => {
+    const page = await scannerPage(t, engine);
+    await page.evaluate(() => window.openScanner());
+    const installBridge = (target, available = true) => target.evaluate(async available => {
+      const { canvas } = window.makeDocumentCanvas("dark-counter", 900, .85, 1);
+      const data = canvas.toDataURL("image/jpeg", .88).split(",")[1];
+      canvas.width = canvas.height = 1;
+      window.nativeCalls = [];
+      window.nativeScanner = { available, pages: [{ name: "scan-1.jpg", mime: "image/jpeg", data }] };
+      window.Capacitor = {
+        isNativePlatform: () => true,
+        Plugins: {
+          KiriScanner: {
+            available: async () => { window.nativeCalls.push("available"); return { available: window.nativeScanner.available }; },
+            scan: async options => { window.nativeCalls.push("scan:" + options.limit); return { pages: window.nativeScanner.pages }; },
+          },
+        },
+      };
+    }, available);
+    await installBridge(page);
+    await page.locator("label:has(#camera-file)").tap();
+    await page.waitForFunction(() => window.scanDrafts()[0]?.[1].files.length === 1 && !window.scanBusy);
+    assert.deepEqual(await page.evaluate(() => window.nativeCalls), ["available", "scan:8"], "the room left in the draft is the page limit");
+    assert.equal(await page.locator(".scan-crop").count(), 0, "a scanned page needs no review screen");
+    assert.equal(await page.locator(".scan-live").count(), 0, "and never opens the in-app camera");
+    const saved = await page.evaluate(() => window.scanDrafts()[0][1].files[0]);
+    assert.equal(saved.mime, "image/jpeg");
+    assert.ok(saved.data.length > 1000, `the scanned page is stored as it arrived: ${saved.data.length} bytes`);
+    assert.equal(await page.locator(".file-preview").count(), 1);
+    // A second scan is offered the remaining room, and a refusal is readable.
+    await page.evaluate(() => { window.nativeScanner.pages = [{ name: "broken.jpg", mime: "image/jpeg", data: "" }]; });
+    await page.locator("label:has(#camera-file)").tap();
+    await page.waitForFunction(() => document.querySelector("#scan-error")?.hidden === false);
+    assert.match(await page.locator("#scan-error").textContent(), /הסריקה לא הושלמה/);
+    assert.deepEqual(await page.evaluate(() => window.nativeCalls.at(-1)), "scan:7");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "a refused scan leaves the draft as it was");
+    assert.deepEqual(await page.evaluate(() => window.scannerCspViolations), []);
+    await page.close();
+    // A phone whose Google Play services cannot scan: the same button opens the
+    // app's own camera, and the scanner is never asked for pages.
+    const withoutPlayServices = await scannerPage(t, engine);
+    await withoutPlayServices.evaluate(() => window.openScanner());
+    await installBridge(withoutPlayServices, false);
+    await withoutPlayServices.evaluate(fakeCamera);
+    await withoutPlayServices.locator("label:has(#camera-file)").tap();
+    await withoutPlayServices.waitForSelector(".scan-live");
+    assert.deepEqual(await withoutPlayServices.evaluate(() => window.nativeCalls), ["available"]);
+    await withoutPlayServices.locator("[data-live-cancel]").tap();
+    await withoutPlayServices.waitForFunction(() => !document.querySelector(".scan-live") && !window.scanBusy);
+    assert.deepEqual(await withoutPlayServices.evaluate(() => window.scannerCspViolations), []);
+  });
 }
 
 for (const engine of [chromium, webkit]) {

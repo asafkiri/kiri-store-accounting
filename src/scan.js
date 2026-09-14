@@ -5,6 +5,7 @@ import { hasDraftContent } from "./draft-activity.js";
 import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
+import { nativeApp, nativeScannerAvailable, scanPages } from "./native-bridge.js";
 import { uploadScanPages } from "./scan-upload.js";
 export { readFile } from "./image-upload.js";
 
@@ -454,8 +455,37 @@ export async function scanDialog(ctx, options = {}) {
     }
     if (root.isConnected && result?.manual) $("#fill-details", root).click();
   };
+  // In the Android app the phone's own document scanner takes the page: it
+  // finds the borders, straightens and cleans it, and returns it ready. Its
+  // result needs no review screen, only the same draft the other paths fill.
+  const captureNative = async () => {
+    if (busy) return;
+    busy = true;
+    ctx.setModalBusy(true);
+    paint();
+    err.hidden = true;
+    try {
+      const room = 8 - draft.files.length;
+      if (room <= 0) throw Error("ניתן לבחור עד 8 קבצים ועד 12 מגה בסך הכול.");
+      for (const page of await scanPages(room)) await acceptPage(page);
+    } catch (error) {
+      showError(error);
+    } finally {
+      busy = false;
+      ctx.setModalBusy(false);
+      if (root.isConnected) paint();
+    }
+  };
   cameraInput.closest("label").addEventListener("click", ev => {
-    if (busy || cameraInput.disabled || !liveCameraSupported() || isLiveCameraUnavailable()) return;
+    if (busy || cameraInput.disabled) return;
+    // The wrapper answers before the phone does, so the tap is taken here and
+    // a phone without the scanner falls back to the camera inside the app.
+    if (nativeApp()) {
+      ev.preventDefault();
+      void nativeScannerAvailable().then(available => (available ? captureNative() : captureLive()));
+      return;
+    }
+    if (!liveCameraSupported() || isLiveCameraUnavailable()) return;
     ev.preventDefault();
     void captureLive();
   });

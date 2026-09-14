@@ -61,6 +61,7 @@ export function createBrowserCheckServer() {
         "/image-upload.js",
         "/image-worker.js",
         "/live-capture.js",
+        "/native-bridge.js",
         "/capture-stability.js",
         "/drafts.js",
         "/preview.js",

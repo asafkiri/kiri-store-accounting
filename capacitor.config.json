@@ -1,0 +1,14 @@
+{
+  "appId": "com.kiristore.accounting",
+  "appName": "החשבונות של החנות",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#f4f6f9",
+    "allowMixedContent": false,
+    "appendUserAgent": "KiriStoreAndroid"
+  },
+  "server": {
+    "url": "https://kiri-store-accounting.web.app",
+    "errorPath": "offline.html"
+  }
+}
