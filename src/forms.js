@@ -790,7 +790,7 @@ export async function paymentForm(ctx, record, { onBack = null } = {}) {
       <section data-payment-details><div class="payment-selected"><strong data-selected-method></strong><button type="button" class="text-button" data-change-method>שנה אמצעי תשלום</button></div>
       <div class="form-grid">${field("באיזה יום מסרת את הצ׳ק?", "paymentDate", f.paymentDate, { type: "date", required: true, wide: true })}
       <div class="notice wide" id="check-notice">תאריך המסירה לספק נשמר כתאריך התשלום.</div><div id="check-fields" class="wide">${field("מספר צ׳ק (רשות)", "checkNumber", f.checkNumber)}</div>
-      <details class="payment-optional wide" ${f.checkDueDate || f.notes ? "open" : ""}><summary>פרטים נוספים (רשות)</summary><div data-check-due>${field("מועד פירעון הצ׳ק (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${textArea("notes", f.notes, "הערה לתשלום (רשות)")}</details></div></section>
+      <details class="payment-optional wide" open><summary>פרטים נוספים (רשות)</summary><div data-check-due>${field("מועד פירעון הצ׳ק (רשות)", "checkDueDate", f.checkDueDate, { type: "date" })}</div>${textArea("notes", f.notes, "הערה לתשלום (רשות)")}</details></div></section>
       ${footer(record.status === "paid" ? "עדכן פרטי תשלום" : "אשר תשלום", "בטל את רישום התשלום")}</form>`,
   );
   const form = $("form", root),

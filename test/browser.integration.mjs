@@ -897,9 +897,15 @@ for (const engine of [chromium, webkit]) {
         super(...args); window.workerCount++;
         this.addEventListener("message", ({ data }) => {
           if (data.result && "hintUsed" in data.result) window.workerLog.push({ type: "init-result", hintUsed: data.result.hintUsed, detected: data.result.detected, blob: data.result.blob });
+          if (data.result && "sharp" in data.result) window.workerLog.push({ type: "quality-result", sharp: data.result.sharp, at: performance.now() });
         });
       }
-      postMessage(message, ...args) { window.workerLog.push({ type: message.type, hint: Boolean(message.hint) }); super.postMessage(message, ...args); }
+      postMessage(message, ...args) {
+        window.workerLog.push({ type: message.type, hint: Boolean(message.hint), at: performance.now() });
+        // A slow lens check keeps the probe in flight long enough to tap during it.
+        if (message.type === "quality" && window.slowQuality) { setTimeout(() => super.postMessage(message, ...args), 400); return; }
+        super.postMessage(message, ...args);
+      }
     };
     const { canvas: paper } = window.makeDocumentCanvas("dark-counter", 1000, .85, 1);
     const scene = document.createElement("canvas"); scene.width = 1800; scene.height = 2400;
@@ -1026,6 +1032,32 @@ for (const engine of [chromium, webkit]) {
     assert.equal(await tracksEnded(), true, "a hidden tab releases the camera");
     await page.evaluate(() => { Object.defineProperty(document, "hidden", { get: () => false, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); });
     await page.waitForFunction(streams => window.liveStreams.length > streams && document.querySelector("[data-live-paused]").hidden && document.querySelector("[data-live-video]").videoWidth === 1800, streamsBefore);
+    // 4b. While the lens is still not sharp the focus probes keep running on the
+    // same hold, the shutter stays live, and a tap during a probe captures at
+    // once without the focus gate.
+    if (engine.name() === "chromium") {
+      const logCount = type => page.evaluate(type => window.workerLog.filter(entry => entry.type === type).length, type);
+      const probesBefore = await logCount("quality");
+      await page.evaluate(() => { window.sceneMoving = false; window.sceneBlur = 12; });
+      await page.waitForFunction(n => window.workerLog.filter(entry => entry.type === "quality-result").length >= n + 2, probesBefore);
+      assert.equal(await page.locator(".scan-crop").count(), 0, "blurred print is still not captured automatically");
+      const waiting = await page.evaluate(() => ({ status: document.querySelector("[data-live-status]").textContent, progress: document.querySelector("[data-live-progress]").style.transform, shutter: document.querySelector("[data-live-shutter]").disabled }));
+      assert.match(waiting.status, /מיקוד/);
+      assert.equal(waiting.progress, "scaleX(1)", `the hold survives a failed focus probe: ${JSON.stringify(waiting)}`);
+      assert.equal(waiting.shutter, false, "the shutter stays usable while the lens is waited for");
+      const inits = await logCount("init");
+      await page.evaluate(() => { window.slowQuality = true; });
+      await page.waitForFunction(() => window.workerLog.filter(entry => entry.type === "quality").length > window.workerLog.filter(entry => entry.type === "quality-result").length);
+      assert.equal(await page.locator("[data-live-shutter]").isEnabled(), true, "the shutter is enabled while a probe is in flight");
+      await page.locator("[data-live-shutter]").tap({ force: true });
+      await page.waitForSelector(".scan-crop");
+      assert.equal(await page.evaluate(() => window.workerLog.filter(entry => entry.type === "init").at(-1).hint), false, "a manual capture carries no hint");
+      assert.equal(await logCount("init"), inits + 1, "exactly one capture");
+      await page.waitForFunction(() => !document.querySelector("[data-crop-accept]").disabled);
+      await page.locator("[data-crop-retake-button]").tap();
+      await page.waitForFunction(() => document.querySelector("[data-live-video]")?.videoWidth === 1800);
+      await page.evaluate(() => { window.slowQuality = false; window.sceneBlur = 0; });
+    }
     // 5. Approval saves the review's own result, byte for byte.
     await page.evaluate(() => { window.sceneMoving = false; });
     await page.waitForSelector(".scan-crop");
@@ -1688,7 +1720,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-batch-method="check"]').click();
     await page.locator('[name="checkNumber"]').fill("001234");
     await page.locator('[name="paymentDate"]').fill(month + "-13");
-    await page.locator('.payment-optional > summary').click();
+    assert.equal(await page.locator('.payment-optional').evaluate(el => el.open), true, "optional payment details open by default");
     await page.locator('[name="checkDueDate"]').fill(month + "-28");
     await page.screenshot({ path: `test-artifacts/batch-payment-${engine.name()}.png` });
     for (const width of [320, 390]) {
@@ -2105,7 +2137,7 @@ for (const engine of [chromium, webkit]) {
     await page.locator('[data-payment-method="check"]').click();
     await page.locator('[name="checkNumber"]').fill("00123456");
     await page.locator('[name="paymentDate"]').fill(month + "-09");
-    await page.locator(".payment-optional > summary").click();
+    assert.equal(await page.locator(".payment-optional").evaluate(el => el.open), true, "optional payment details open by default");
     await page.locator('[name="checkDueDate"]').fill("2026-12-01");
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 600 });
