@@ -21,29 +21,44 @@ const setNavigator = (t, value) => {
 const page = (extra = {}) => ({ name: "scan-1.jpg", mime: "image/jpeg", data: "AAECAw==", ...extra });
 
 test("the bridge is invisible in a browser and in a wrapper without the plugin", async t => {
-  const { nativeApp, nativeScannerAvailable, scanPages } = await freshBridge();
+  const { nativeApp, scannerBlocked, scanPages } = await freshBridge();
   assert.equal(nativeApp(), false, "no window.Capacitor at all");
   installPlugin(t, { scan: async () => ({ pages: [page()] }) }, { native: false });
   assert.equal(nativeApp(), false, "Capacitor reporting the web platform");
   globalThis.window = { Capacitor: { isNativePlatform: () => true, Plugins: {} } };
   assert.equal(nativeApp(), false, "a wrapper build without the scanner plugin");
-  assert.equal(await nativeScannerAvailable(), false);
+  assert.match(await scannerBlocked(), /אינה מותקנת כמעטפת/);
   await assert.rejects(scanPages(), /הסורק של הטלפון אינו זמין/);
 });
 
-test("a phone without Google Play services answers once and is remembered", async t => {
+test("a wrapper whose bridge never loaded is named as such, not as a broken camera", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (Linux; Android 14) KiriStoreAndroid" }, configurable: true, writable: true });
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "navigator", previous); });
+  const { nativeWrapper, scannerBlocked } = await freshBridge();
+  assert.equal(nativeWrapper(), true);
+  assert.match(await scannerBlocked(), /הגשר של האפליקציה לא נטען/);
+});
+
+test("a phone without Google Play services answers once, with its reason", async t => {
   let asked = 0;
-  installPlugin(t, { available: async () => { asked++; return { available: false }; }, scan: async () => ({ pages: [] }) });
-  const { nativeScannerAvailable } = await freshBridge();
-  assert.equal(await nativeScannerAvailable(), false);
-  assert.equal(await nativeScannerAvailable(), false);
+  installPlugin(t, { available: async () => { asked++; return { available: false, status: 1 }; }, scan: async () => ({ pages: [] }) });
+  const { scannerBlocked } = await freshBridge();
+  assert.match(await scannerBlocked(), /שירותי Google.*קוד 1/);
+  await scannerBlocked();
   assert.equal(asked, 1, "the phone is asked once per session");
 });
 
-test("a failing availability check keeps the app on its own camera", async t => {
+test("a scanner the phone says is ready blocks nothing", async t => {
+  installPlugin(t, { available: async () => ({ available: true, status: 0 }), scan: async () => ({ pages: [] }) });
+  const { scannerBlocked } = await freshBridge();
+  assert.equal(await scannerBlocked(), null);
+});
+
+test("a failing availability check keeps the app on its own camera and says so", async t => {
   installPlugin(t, { available: async () => { throw Error("play services missing"); } });
-  const { nativeScannerAvailable } = await freshBridge();
-  assert.equal(await nativeScannerAvailable(), false);
+  const { scannerBlocked } = await freshBridge();
+  assert.match(await scannerBlocked(), /בדיקת הסורק נכשלה: play services missing/);
 });
 
 test("scanned pages arrive as ready draft pages, and a cancelled scan adds none", async t => {
@@ -151,4 +166,15 @@ test("without any way to share, the reason is said in Hebrew", async t => {
   t.after(() => { globalThis.window = previous; });
   const { shareFiles } = await freshExport();
   await assert.rejects(shareFiles([new File(["a"], "a.pdf")]), /השיתוף אינו נתמך כאן/);
+});
+
+test("only the wrapper widens the accepted type, so its WebView opens the camera", async t => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  t.after(() => { if (previous) Object.defineProperty(globalThis, "navigator", previous); });
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (iPhone) Safari" }, configurable: true, writable: true });
+  const web = await freshBridge();
+  assert.equal(web.captureAccept(), "image/jpeg,image/png,image/webp");
+  Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (Linux; Android 14) KiriStoreAndroid" }, configurable: true, writable: true });
+  const wrapper = await freshBridge();
+  assert.equal(wrapper.captureAccept(), "image/*", "a precise list sends the wrapper to the gallery instead");
 });

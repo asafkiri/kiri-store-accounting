@@ -5,7 +5,7 @@ import { hasDraftContent } from "./draft-activity.js";
 import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
-import { nativeApp, nativeScannerAvailable, scanPages } from "./native-bridge.js";
+import { nativeApp, nativeWrapper, scannerBlocked, scanPages, captureAccept } from "./native-bridge.js";
 import { uploadScanPages } from "./scan-upload.js";
 export { readFile } from "./image-upload.js";
 
@@ -50,7 +50,7 @@ export function reviewPhoto(ctx, root, firstFile, options = {}) {
       <img data-crop-result alt="תעודה משופרת" draggable="false">
       <svg class="crop-outline" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path fill="rgba(0,0,0,.42)" fill-rule="evenodd"></path><polygon fill="none" stroke="#7dd3fc" stroke-width="2" vector-effect="non-scaling-stroke"></polygon></svg>
       ${["שמאלית עליונה", "ימנית עליונה", "ימנית תחתונה", "שמאלית תחתונה"].map((label, i) => `<button type="button" class="crop-handle" data-crop-corner="${i}" aria-label="פינה ${label}" disabled><span></span></button>`).join("")}</div></div>
-      <div class="crop-actions"><button type="button" class="primary" data-crop-accept disabled>אשר</button><button type="button" class="secondary" data-crop-retake-button>צלם שוב</button><button type="button" class="text-button crop-adjust" data-crop-adjust disabled>תקן ידנית</button><button type="button" class="secondary" data-crop-original hidden>ללא חיתוך</button><input data-crop-retake type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></div>`;
+      <div class="crop-actions"><button type="button" class="primary" data-crop-accept disabled>אשר</button><button type="button" class="secondary" data-crop-retake-button>צלם שוב</button><button type="button" class="text-button crop-adjust" data-crop-adjust disabled>תקן ידנית</button><button type="button" class="secondary" data-crop-original hidden>ללא חיתוך</button><input data-crop-retake type="file" accept="${captureAccept()}" capture="environment" hidden></div>`;
     if (scanView) scanView.hidden = true;
     const modal = root.closest("dialog"), previousScroll = modal?.scrollTop || 0;
     root.classList.add("crop-modal-content"); modal?.classList.add("crop-modal");
@@ -357,7 +357,7 @@ export async function scanDialog(ctx, options = {}) {
   let draft = (await ctx.drafts.load(key)) || { files: [], attachmentIds: [] };
   const root = ctx.dialog(
     "צילום חשבונית",
-    `<div class="scan-view"><p>צלם את החשבונית. אם יש לה עוד עמודים, הוסף גם אותם; אחר כך ממלאים את הפרטים מהנייר.</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 קבצים לאותה חשבונית. אפשר להגדיל כל צילום לפני שממשיכים.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="fill-details">המשך למילוי הפרטים</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
+    `<div class="scan-view"><p>צלם את החשבונית. אם יש לה עוד עמודים, הוסף גם אותם; אחר כך ממלאים את הפרטים מהנייר.</p><div class="capture-actions"><label class="primary upload-label">${icon("camera")} צלם עמוד<input type="file" id="camera-file" accept="${captureAccept()}" capture="environment" hidden></label><label class="secondary upload-label">בחר תמונות / PDF<input type="file" id="gallery-file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple hidden></label></div><p class="muted small">עד 8 קבצים לאותה חשבונית. אפשר להגדיל כל צילום לפני שממשיכים.</p><div id="file-previews" class="file-previews"></div><div id="scan-error" class="form-error" role="alert" hidden></div><div id="scan-status" class="notice" hidden></div><div class="scan-buttons"><button class="primary" id="fill-details">המשך למילוי הפרטים</button><button class="text-button" id="clear-scan">נקה את הצילום והטיוטה</button></div></div>`,
   );
   let busy = false;
   const persist = () => hasDraftContent(key, draft) ? ctx.drafts.save(key, draft) : ctx.drafts.remove(key);
@@ -460,6 +460,14 @@ export async function scanDialog(ctx, options = {}) {
   // result needs no review screen, only the same draft the other paths fill.
   const captureNative = async () => {
     if (busy) return;
+    // A phone whose scanner cannot open says why, once, and the camera inside
+    // the app takes the page instead of a tap that seems to do nothing.
+    const blocked = await scannerBlocked();
+    if (blocked) {
+      status.hidden = false;
+      status.textContent = `הסורק של הטלפון לא זמין · ${blocked}. הצילום ייעשה במצלמה שבתוך האפליקציה.`;
+      return captureLive();
+    }
     busy = true;
     ctx.setModalBusy(true);
     paint();
@@ -478,11 +486,11 @@ export async function scanDialog(ctx, options = {}) {
   };
   cameraInput.closest("label").addEventListener("click", ev => {
     if (busy || cameraInput.disabled) return;
-    // The wrapper answers before the phone does, so the tap is taken here and
-    // a phone without the scanner falls back to the camera inside the app.
-    if (nativeApp()) {
+    // Inside the wrapper the tap is taken here even when the bridge is missing:
+    // captureNative says what is wrong before handing the page to the camera.
+    if (nativeApp() || nativeWrapper()) {
       ev.preventDefault();
-      void nativeScannerAvailable().then(available => (available ? captureNative() : captureLive()));
+      void captureNative();
       return;
     }
     if (!liveCameraSupported() || isLiveCameraUnavailable()) return;
