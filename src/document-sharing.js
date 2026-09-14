@@ -1,6 +1,6 @@
 import { $, icon, errorText } from "./ui.js";
 import { escapeHtml as e, monthLabel, displayDate, money, moneyInput } from "./format.js";
-import { download } from "./export.js";
+import { download, canShareFiles, shareFiles } from "./export.js";
 
 export const SHARE_BATCH_BYTES = 18 * 1024 * 1024;
 export const SHARE_BATCH_FILES = 20;
@@ -113,7 +113,7 @@ export function shareDocuments(ctx, selection) {
   let closed = false, current;
   const active = run => !closed && dialog.isConnected && ctx.api === api && current === run;
   const showError = err => { error.hidden = false; error.textContent = errorText(err); };
-  const canShare = files => { try { return Boolean(navigator.share && navigator.canShare?.({ files })); } catch { return false; } };
+  const canShare = files => canShareFiles(files);
   const progress = (run, count) => {
     if (!active(run)) return;
     $("progress", dialog).value = count;
@@ -180,7 +180,7 @@ export function shareDocuments(ctx, selection) {
     try {
       const files = run.batch.files.map(f => f.file);
       // No downloads/conversion before share: this click grants activation.
-      await navigator.share({ files: canShare(files) ? files : [run.archive] });
+      await shareFiles(canShare(files) ? files : [run.archive]);
       if (active(run)) markOffered(run);
     } catch (err) { if (active(run) && err?.name !== "AbortError") showError(Error("השיתוף לא נפתח. נסה שוב או הורד את הקובץ ושלח אותו מהקבצים במכשיר.")); }
     finally {

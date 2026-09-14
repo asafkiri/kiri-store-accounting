@@ -18,6 +18,9 @@
     "pdf-lib": "1.17.1"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "esbuild": "0.25.9",
     "fake-indexeddb": "6.2.2",
     "jsdom": "26.1.0",

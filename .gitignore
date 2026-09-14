@@ -10,3 +10,7 @@ firebase-debug.log
 .DS_Store
 test-artifacts/
 gha-creds-*.json
+
+# Android signing keys are never committed
+*.keystore
+*.jks

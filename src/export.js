@@ -1,4 +1,5 @@
 import { moneyInput, methods, types } from "./format.js";
+import { nativeApp, nativeShare } from "./native-bridge.js";
 export function csvCell(value) {
   let s = String(value ?? "");
   if (/^[\s]*[=+\-@\t\r]/.test(s) && !/^-\d+(?:\.\d{1,2})?$/.test(s)) s = "'" + s;
@@ -65,6 +66,20 @@ export function cashCsv(items) {
       .join("\r\n")
   );
 }
+// Files leave the app the way the phone offers: the web share sheet, the
+// Android one in the wrapper, or a download. The wrapper has no download at
+// all — a blob link there saves nothing — so sharing is the only way out.
+export const canShareFiles = files => {
+  try {
+    if (navigator.share && navigator.canShare?.({ files })) return true;
+  } catch { /* canShare throws on some files instead of answering */ }
+  return nativeApp();
+};
+export async function shareFiles(files) {
+  if (navigator.share && navigator.canShare?.({ files })) return navigator.share({ files });
+  if (nativeApp()) return nativeShare(files);
+  throw Error("השיתוף אינו נתמך כאן. אפשר להוריד את הקובץ ולשלוח אותו מהקבצים במכשיר.");
+}
 export async function download(content, name, type, { share = navigator.standalone } = {}) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
   const file = new File([blob], name, { type: blob.type });
@@ -73,6 +88,7 @@ export async function download(content, name, type, { share = navigator.standalo
     try { await navigator.share({ files: [file] }); return; }
     catch (error) { if (error?.name === "AbortError") return; }
   }
+  if (nativeApp()) return nativeShare([file]);
   const url = URL.createObjectURL(
     blob,
   );
