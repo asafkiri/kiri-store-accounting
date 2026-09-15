@@ -1166,6 +1166,15 @@ for (const engine of [chromium, webkit]) {
     }
     assert.deepEqual(await pageSize(), upright, "four turns come back to where the page started");
     assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "turning never adds a page");
+    // The same turn is offered at full size, where the page is legible.
+    await page.locator('[data-preview-file="0"]').tap();
+    await page.locator(".preview-dialog img").waitFor();
+    const enlarged = await page.evaluate(() => document.querySelector(".preview-dialog img").src);
+    await page.locator("[data-preview-rotate]").tap();
+    await page.waitForFunction(shown => document.querySelector(".preview-dialog img")?.src !== shown, enlarged);
+    assert.deepEqual(await pageSize(), [upright[1], upright[0]], "turning from the enlarged view changes the same page");
+    await page.locator("[data-preview-close]").tap();
+    await page.waitForFunction(() => !document.querySelector(".preview-dialog"));
     // A second scan is offered the remaining room, and a refusal is readable.
     await page.evaluate(() => { window.nativeScanner.pages = [{ name: "broken.jpg", mime: "image/jpeg", data: "" }]; });
     await page.locator("label:has(#camera-file)").tap();
