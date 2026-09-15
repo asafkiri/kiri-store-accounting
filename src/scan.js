@@ -380,9 +380,26 @@ export async function scanDialog(ctx, options = {}) {
     $("#file-previews", root).innerHTML = draft.files
       .map(
         (f, i) =>
-          `<article class="file-preview">${f.mime === "application/pdf" ? `<div class="pdf-preview">${icon("invoice")}<strong>PDF</strong><small>כל העמודים בקובץ ייקראו</small></div>` : `<img src="data:${e(f.mime)};base64,${e(f.data)}" alt="תצוגת עמוד ${i + 1}">`}<div><span>${e(f.name)}</span><button type="button" class="text-button" data-preview-file="${i}">הגדל</button>${f.mime === "application/pdf" ? "" : `<button type="button" class="text-button" data-rotate-file="${i}" ${locked ? "disabled" : ""}>סובב</button>`}<button type="button" class="text-button danger" data-remove-file="${i}" ${locked ? "disabled" : ""}>הסר / צלם מחדש</button></div></article>`,
+          `<article class="file-preview">${f.mime === "application/pdf" ? `<div class="pdf-preview">${icon("invoice")}<strong>PDF</strong><small>כל העמודים בקובץ ייקראו</small></div>` : `<img src="data:${e(f.mime)};base64,${e(f.data)}" alt="תצוגת עמוד ${i + 1}">`}<div><span>${e(f.name)}</span><button type="button" class="text-button" data-preview-file="${i}">הגדל</button>${f.mime === "application/pdf" ? "" : `<button type="button" class="text-button" data-rotate-file="${i}" ${locked ? "disabled" : ""}>${icon("refresh")} סובב</button>`}<button type="button" class="text-button danger" data-remove-file="${i}" ${locked ? "disabled" : ""}>הסר / צלם מחדש</button></div></article>`,
       )
       .join("");
+  };
+  // The phone's scanner keeps the page as the camera saw it, so a page that
+  // came out upside down is turned here instead of photographed again.
+  const turnPage = async index => {
+    busy = true;
+    ctx.setModalBusy(true);
+    paint();
+    try {
+      draft.files[index] = await rotatePage(draft.files[index]);
+      draft.attachmentIds = [];
+      await persist();
+      return draftPageBlob(draft.files[index]);
+    } finally {
+      busy = false;
+      ctx.setModalBusy(false);
+      if (root.isConnected) paint();
+    }
   };
   // One accepted page enters the draft the same way from every capture path.
   const acceptPage = async prepared => {
@@ -501,25 +518,13 @@ export async function scanDialog(ctx, options = {}) {
     const remove = ev.target.closest("[data-remove-file]"),
       preview = ev.target.closest("[data-preview-file]"),
       rotate = ev.target.closest("[data-rotate-file]");
-    // The phone's scanner keeps the page as the camera saw it, so a page that
-    // came out upside down is turned here instead of photographed again.
     if (rotate) {
       if (busy) return;
-      busy = true;
-      ctx.setModalBusy(true);
       err.hidden = true;
-      paint();
-      const index = Number(rotate.dataset.rotateFile);
       try {
-        draft.files[index] = await rotatePage(draft.files[index]);
-        draft.attachmentIds = [];
-        await persist();
+        await turnPage(Number(rotate.dataset.rotateFile));
       } catch (error) {
         showError(error);
-      } finally {
-        busy = false;
-        ctx.setModalBusy(false);
-        if (root.isConnected) paint();
       }
       return;
     }
@@ -534,8 +539,12 @@ export async function scanDialog(ctx, options = {}) {
         showError(error);
       }
     }
-    if (preview)
-      ctx.previewBlob(draftPageBlob(draft.files[Number(preview.dataset.previewFile)]));
+    if (preview) {
+      const index = Number(preview.dataset.previewFile), shown = draft.files[index];
+      // Turning is offered at full size as well: a thumbnail of a long receipt
+      // does not show which end is up, which is exactly when it is needed.
+      ctx.previewBlob(draftPageBlob(shown), shown.mime === "application/pdf" ? {} : { onRotate: () => (busy ? null : turnPage(index)) });
+    }
   });
   // The questions open at once and the photograph goes up behind them: typing
   // five details from the paper takes far longer than the upload, so the wait

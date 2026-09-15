@@ -307,6 +307,7 @@ export function installScannerFixtures(window = globalThis.window) {
   };
   window.openScanner = async () => {
     const { scanDialog } = await import("/scan.js");
+    const { previewDocument } = await import("/preview.js");
     document.documentElement.lang = "he"; document.documentElement.dir = "rtl";
     document.body.innerHTML = '<dialog id="modal" open></dialog><div id="toast"></div>';
     const css = document.createElement("link"); css.rel = "stylesheet"; css.href = "/styles.css"; document.head.append(css);
@@ -316,7 +317,7 @@ export function installScannerFixtures(window = globalThis.window) {
       data: { suppliers: [{ id: "supplier-osem", name: "אסם", active: true }], invoices: [], dailyCash: [] },
       drafts: { load: async key => structuredClone(cache.get(key)), save: async (key, value) => cache.set(key, structuredClone(value)), remove: async key => cache.delete(key) },
       dialog: (title, html) => { document.querySelector("#modal").innerHTML = `<div class="modal-content"><header class="modal-heading"><h2>${title}</h2><button class="icon-button">סגור</button></header>${html}</div>`; return document.querySelector(".modal-content"); },
-      setModalBusy(busy) { window.scanBusy = busy; }, closeModal() {}, render() {}, refresh() {}, mergeRecord() {}, previewBlob() {},
+      setModalBusy(busy) { window.scanBusy = busy; }, closeModal() {}, render() {}, refresh() {}, mergeRecord() {}, previewBlob: (blob, options) => previewDocument(blob, options),
       api: {
         request: async (path, options) => {
           window.scanRequests.push({ path, body: structuredClone(options?.body) });

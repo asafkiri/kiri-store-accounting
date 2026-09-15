@@ -1168,6 +1168,14 @@ dialog.crop-modal {
   object-fit: contain;
   background: #edf0f5;
 }
+/* One page has the whole width: a long receipt in a half-width thumbnail is
+   too small to tell which end is up, which is when turning it is needed. */
+.file-previews:has(> :only-child) {
+  grid-template-columns: 1fr;
+}
+.file-previews:has(> :only-child) .file-preview img {
+  height: min(55vh, 440px);
+}
 .pdf-preview {
   display: flex;
   align-items: center;
@@ -1594,7 +1602,7 @@ dialog.crop-modal {
   }
   .file-preview img,
   .pdf-preview {
-    height: 175px;
+    height: 200px;
   }
   .capture-actions > * {
     flex: 1;
