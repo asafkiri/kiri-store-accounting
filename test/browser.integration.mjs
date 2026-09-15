@@ -2655,13 +2655,16 @@ for (const engine of [chromium, webkit]) {
     const downloadPromise = page.waitForEvent('download');
     await page.locator('[data-share-zip]').click();
     const download = await downloadPromise;
-    assert.match(download.suggestedFilename(), /-pdf-part-1[.]zip$/);
+    assert.equal(download.suggestedFilename(), `invoices-${month}.zip`);
     const zip = await readTestFile(await download.path());
     // Read the actual ZIP independently, not through the app's own writer.
     const { execFileSync } = await import('node:child_process');
     const extracted = JSON.parse(execFileSync('python3', ['-c', 'import sys,io,zipfile,json,base64; z=zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read())); assert z.testzip() is None; print(json.dumps({n:base64.b64encode(z.read(n)).decode() for n in z.namelist()}))'], { input: zip, encoding: 'utf8' }));
     assert.equal(Object.keys(extracted).length, 2);
     assert.ok(Object.keys(extracted).every(name => name.endsWith('.pdf')));
+    // What the accountant opens: a folder per supplier, suppliers in order.
+    assert.ok(Object.keys(extracted).every(name => name.split('/').length === 2));
+    assert.deepEqual(Object.keys(extracted), [...Object.keys(extracted)].sort((a, b) => a.localeCompare(b, 'he')));
     assert.deepEqual(await Promise.all(Object.values(extracted).map(async b64 => (await PDFDocument.load(Buffer.from(b64, 'base64'))).getPageCount())), [1, 3]);
     assert.deepEqual(errors, []);
   });

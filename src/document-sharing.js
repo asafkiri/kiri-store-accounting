@@ -1,6 +1,7 @@
 import { $, icon, errorText } from "./ui.js";
 import { escapeHtml as e, monthLabel, displayDate, money, moneyInput } from "./format.js";
 import { download, canShareFiles, shareFiles } from "./export.js";
+import { nativeApp } from "./native-bridge.js";
 
 export const SHARE_BATCH_BYTES = 18 * 1024 * 1024;
 export const SHARE_BATCH_FILES = 20;
@@ -92,6 +93,8 @@ export function shareDocuments(ctx, selection) {
   const manifest = sharingManifest(ctx.data, selection), api = ctx.api;
   const { invoices } = manifest;
   const title = selection.month ? "שליחת חשבוניות " + monthLabel(selection.month) : "שליחת החשבונית";
+  // In the wrapper a download is a share: the WebView saves nothing by itself.
+  const keepVerb = nativeApp() ? "שתף" : "הורד";
   const dialog = document.createElement("dialog"); dialog.className = "preview-dialog";
   dialog.setAttribute("aria-label", title);
   dialog.innerHTML = `<div class="share-dialog"><div class="preview-toolbar"><button class="secondary" data-share-close>חזרה</button><h2>${e(title)}</h2></div>
@@ -99,11 +102,12 @@ export function shareDocuments(ctx, selection) {
     ${invoices.some(i => !i.attachmentIds?.length) ? '<p class="notice warning">יש חשבוניות ללא צילום. הן אינן נכללות בקבצים לשיתוף.</p>' : ""}
     <p data-share-description></p>
     <p class="muted small">במסך השיתוף בוחרים WhatsApp או מייל. חודשים עם הרבה קבצים נשלחים בחלקים.</p>
+    <p class="muted small">קבצים שנשלחים בנפרד מגיעים אצל המקבל בסדר שהאפליקציה שלו בוחרת. קובץ ה־ZIP שומר תיקייה לכל ספק ואת הסדר לפי ספק ותאריך.</p>
     <progress max="1" value="0" aria-label="הכנת הקבצים"></progress>
     <p data-share-status role="status"></p><ul class="share-files" data-share-files></ul>
     <p class="notice warning" data-share-error role="alert" hidden></p>
     <button class="primary" data-share-send hidden>${icon("share")} שתף בוואטסאפ או במייל</button>
-    <button class="secondary" data-share-zip hidden>${icon("download")} הורד ZIP מסודר</button>
+    <button class="secondary" data-share-zip hidden>${icon(nativeApp() ? "share" : "download")} ${keepVerb} ZIP מסודר לפי ספק</button>
     <button class="secondary" data-share-retry hidden>נסה להכין שוב</button>
     <button class="primary" data-share-next hidden>הכן את החלק הבא</button>
     <button class="text-button" data-share-format>שתף קבצים מקוריים במקום PDF</button></div>`;
@@ -133,12 +137,17 @@ export function shareDocuments(ctx, selection) {
       if (!active(run)) return;
       const archive = await documentZip(run.batch.files);
       if (!active(run)) return;
-      run.archive = new File([archive], `invoices-${selection.month || "single"}-${run.format}-part-${run.part}.zip`, { type: "application/zip" });
+      // The accountant reads the archive's name too, so it carries the month
+      // and a part number only when the month did not fit in one file. ASCII
+      // only: a browser download drops a name it cannot transliterate, and
+      // "download.zip" says less than the supplier folders inside.
+      const whole = run.part === 1 && run.batch.cursor >= run.entries.length;
+      run.archive = new File([archive], `invoices-${selection.month || "single"}${whole ? "" : `-part-${run.part}`}.zip`, { type: "application/zip" });
       const files = run.batch.files.map(f => f.file), direct = canShare(files);
       send.hidden = !direct && !canShare([run.archive]); zipButton.hidden = false;
       send.innerHTML = icon("share") + (direct ? " שתף בוואטסאפ או במייל" : " שתף ZIP בוואטסאפ או במייל");
       run.download = files.length === 1 && run.format === "pdf" ? files[0] : run.archive;
-      zipButton.innerHTML = icon("download") + (run.download.type === "application/pdf" ? " הורד PDF" : " הורד ZIP מסודר");
+      zipButton.innerHTML = icon(nativeApp() ? "share" : "download") + " " + keepVerb + (run.download.type === "application/pdf" ? " PDF" : " ZIP מסודר לפי ספק");
       status.textContent = `חלק ${run.part} מוכן: ${files.length} ${run.format === "pdf" ? "קובצי PDF" : "קבצים מקוריים"}. הוכנו ${run.batch.cursor} מתוך ${run.entries.length}.`;
       $("[data-share-files]", dialog).innerHTML = run.batch.files.map(f => `<li>${e(f.label)}</li>`).join("");
       if (send.hidden) {
