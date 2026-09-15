@@ -1147,6 +1147,25 @@ for (const engine of [chromium, webkit]) {
     assert.equal(saved.mime, "image/jpeg");
     assert.ok(saved.data.length > 1000, `the scanned page is stored as it arrived: ${saved.data.length} bytes`);
     assert.equal(await page.locator(".file-preview").count(), 1);
+    // The scanner keeps the page as the camera saw it, so a page that came out
+    // upside down is turned in the draft rather than photographed again.
+    const pageSize = () => page.evaluate(async () => {
+      const stored = window.scanDrafts()[0][1].files[0];
+      const bitmap = await createImageBitmap(new Blob([Uint8Array.from(atob(stored.data), c => c.charCodeAt(0))], { type: stored.mime }));
+      const size = [bitmap.width, bitmap.height];
+      bitmap.close();
+      return size;
+    });
+    const upright = await pageSize();
+    await page.locator('[data-rotate-file="0"]').tap();
+    await page.waitForFunction(() => !window.scanBusy);
+    assert.deepEqual(await pageSize(), [upright[1], upright[0]], "a quarter turn keeps every pixel of the page");
+    for (let turn = 0; turn < 3; turn++) {
+      await page.locator('[data-rotate-file="0"]').tap();
+      await page.waitForFunction(() => !window.scanBusy);
+    }
+    assert.deepEqual(await pageSize(), upright, "four turns come back to where the page started");
+    assert.equal(await page.evaluate(() => window.scanDrafts()[0][1].files.length), 1, "turning never adds a page");
     // A second scan is offered the remaining room, and a refusal is readable.
     await page.evaluate(() => { window.nativeScanner.pages = [{ name: "broken.jpg", mime: "image/jpeg", data: "" }]; });
     await page.locator("label:has(#camera-file)").tap();

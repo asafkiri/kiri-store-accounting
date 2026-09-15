@@ -3,7 +3,9 @@ package com.kiristore.accounting;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
 import android.net.Uri;
+import android.media.ExifInterface;
 import android.util.Base64;
 import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
@@ -172,6 +174,7 @@ public class KiriScannerPlugin extends Plugin {
 
     /** Decode without ever holding the full sensor image: bounds first, then a sampled decode. */
     private JSObject encodePage(Uri uri, int index) throws Exception {
+        int turn = exifTurn(uri);
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
@@ -203,6 +206,15 @@ public class KiriScannerPlugin extends Plugin {
                     bitmap = scaled;
                 }
             }
+            if (turn != 0) {
+                Matrix matrix = new Matrix();
+                matrix.postRotate(turn);
+                Bitmap turned = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+                if (turned != bitmap) {
+                    bitmap.recycle();
+                    bitmap = turned;
+                }
+            }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out);
             JSObject page = new JSObject();
@@ -213,6 +225,25 @@ public class KiriScannerPlugin extends Plugin {
         } finally {
             bitmap.recycle();
         }
+    }
+
+    /**
+     * The pixels a scanner hands over may be as the sensor saw them, with the
+     * turn recorded beside them. A viewer that reads the tag shows the page
+     * upright and a decoder that ignores it does not, so the turn is baked in
+     * here and the app stores one honest image.
+     */
+    private int exifTurn(Uri uri) {
+        try (InputStream stream = getContext().getContentResolver().openInputStream(uri)) {
+            if (stream == null) return 0;
+            int orientation = new ExifInterface(stream).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            if (orientation == ExifInterface.ORIENTATION_ROTATE_90) return 90;
+            if (orientation == ExifInterface.ORIENTATION_ROTATE_180) return 180;
+            if (orientation == ExifInterface.ORIENTATION_ROTATE_270) return 270;
+        } catch (Exception error) {
+            // No readable tag: the pixels are all there is to go on.
+        }
+        return 0;
     }
 
     @PluginMethod
