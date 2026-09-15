@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { JSDOM } from 'jsdom';
+import { loadModule } from './load-module.mjs';
 import { sharingManifest, DocumentShareBatch, documentZip } from '../src/document-sharing.js';
 const invoice = (id, date, attachments, extra = {}) => ({ id, invoiceDate: date, documentNumber: '', totalAgorot: 125400, finalAgorot: 120000, supplierId: 's1', attachmentIds: attachments, ...extra });
 const blob = (text, type = 'image/jpeg') => new Blob([text], { type });
@@ -79,6 +81,85 @@ test('file-count limits, closing during preparation and invalid content stop fur
   await cancelled.prepare(() => {}, () => active); assert.equal(cancelled.cursor, 0);
   const invalid = new DocumentShareBatch(entries, async () => blob('<html>error</html>', 'text/html'));
   await assert.rejects(invalid.prepare(), /תקין/); assert.equal(invalid.cursor, 0);
+});
+
+// A month that does not fit one share is the case the shop actually hits, and
+// the only guide through it is what the dialog says between the parts.
+async function shareDialog(t, invoiceCount) {
+  const dom = new JSDOM('<div id="app"></div>', { url: 'https://unit.example' });
+  const previous = { window: globalThis.window, document: globalThis.document };
+  globalThis.window = dom.window; globalThis.document = dom.window.document;
+  dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  t.after(() => { Object.assign(globalThis, previous); dom.window.close(); });
+  const shared = [];
+  const module = await loadModule('src/document-sharing.js', {
+    './export.js': 'export const canShareFiles=()=>true, download=async()=>{}; export const shareFiles=async files=>globalThis.shareDialogShared.push(files.length);',
+    './native-bridge.js': 'export const nativeApp=()=>false;',
+    './invoice-pdf.js': "export class InvoicePdfLoader { clear() {} async load() { return new Blob(['%PDF-1.4 invoice'], { type: 'application/pdf' }); } }",
+  });
+  globalThis.shareDialogShared = shared;
+  t.after(() => { delete globalThis.shareDialogShared; });
+  const data = {
+    suppliers: [{ id: 's1', name: 'גלוברנס' }, { id: 's2', name: 'תנובה' }],
+    invoices: Array.from({ length: invoiceCount }, (_, n) => ({
+      id: 'i' + n, invoiceDate: `2026-09-${String((n % 28) + 1).padStart(2, '0')}`, documentNumber: '',
+      totalAgorot: 12300, finalAgorot: 12300, supplierId: n % 2 ? 's2' : 's1', attachmentIds: ['a' + n],
+    })),
+  };
+  const dialog = module.shareDocuments({ data, api: { request: async () => blob('page') } }, { month: '2026-09' });
+  const text = selector => dialog.querySelector(selector).textContent;
+  const settle = async check => {
+    for (let n = 0; n < 400 && !check(); n++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(check(), `the dialog never reached the expected state. Status: ${text('[data-share-status]')}`);
+  };
+  return { dialog, shared, text, settle, button: selector => dialog.querySelector(selector) };
+}
+
+test('a month sent in parts always names how much is left, and offers the next part only once one is gone', async t => {
+  const { shared, text, settle, button } = await shareDialog(t, 25);
+  await settle(() => text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  assert.equal(text('[data-share-status]'), 'חלק 1 מוכן לשליחה: 20 חשבוניות. הוכנו 20 מתוך 25.');
+  assert.equal(button('[data-share-next]').hidden, true, 'a part that has not left yet is not behind the user');
+  assert.match(text('.share-dialog'), /אחרי כל שליחה לוחצים ״הכן את החלק הבא״/);
+
+  button('[data-share-send]').click();
+  await settle(() => shared.length === 1);
+  assert.deepEqual(shared, [20]);
+  // Never "in the next part": 5 is what is left in total, and a reader who
+  // reads it as the last part is misled the moment a third part appears.
+  assert.equal(text('[data-share-status]'), 'חלק 1 יצא לשליחה. נשארו 5 חשבוניות.');
+  assert.equal(button('[data-share-next]').hidden, false);
+  assert.equal(text('[data-share-next]'), 'הכן את החלק הבא (נשארו 5 חשבוניות)');
+
+  button('[data-share-next]').click();
+  await settle(() => text('[data-share-status]').startsWith('חלק 2 מוכן'));
+  assert.equal(text('[data-share-status]'), 'חלק 2 מוכן לשליחה: 5 חשבוניות. הוכנו 25 מתוך 25.');
+  button('[data-share-send]').click();
+  await settle(() => shared.length === 2);
+  assert.equal(text('[data-share-status]'), 'הוכנו כל 25 החשבוניות לשיתוף.');
+  assert.equal(button('[data-share-next]').hidden, true, 'nothing is left to prepare');
+});
+
+test('a month that fits one share never mentions parts', async t => {
+  const { shared, text, settle, button } = await shareDialog(t, 3);
+  await settle(() => text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  button('[data-share-send]').click();
+  await settle(() => shared.length === 1);
+  assert.equal(text('[data-share-status]'), 'הוכנו כל 3 החשבוניות לשיתוף.');
+  assert.equal(button('[data-share-next]').hidden, true);
+});
+
+test('a single invoice left over is counted in Hebrew, never as "1 חשבוניות"', async t => {
+  const { shared, text, settle, button } = await shareDialog(t, 21);
+  await settle(() => text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  button('[data-share-send]').click();
+  await settle(() => shared.length === 1);
+  assert.equal(text('[data-share-status]'), 'חלק 1 יצא לשליחה. נשארה חשבונית אחת.');
+  assert.equal(text('[data-share-next]'), 'הכן את החלק הבא (נשארה חשבונית אחת)');
+  button('[data-share-next]').click();
+  await settle(() => text('[data-share-status]').startsWith('חלק 2 מוכן'));
+  assert.equal(text('[data-share-status]'), 'חלק 2 מוכן לשליחה: חשבונית אחת. הוכנו 21 מתוך 21.');
 });
 
 test('ZIP opens in an independent reader with Hebrew folders, valid CRCs and unchanged source bytes', async () => {

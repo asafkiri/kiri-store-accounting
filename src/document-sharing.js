@@ -101,7 +101,7 @@ export function shareDocuments(ctx, selection) {
     <p>${invoices.length} חשבוניות · ${manifest.entries.length} קבצים מצורפים</p>
     ${invoices.some(i => !i.attachmentIds?.length) ? '<p class="notice warning">יש חשבוניות ללא צילום. הן אינן נכללות בקבצים לשיתוף.</p>' : ""}
     <p data-share-description></p>
-    <p class="muted small">במסך השיתוף בוחרים WhatsApp או מייל. חודשים עם הרבה קבצים נשלחים בחלקים.</p>
+    <p class="muted small">במסך השיתוף בוחרים WhatsApp או מייל. חודש גדול נשלח בכמה חלקים: אחרי כל שליחה לוחצים ״הכן את החלק הבא״, עד שנכתב כאן שהכל הוכן.</p>
     <p class="muted small">קבצים שנשלחים בנפרד מגיעים אצל המקבל בסדר שהאפליקציה שלו בוחרת. קובץ ה־ZIP שומר תיקייה לכל ספק ואת הסדר לפי ספק ותאריך.</p>
     <progress max="1" value="0" aria-label="הכנת הקבצים"></progress>
     <p data-share-status role="status"></p><ul class="share-files" data-share-files></ul>
@@ -123,9 +123,27 @@ export function shareDocuments(ctx, selection) {
     $("progress", dialog).value = count;
     status.textContent = `מכין ${run.format === "pdf" ? "PDF לחשבוניות" : "קבצים מקוריים"}: ${count} מתוך ${run.entries.length}`;
   };
-  const markOffered = run => {
-    next.hidden = run.batch.cursor >= run.entries.length;
-    status.textContent = run.batch.cursor < run.entries.length ? `חלק ${run.part} מוכן. נשארו עוד ${run.entries.length - run.batch.cursor} קבצים בחלק הבא.` : `הוכנו כל ${run.entries.length} הקבצים לשיתוף.`;
+  // Hebrew does not read "1 חשבוניות", and the originals are files rather than
+  // invoices, so the count and its verb are written out rather than glued on.
+  const unit = run => (run.format === "pdf" ? "חשבוניות" : "קבצים");
+  const items = (run, n) =>
+    n === 1 ? (run.format === "pdf" ? "חשבונית אחת" : "קובץ אחד") : `${n} ${unit(run)}`;
+  // A month leaves in parts, so every line says how much is still waiting —
+  // what is left in total, never "in the next part": the next part carries as
+  // much as fits, and a reader who expects it to be the last one is misled.
+  const rest = (run, n) => `${n === 1 ? (run.format === "pdf" ? "נשארה" : "נשאר") : "נשארו"} ${items(run, n)}`;
+  const showNext = run => {
+    const left = run.entries.length - run.batch.cursor;
+    next.hidden = left <= 0;
+    if (left > 0) next.textContent = `הכן את החלק הבא (${rest(run, left)})`;
+    return left;
+  };
+  const markOffered = (run, verb) => {
+    const left = showNext(run);
+    if (left > 0) status.textContent = `חלק ${run.part} ${verb}. ${rest(run, left)}.`;
+    else status.textContent = run.entries.length === 1
+      ? "הכל מוכן לשיתוף."
+      : `הוכנו כל ${run.entries.length} ה${unit(run)} לשיתוף.`;
   };
   const prepare = async (run = current) => {
     if (run.busy || !active(run)) return;
@@ -148,11 +166,11 @@ export function shareDocuments(ctx, selection) {
       send.innerHTML = icon("share") + (direct ? " שתף בוואטסאפ או במייל" : " שתף ZIP בוואטסאפ או במייל");
       run.download = files.length === 1 && run.format === "pdf" ? files[0] : run.archive;
       zipButton.innerHTML = icon(nativeApp() ? "share" : "download") + " " + keepVerb + (run.download.type === "application/pdf" ? " PDF" : " ZIP מסודר לפי ספק");
-      status.textContent = `חלק ${run.part} מוכן: ${files.length} ${run.format === "pdf" ? "קובצי PDF" : "קבצים מקוריים"}. הוכנו ${run.batch.cursor} מתוך ${run.entries.length}.`;
+      status.textContent = `חלק ${run.part} מוכן לשליחה: ${items(run, files.length)}. הוכנו ${run.batch.cursor} מתוך ${run.entries.length}.`;
       $("[data-share-files]", dialog).innerHTML = run.batch.files.map(f => `<li>${e(f.label)}</li>`).join("");
       if (send.hidden) {
         error.hidden = false; error.textContent = "השיתוף הישיר אינו זמין בדפדפן הזה. הורד את הקובץ וצרף אותו לוואטסאפ או למייל.";
-        next.hidden = run.batch.cursor >= run.entries.length;
+        showNext(run);
       }
     } catch (err) {
       if (active(run)) {
@@ -190,7 +208,9 @@ export function shareDocuments(ctx, selection) {
       const files = run.batch.files.map(f => f.file);
       // No downloads/conversion before share: this click grants activation.
       await shareFiles(canShare(files) ? files : [run.archive]);
-      if (active(run)) markOffered(run);
+      // The share sheet came back, which is not a delivery receipt: say the
+      // part left the app, never that the accountant has it.
+      if (active(run)) markOffered(run, "יצא לשליחה");
     } catch (err) { if (active(run) && err?.name !== "AbortError") showError(Error("השיתוף לא נפתח. נסה שוב או הורד את הקובץ ושלח אותו מהקבצים במכשיר.")); }
     finally {
       run.busy = run.sharing = false;
@@ -200,7 +220,11 @@ export function shareDocuments(ctx, selection) {
   zipButton.onclick = async () => {
     const run = current;
     if (run.busy || !active(run) || !run.download) return;
-    try { await download(run.download, run.download.name, run.download.type, { share: false }); if (active(run)) markOffered(run); }
+    try {
+      await download(run.download, run.download.name, run.download.type, { share: false });
+      // In the wrapper that download opened the share sheet; a browser saved it.
+      if (active(run)) markOffered(run, nativeApp() ? "יצא לשליחה" : "ירד למכשיר");
+    }
     catch (err) { if (active(run)) showError(err); }
   };
   next.onclick = () => {
