@@ -250,10 +250,13 @@ public class KiriScannerPlugin extends Plugin {
     public void shareFileStart(PluginCall call) {
         String name = call.getString("name", "file");
         try {
-            File dir = new File(getContext().getCacheDir(), SHARE_DIR);
-            if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("cache directory unavailable");
+            // The name the accountant reads is the one the app chose: supplier,
+            // date and amount. Uniqueness belongs to the folder, never to the
+            // file, or every share arrives prefixed with a random id.
             String id = UUID.randomUUID().toString();
-            File file = new File(dir, id + "-" + safeName(name));
+            File dir = new File(new File(getContext().getCacheDir(), SHARE_DIR), id);
+            if (!dir.mkdirs()) throw new IllegalStateException("cache directory unavailable");
+            File file = new File(dir, safeName(name));
             if (!file.createNewFile()) throw new IllegalStateException("file already exists");
             shares.put(id, file);
             JSObject result = new JSObject();
@@ -326,9 +329,16 @@ public class KiriScannerPlugin extends Plugin {
         return null;
     }
 
+    /**
+     * Only what a file name cannot carry is removed — separators, control and
+     * bidi characters. The supplier's name is Hebrew, and an ASCII-only filter
+     * turned every invoice into a row of underscores.
+     */
     private static String safeName(String name) {
-        String cleaned = name.replaceAll("[^A-Za-z0-9._-]", "_");
-        return cleaned.isEmpty() ? "file" : cleaned.substring(0, Math.min(cleaned.length(), 60));
+        String cleaned = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}\u200e\u200f\u202a-\u202e\u2066-\u2069]", "-").trim();
+        while (cleaned.startsWith(".")) cleaned = cleaned.substring(1);
+        if (cleaned.isEmpty()) cleaned = "invoice";
+        return cleaned.length() > 120 ? cleaned.substring(0, 120) : cleaned;
     }
 
     private static void deleteRecursively(File file) {
