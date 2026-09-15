@@ -86,12 +86,17 @@ test('file-count limits, closing during preparation and invalid content stop fur
 // A month that does not fit one share is the case the shop actually hits, and
 // the only guide through it is what the dialog says between the parts.
 const SUPPLIERS = ['גלוברנס', 'דובק', 'מוצרי איכות קנדיים', 'פיליפ מוריס', 'תנובה'];
-async function shareDialog(t, invoiceCount, { pdfBytes = 0, suppliers = 2 } = {}) {
+// One phone, opened as many times as the test needs: the share memory lives in
+// that phone's storage, so resuming can only be tested across two openings.
+async function shareWorkspace(t, invoiceCount, { pdfBytes = 0, suppliers = 2, storage = true } = {}) {
   const dom = new JSDOM('<div id="app"></div>', { url: 'https://unit.example' });
   const previous = { window: globalThis.window, document: globalThis.document };
   globalThis.window = dom.window; globalThis.document = dom.window.document;
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-  dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+  dom.window.HTMLDialogElement.prototype.close = function () {
+    this.open = false; this.dispatchEvent(new dom.window.Event('close'));
+  };
+  if (!storage) Object.defineProperty(dom.window, 'localStorage', { get() { throw Error('blocked'); } });
   t.after(() => { Object.assign(globalThis, previous); dom.window.close(); });
   const shared = [];
   const module = await loadModule('src/document-sharing.js', {
@@ -108,15 +113,27 @@ async function shareDialog(t, invoiceCount, { pdfBytes = 0, suppliers = 2 } = {}
       totalAgorot: 12300, finalAgorot: 12300, supplierId: 's' + (n % suppliers), attachmentIds: ['a' + n],
     })),
   };
-  const dialog = module.shareDocuments({ data, api: { request: async () => blob('page') } }, { month: '2026-09' });
-  const text = selector => dialog.querySelector(selector).textContent;
-  const settle = async check => {
-    for (let n = 0; n < 2000 && !check(); n++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.ok(check(), `the dialog never reached the expected state. Status: ${text('[data-share-status]')}`);
+  const open = () => {
+    const dialog = module.shareDocuments({ data, api: { request: async () => blob('page') } }, { month: '2026-09' });
+    const text = selector => dialog.querySelector(selector).textContent;
+    const settle = async check => {
+      for (let n = 0; n < 2000 && !check(); n++) await new Promise(resolve => setTimeout(resolve, 5));
+      assert.ok(check(), `the dialog never reached the expected state. Status: ${text('[data-share-status]')}`);
+    };
+    // What the screen lists as ready right now, in the order it will go out.
+    const listed = () => [...dialog.querySelectorAll('.share-files li')].map(li => li.textContent);
+    return { dialog, shared, text, settle, listed, close: () => dialog.close(), button: sel => dialog.querySelector(sel) };
   };
-  // What the screen lists as ready right now, in the order it will go out.
-  const listed = () => [...dialog.querySelectorAll('.share-files li')].map(li => li.textContent);
-  return { data, dialog, shared, text, settle, listed, button: selector => dialog.querySelector(selector) };
+  // What the phone itself is holding onto between openings.
+  const remembered = () => {
+    try { return JSON.parse(dom.window.localStorage.getItem('ksa-share-sent:2026-09:pdf') || 'null'); }
+    catch { return null; }
+  };
+  return { data, shared, open, remembered };
+}
+async function shareDialog(t, invoiceCount, options) {
+  const shop = await shareWorkspace(t, invoiceCount, options);
+  return { ...shop, ...shop.open() };
 }
 
 // Send every part the way the shop owner does: wait, share, ask for the next.
@@ -202,6 +219,72 @@ test('invoices too big for the byte budget split before the file count does', as
   assert.ok(sizes.every(n => n < SHARE_BATCH_FILES && n * 2.5 * 1024 * 1024 <= SHARE_BATCH_BYTES));
   assert.equal(parts, 2);
   assert.equal(new Set(dialog.shared.flat()).size, 10, 'no invoice is sent twice');
+});
+
+// Between two parts the owner leaves for WhatsApp, and Android is free to
+// close the app while he is there. What already went out is remembered on the
+// phone so the next screen carries on — and, because a share sheet coming back
+// is not a delivery, never hides that it skipped anything.
+test('a month interrupted after one part carries on where it stopped, and forgets itself when it ends', async t => {
+  const shop = await shareWorkspace(t, 25);
+  const expected = sharingManifest(shop.data, { month: '2026-09' }).pdfEntries.map(entry => entry.name + '.pdf');
+  const first = shop.open();
+  await first.settle(() => first.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  assert.equal(first.button('[data-share-resume]').hidden, true, 'a first send has nothing to resume');
+  assert.equal(first.button('[data-share-restart]').hidden, true, 'and nothing to take back');
+  first.button('[data-share-send]').click();
+  await first.settle(() => shop.shared.length === 1);
+  assert.equal(first.button('[data-share-restart]').hidden, false, 'a part that left can always be sent again');
+  assert.equal(shop.remembered().paths.length, 20, 'the phone holds what went out, not merely this screen');
+  assert.equal(shop.remembered().parts, 1);
+  first.close(); // Android closed the app on the way to WhatsApp.
+
+  const again = shop.open();
+  await again.settle(() => again.text('[data-share-status]').startsWith('חלק 2 מוכן'));
+  assert.equal(again.button('[data-share-resume]').hidden, false);
+  assert.match(again.text('[data-share-resume]'), /כבר יצאו 20 מתוך 25 חשבוניות/);
+  assert.equal(again.text('[data-share-status]'), 'חלק 2 מוכן לשליחה: 5 חשבוניות. הוכנו 5 מתוך 5.');
+  again.button('[data-share-send]').click();
+  await again.settle(() => shop.shared.length === 2);
+  assert.deepEqual(shop.shared.flat(), expected, 'the month arrives whole, in order, nothing sent twice');
+  assert.equal(shop.remembered(), null, 'a month that finished is not a send in progress');
+
+  const afterwards = shop.open();
+  await afterwards.settle(() => afterwards.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  assert.equal(afterwards.button('[data-share-resume]').hidden, true, 'a finished month starts whole again');
+  assert.equal(afterwards.text('[data-share-status]'), 'חלק 1 מוכן לשליחה: 20 חשבוניות. הוכנו 20 מתוך 25.');
+});
+
+test('sending the month again from the start clears what the app counted as sent', async t => {
+  const shop = await shareWorkspace(t, 25);
+  const view = shop.open();
+  await view.settle(() => view.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  view.button('[data-share-send]').click();
+  await view.settle(() => shop.shared.length === 1);
+  assert.equal(shop.remembered().paths.length, 20);
+  view.button('[data-share-restart]').click();
+  await view.settle(() => view.text('[data-share-status]') === 'חלק 1 מוכן לשליחה: 20 חשבוניות. הוכנו 20 מתוך 25.');
+  assert.equal(view.button('[data-share-resume]').hidden, true);
+  assert.equal(shop.remembered(), null, 'the phone forgot it, so the whole month goes out again');
+  view.close();
+  const later = shop.open();
+  await later.settle(() => later.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  assert.equal(later.button('[data-share-resume]').hidden, true, 'the memory was taken back, not just this screen');
+});
+
+test('a phone that blocks local storage sends the month exactly as before', async t => {
+  const shop = await shareWorkspace(t, 25, { storage: false });
+  const first = shop.open();
+  await first.settle(() => first.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  first.button('[data-share-send]').click();
+  await first.settle(() => shop.shared.length === 1);
+  assert.equal(first.text('[data-share-status]'), 'חלק 1 יצא לשליחה. נשארו 5 חשבוניות.');
+  assert.equal(shop.remembered(), null, 'nothing was stored, and nothing threw');
+  first.close();
+  const again = shop.open();
+  await again.settle(() => again.text('[data-share-status]').startsWith('חלק 1 מוכן'));
+  assert.equal(again.button('[data-share-resume]').hidden, true, 'no storage, no memory, and no error either');
+  assert.equal(again.text('[data-share-status]'), 'חלק 1 מוכן לשליחה: 20 חשבוניות. הוכנו 20 מתוך 25.');
 });
 
 test('ZIP opens in an independent reader with Hebrew folders, valid CRCs and unchanged source bytes', async () => {

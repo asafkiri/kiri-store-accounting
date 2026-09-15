@@ -81,12 +81,44 @@ export class DocumentShareBatch {
       if (blob.size > this.maxFileBytes) throw Error("הקובץ גדול מדי לשיתוף. אפשר לפתוח אותו בנפרד או לשתף את הקבצים המקוריים.");
       if (this.files.length && this.bytes + blob.size > this.maxBytes) { this.carry = blob; break; }
       const ext = extensions[blob.type];
-      this.files.push({ ...entry, blob, path: entry.path + "." + ext, file: new File([blob], entry.name + "." + ext, { type: blob.type }) });
+      // entryPath names the entry itself, without the extension the ZIP needs:
+      // it is what the share memory records as already gone.
+      this.files.push({ ...entry, blob, entryPath: entry.path, path: entry.path + "." + ext, file: new File([blob], entry.name + "." + ext, { type: blob.type }) });
       this.carry = null; this.bytes += blob.size; this.cursor++; progress(this.cursor);
     }
   }
   next() { this.files = []; this.bytes = 0; }
   clear() { this.next(); this.carry = null; }
+}
+
+// A month too big for one share leaves in parts, with a trip to WhatsApp
+// between them — and the phone is free to close the app during that trip.
+// What already left is remembered here, on the phone itself, so the next
+// screen carries on instead of sending the first part a second time.
+//
+// The share sheet coming back is not proof the accountant received anything,
+// so the memory never hides what it skipped: the screen says how much already
+// went and keeps a button that sends the month again from the start.
+const MEMORY_PREFIX = "ksa-share-sent:";
+const MEMORY_MAX_AGE = 60 * 24 * 60 * 60 * 1000;
+export const shareMemoryKey = (selection, format) =>
+  MEMORY_PREFIX + (selection.month || selection.invoiceId || "") + ":" + format;
+export function readShareMemory(key) {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(key) || "null");
+    if (!Array.isArray(saved?.paths) || !saved.paths.length) return null;
+    // A month nobody came back to within two months is not a send in progress.
+    if (!(Date.now() - saved.at < MEMORY_MAX_AGE)) { clearShareMemory(key); return null; }
+    return { paths: new Set(saved.paths), parts: Number(saved.parts) || 0 };
+  } catch { return null; } // No storage on this phone: every share starts whole.
+}
+export function rememberShared(key, paths, parts) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify({ paths: [...paths], parts, at: Date.now() }));
+  } catch { /* Without storage the send still works, it just cannot resume. */ }
+}
+export function clearShareMemory(key) {
+  try { window.localStorage.removeItem(key); } catch { /* Nothing to forget. */ }
 }
 
 export function shareDocuments(ctx, selection) {
@@ -101,6 +133,7 @@ export function shareDocuments(ctx, selection) {
     <p>${invoices.length} חשבוניות · ${manifest.entries.length} קבצים מצורפים</p>
     ${invoices.some(i => !i.attachmentIds?.length) ? '<p class="notice warning">יש חשבוניות ללא צילום. הן אינן נכללות בקבצים לשיתוף.</p>' : ""}
     <p data-share-description></p>
+    <p class="notice" data-share-resume hidden></p>
     <p class="muted small">במסך השיתוף בוחרים WhatsApp או מייל. חודש גדול נשלח בכמה חלקים: אחרי כל שליחה לוחצים ״הכן את החלק הבא״, עד שנכתב כאן שהכל הוכן.</p>
     <p class="muted small">קבצים שנשלחים בנפרד מגיעים אצל המקבל בסדר שהאפליקציה שלו בוחרת. קובץ ה־ZIP שומר תיקייה לכל ספק ואת הסדר לפי ספק ותאריך.</p>
     <progress max="1" value="0" aria-label="הכנת הקבצים"></progress>
@@ -110,10 +143,12 @@ export function shareDocuments(ctx, selection) {
     <button class="secondary" data-share-zip hidden>${icon(nativeApp() ? "share" : "download")} ${keepVerb} ZIP מסודר לפי ספק</button>
     <button class="secondary" data-share-retry hidden>נסה להכין שוב</button>
     <button class="primary" data-share-next hidden>הכן את החלק הבא</button>
+    <button class="secondary" data-share-restart hidden>שלח את החודש מחדש מההתחלה</button>
     <button class="text-button" data-share-format>שתף קבצים מקוריים במקום PDF</button></div>`;
   document.body.append(dialog); dialog.showModal();
   const status = $("[data-share-status]", dialog), error = $("[data-share-error]", dialog);
   const send = $("[data-share-send]", dialog), zipButton = $("[data-share-zip]", dialog), next = $("[data-share-next]", dialog), retry = $("[data-share-retry]", dialog), formatButton = $("[data-share-format]", dialog);
+  const resumeNote = $("[data-share-resume]", dialog), restart = $("[data-share-restart]", dialog);
   let closed = false, current;
   const active = run => !closed && dialog.isConnected && ctx.api === api && current === run;
   const showError = err => { error.hidden = false; error.textContent = errorText(err); };
@@ -138,8 +173,15 @@ export function shareDocuments(ctx, selection) {
     if (left > 0) next.textContent = `הכן את החלק הבא (${rest(run, left)})`;
     return left;
   };
+  const showRestart = run => { restart.hidden = !run.sent.size; };
   const markOffered = (run, verb) => {
     const left = showNext(run);
+    // This part left the app. Remember it, so a phone that closes the app on
+    // the way to WhatsApp carries on instead of sending the part again; once
+    // nothing is left the month is done and the memory goes with it.
+    for (const file of run.batch.files) run.sent.add(file.entryPath);
+    if (left > 0) rememberShared(run.key, run.sent, run.part); else clearShareMemory(run.key);
+    showRestart(run);
     if (left > 0) status.textContent = `חלק ${run.part} ${verb}. ${rest(run, left)}.`;
     else status.textContent = run.entries.length === 1
       ? "הכל מוכן לשיתוף."
@@ -179,11 +221,23 @@ export function shareDocuments(ctx, selection) {
       }
     } finally { run.busy = false; }
   };
-  const start = format => {
+  const start = (format, fresh = false) => {
     current?.batch.clear(); current?.pdf?.clear();
     if (current) current.archive = current.download = null;
-    const run = { format, entries: format === "pdf" ? manifest.pdfEntries : manifest.entries, part: 1, busy: false, sharing: false, archive: null, download: null, pdf: null };
+    const key = shareMemoryKey(selection, format), all = format === "pdf" ? manifest.pdfEntries : manifest.entries;
+    if (fresh) clearShareMemory(key);
+    // A memory covering the whole month is a send that finished, not one to
+    // resume; only what is genuinely left over continues where it stopped.
+    const memory = fresh ? null : readShareMemory(key);
+    const left = memory ? all.filter(entry => !memory.paths.has(entry.path)) : all;
+    const resuming = memory && left.length ? memory : null;
+    if (memory && !left.length) clearShareMemory(key);
+    const run = { format, key, entries: resuming ? left : all, part: (resuming?.parts || 0) + 1,
+      sent: new Set(resuming?.paths || []), busy: false, sharing: false, archive: null, download: null, pdf: null };
     current = run;
+    resumeNote.hidden = !resuming;
+    if (resuming) resumeNote.textContent = `בשליחה קודמת של החודש הזה כבר יצאו ${all.length - run.entries.length} מתוך ${all.length} ${unit(run)}, וההכנה ממשיכה מכאן. אם אותה שליחה לא הגיעה ליעד — אפשר לשלוח את החודש מחדש מההתחלה.`;
+    showRestart(run);
     run.batch = new DocumentShareBatch(run.entries, async (id, entry, stillActive) => {
       if (format !== "pdf") return api.request("documents/" + id, { blob: true });
       // Load the PDF engine only when sharing, keeping intake/startup small.
@@ -233,6 +287,9 @@ export function shareDocuments(ctx, selection) {
     run.archive = run.download = null; run.batch.next(); run.part++; void prepare(run);
   };
   retry.onclick = () => void prepare();
+  // The month goes out again from its first invoice: the only way back when a
+  // part the app counted as sent never reached the accountant.
+  restart.onclick = () => { if (!current.sharing && active(current)) start(current.format, true); };
   formatButton.onclick = () => { if (!current.sharing && active(current)) start(current.format === "pdf" ? "original" : "pdf"); };
   $("[data-share-close]", dialog).onclick = () => dialog.close();
   dialog.onclose = () => {
