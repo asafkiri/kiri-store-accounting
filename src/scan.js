@@ -2,7 +2,7 @@ import { $, icon, errorText } from "./ui.js";
 import { escapeHtml as e } from "./format.js";
 import { invoiceForm } from "./forms.js";
 import { hasDraftContent } from "./draft-activity.js";
-import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob } from "./image-upload.js";
+import { readFile, encodeFile, decodeImage, validateFile, draftPageBlob, rotatePage } from "./image-upload.js";
 import { imageWorker } from "./image-worker.js";
 import { liveCapture, liveCameraSupported, isLiveCameraUnavailable } from "./live-capture.js";
 import { nativeApp, nativeWrapper, scannerBlocked, scanPages, captureAccept } from "./native-bridge.js";
@@ -380,7 +380,7 @@ export async function scanDialog(ctx, options = {}) {
     $("#file-previews", root).innerHTML = draft.files
       .map(
         (f, i) =>
-          `<article class="file-preview">${f.mime === "application/pdf" ? `<div class="pdf-preview">${icon("invoice")}<strong>PDF</strong><small>כל העמודים בקובץ ייקראו</small></div>` : `<img src="data:${e(f.mime)};base64,${e(f.data)}" alt="תצוגת עמוד ${i + 1}">`}<div><span>${e(f.name)}</span><button type="button" class="text-button" data-preview-file="${i}">הגדל</button><button type="button" class="text-button danger" data-remove-file="${i}" ${locked ? "disabled" : ""}>הסר / צלם מחדש</button></div></article>`,
+          `<article class="file-preview">${f.mime === "application/pdf" ? `<div class="pdf-preview">${icon("invoice")}<strong>PDF</strong><small>כל העמודים בקובץ ייקראו</small></div>` : `<img src="data:${e(f.mime)};base64,${e(f.data)}" alt="תצוגת עמוד ${i + 1}">`}<div><span>${e(f.name)}</span><button type="button" class="text-button" data-preview-file="${i}">הגדל</button>${f.mime === "application/pdf" ? "" : `<button type="button" class="text-button" data-rotate-file="${i}" ${locked ? "disabled" : ""}>סובב</button>`}<button type="button" class="text-button danger" data-remove-file="${i}" ${locked ? "disabled" : ""}>הסר / צלם מחדש</button></div></article>`,
       )
       .join("");
   };
@@ -499,7 +499,30 @@ export async function scanDialog(ctx, options = {}) {
   });
   root.addEventListener("click", async (ev) => {
     const remove = ev.target.closest("[data-remove-file]"),
-      preview = ev.target.closest("[data-preview-file]");
+      preview = ev.target.closest("[data-preview-file]"),
+      rotate = ev.target.closest("[data-rotate-file]");
+    // The phone's scanner keeps the page as the camera saw it, so a page that
+    // came out upside down is turned here instead of photographed again.
+    if (rotate) {
+      if (busy) return;
+      busy = true;
+      ctx.setModalBusy(true);
+      err.hidden = true;
+      paint();
+      const index = Number(rotate.dataset.rotateFile);
+      try {
+        draft.files[index] = await rotatePage(draft.files[index]);
+        draft.attachmentIds = [];
+        await persist();
+      } catch (error) {
+        showError(error);
+      } finally {
+        busy = false;
+        ctx.setModalBusy(false);
+        if (root.isConnected) paint();
+      }
+      return;
+    }
     if (remove) {
       if (busy) return;
       draft.files.splice(Number(remove.dataset.removeFile), 1);

@@ -53,6 +53,35 @@ export function validateFile(file) {
   if (!file.size || file.size > MAX_SOURCE_BYTES)
     throw Error("הקובץ ריק או גדול מדי. בחר קובץ עד 40 מגה.");
 }
+// A page the scanner produced upside down is turned in place: the same record,
+// re-encoded a quarter turn clockwise. Four taps come back to where it started,
+// and a PDF is handed back untouched — its own viewer turns its pages.
+export async function rotatePage(page) {
+  if (page.mime === "application/pdf") return page;
+  const canvas = document.createElement("canvas");
+  let image;
+  try {
+    image = await decodeImage(new File([draftPageBlob(page)], page.name, { type: page.mime }));
+    const width = image.naturalWidth || image.width,
+      height = image.naturalHeight || image.height;
+    if (!width || !height) throw Error("לא ניתן לסובב את הצילום. נסה שוב.");
+    canvas.width = height;
+    canvas.height = width;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw Error("לא ניתן לסובב את הצילום. נסה שוב.");
+    ctx.translate(height / 2, width / 2);
+    ctx.rotate(Math.PI / 2);
+    ctx.drawImage(image, -width / 2, -height / 2);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg", 0.88),
+    );
+    if (!blob) throw Error("לא ניתן לסובב את הצילום. נסה שוב.");
+    return await encodeFile(blob, page.name.replace(/\.[^.]+$/, "") + ".jpg");
+  } finally {
+    image?.close?.();
+    canvas.width = canvas.height = 1;
+  }
+}
 export async function readFile(file) {
   validateFile(file);
   if (file.type === "application/pdf") return encodeFile(file);
