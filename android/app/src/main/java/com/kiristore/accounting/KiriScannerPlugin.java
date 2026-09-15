@@ -29,9 +29,10 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The phone's own document scanner and share sheet, for the Android wrapper
@@ -64,6 +65,7 @@ public class KiriScannerPlugin extends Plugin {
     private ActivityResultLauncher<IntentSenderRequest> scanLauncher;
     private String pendingScanId;
     private final Map<String, File> shares = new ConcurrentHashMap<>();
+    private final AtomicInteger staged = new AtomicInteger();
 
     @Override
     public void load() {
@@ -252,8 +254,11 @@ public class KiriScannerPlugin extends Plugin {
         try {
             // The name the accountant reads is the one the app chose: supplier,
             // date and amount. Uniqueness belongs to the folder, never to the
-            // file, or every share arrives prefixed with a random id.
-            String id = UUID.randomUUID().toString();
+            // file, or every share arrives prefixed with a random id. The
+            // folder counts up in the order the app stages the files, because
+            // a receiving app that sorts the attachments by their address
+            // then keeps the order by supplier instead of scrambling it.
+            String id = String.format(Locale.US, "%06d", staged.getAndIncrement());
             File dir = new File(new File(getContext().getCacheDir(), SHARE_DIR), id);
             if (!dir.mkdirs()) throw new IllegalStateException("cache directory unavailable");
             File file = new File(dir, safeName(name));
@@ -289,9 +294,16 @@ public class KiriScannerPlugin extends Plugin {
         ArrayList<Uri> uris = new ArrayList<>();
         String mime = call.getString("mime", "*/*");
         try {
-            for (Object id : ids.toList()) {
+            List<Object> order = ids.toList();
+            // Files staged in one go share a timestamp to the millisecond, and
+            // an app that sorts the attachments by date then shows them in
+            // whatever order it happens to read them. A minute apart, oldest
+            // first, keeps the supplier order the app sent.
+            long clock = System.currentTimeMillis() - order.size() * 60_000L;
+            for (Object id : order) {
                 File file = shares.remove(String.valueOf(id));
                 if (file == null || !file.exists()) throw new IllegalStateException("missing share file");
+                file.setLastModified(clock += 60_000L);
                 uris.add(FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", file));
             }
         } catch (Exception error) {
