@@ -366,3 +366,57 @@ test("declining the confirmation deletes nothing, and invoice details offers the
   assert.equal(modal.querySelectorAll("[data-delete-document]").length, 2);
   assert.match(modal.textContent, /נמחק מהמערכת ומהאחסון אוטומטית כעבור שנה/);
 });
+
+// The father's report: he opens a supplier, leaves for Home, comes back — the
+// app resumes inside that supplier — and then "חזרה לספקים" dropped him on Home
+// instead, so tapping the section again put him right back inside the supplier.
+// The level above was never in the history behind that screen.
+const FOLDER_DATA = {
+  full: true, version: 1, dailyCash: [],
+  suppliers: [{ id: "s1", name: "גלוברנס" }, { id: "s2", name: "תנובה" }],
+  invoices: ["s1", "s2"].map((supplierId, n) => ({
+    id: "inv-" + n, supplierId, documentNumber: "D" + n, documentType: "invoice",
+    invoiceDate: "2026-09-0" + (n + 1), status: "unpaid", finalAgorot: 100,
+    deductions: [], attachmentIds: ["page-" + n],
+  })),
+};
+const folderLevel = () =>
+  document.querySelectorAll(".supplier-folder").length ? "suppliers"
+    : document.querySelectorAll(".month-folder").length ? "months"
+      : document.querySelectorAll('[data-action="detail"],[data-action="documents"]').length ? "one supplier"
+        : document.querySelector('[data-route="invoices"]') ? "home" : "elsewhere";
+
+for (const route of ["invoices", "documents"]) {
+  test(`${route}: the button that says "חזרה לספקים" reaches the suppliers, even on a folder the app resumed`, async t => {
+    await setup(t, { request: async path => path === "me" ? { uid: "owner" } : FOLDER_DATA });
+    await globalThis.appAuthCallback({});
+    document.querySelector(`[data-route="${route}"]`).click(); await tick();
+    document.querySelector('[data-action="folder-month"]').click(); await tick();
+    document.querySelector('[data-action="folder-supplier"]').click(); await tick();
+    assert.equal(folderLevel(), "one supplier");
+    document.querySelector('.topbar [data-route="home"]').click(); await tick();
+    document.querySelector(`[data-route="${route}"]`).click(); await tick();
+    assert.equal(folderLevel(), "one supplier", "the section resumes where he left it");
+    assert.match(document.querySelector(".app-back").textContent, /חזרה לספקים/);
+    document.querySelector(".app-back").click(); await tick(); await tick();
+    assert.equal(folderLevel(), "suppliers", "and Back climbs one level instead of leaving the section");
+    document.querySelector(".app-back").click(); await tick(); await tick();
+    assert.equal(folderLevel(), "months");
+  });
+}
+
+test("walking into a folder by hand still unwinds through the history it built", async t => {
+  await setup(t, { request: async path => path === "me" ? { uid: "owner" } : FOLDER_DATA });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click(); await tick();
+  document.querySelector('[data-action="folder-month"]').click(); await tick();
+  document.querySelector('[data-action="folder-supplier"]').click(); await tick();
+  document.querySelector(".app-back").click(); await tick(); await tick();
+  assert.equal(folderLevel(), "suppliers");
+  document.querySelector(".app-back").click(); await tick(); await tick();
+  assert.equal(folderLevel(), "months");
+  // Nothing was rewritten: the phone's own forward gesture still finds the
+  // levels he walked through.
+  window.history.forward(); await tick(); await tick();
+  assert.equal(folderLevel(), "suppliers");
+});
