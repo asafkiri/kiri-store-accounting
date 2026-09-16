@@ -468,6 +468,96 @@ test("a supplier in the recycle bin is not offered new invoices", async t => {
   assert.equal(document.querySelector(".folder-add"), null);
 });
 
+// He pays part of last month and part of this one in a single check. Until now
+// that meant walking into every month to find what was still open; the supplier
+// folder now offers the whole debt on one screen, month by month.
+const OWING_DATA = {
+  full: true, version: 1, dailyCash: [],
+  suppliers: [{ id: "s1", name: "תנובה", active: true }, { id: "s2", name: "גלוברנס", active: true }],
+  invoices: [
+    ["owe-aug-1", "s1", "2026-08-04", "unpaid", 20000],
+    ["owe-aug-2", "s1", "2026-08-19", "unpaid", 23500],
+    ["owe-sep-1", "s1", "2026-09-08", "unpaid", 125400],
+    ["paid-sep", "s1", "2026-09-02", "paid", 5000],
+    ["other-sep", "s2", "2026-09-05", "unpaid", 700],
+  ].map(([id, supplierId, invoiceDate, status, finalAgorot]) => ({
+    id, supplierId, invoiceDate, status, finalAgorot, totalAgorot: finalAgorot,
+    documentNumber: id.toUpperCase(), documentType: "invoice", version: 1, deductions: [], attachmentIds: [],
+  })),
+};
+const owingEntry = () => document.querySelector(".folder-open-supplier");
+async function intoSupplier(t, data = OWING_DATA, month = "2026-09") {
+  await setup(t, { request: async path => path === "me" ? { uid: "owner" } : data });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click(); await tick();
+  document.querySelector(`[data-action="folder-month"][data-value="${month}"]`).click(); await tick();
+  document.querySelector('[data-action="folder-supplier"][data-value="s1"]').click(); await tick();
+}
+
+test("a supplier folder opens everything still owed to him, grouped month by month", async t => {
+  await intoSupplier(t);
+  const entry = owingEntry();
+  assert.match(entry.textContent, /כל מה שעוד לא שולם לתנובה/);
+  assert.match(entry.textContent, /3 חשבוניות/, "the two open from August count with September's");
+  assert.match(entry.textContent, /1,689\.00/);
+  entry.click(); await tick();
+  assert.match(document.querySelector("[data-folder-heading]").textContent, /תנובה/);
+  assert.match(document.querySelector(".folder-location p").textContent, /כל מה שעוד לא שולם · כל החודשים/);
+  const months = [...document.querySelectorAll(".month-section-heading")].map(h => h.textContent);
+  assert.equal(months.length, 2, "one heading per month, so the sets are visible before he starts ticking");
+  assert.match(months[0], /אוגוסט 2026/, "oldest first, the order the payment screen puts them in");
+  assert.match(months[0], /2 חשבוניות · .*435\.00/);
+  assert.match(months[1], /ספטמבר 2026/);
+  assert.match(months[1], /חשבונית אחת · .*1,254\.00/);
+  const rows = [...document.querySelectorAll(".invoice-card .supplier-name")].map(el => el.textContent);
+  assert.deepEqual(rows, ["04.08.2026", "19.08.2026", "08.09.2026"],
+    "every row is his, so the date is the headline rather than the name repeated three times");
+  assert.equal(document.querySelectorAll('[data-action="detail"][data-id="paid-sep"]').length, 0, "what he already paid stays out");
+  assert.equal(document.querySelectorAll('[data-action="detail"][data-id="other-sep"]').length, 0, "and so does another supplier's");
+});
+
+test("Back out of the open-invoices screen returns to the supplier folder he came from", async t => {
+  await intoSupplier(t);
+  owingEntry().click(); await tick();
+  assert.match(document.querySelector(".app-back").textContent, /חזור/);
+  document.querySelector(".app-back").click(); await tick(); await tick();
+  assert.equal(folderLevel(), "one supplier");
+  assert.ok(owingEntry(), "back inside the month's folder, with the way to the whole debt still offered");
+});
+
+test("a supplier with nothing open is offered no such screen", async t => {
+  const settled = {
+    ...OWING_DATA,
+    invoices: OWING_DATA.invoices.map(i => i.supplierId === "s1" ? { ...i, status: "paid" } : i),
+  };
+  await intoSupplier(t, settled);
+  assert.equal(owingEntry(), null);
+  assert.equal(document.querySelector('[data-action="folder-month"]'), null, "still inside the folder, just without the offer");
+});
+
+test("paying from the open-invoices screen offers one month at a time, and that month only", async t => {
+  await intoSupplier(t);
+  owingEntry().click(); await tick();
+  const pay = document.querySelector('[data-action="batch-payment"]');
+  assert.equal(pay.dataset.id, "s1", "the payment button knows whose screen this is");
+  pay.click(); await tick();
+  const form = document.querySelector("#modal .batch-payment-form");
+  const headings = [...form.querySelectorAll(".batch-month-heading")].map(el => el.textContent);
+  assert.match(headings[0], /אוגוסט 2026/);
+  assert.match(headings[1], /ספטמבר 2026/);
+  const august = form.querySelector('[data-select-month="2026-08"]');
+  august.click(); await tick();
+  const checked = [...form.querySelectorAll('[name="invoiceSelection"]:checked')].map(el => el.value);
+  assert.deepEqual(checked, ["owe-aug-1", "owe-aug-2"], "the whole of August, and nothing from September");
+  assert.match(form.querySelector("[data-batch-total]").textContent, /2 חשבוניות · .*435\.00/);
+  // The mix he actually pays: all of last month plus one from this one.
+  form.querySelector('[name="invoiceSelection"][value="owe-sep-1"]').click(); await tick();
+  assert.match(form.querySelector("[data-batch-total]").textContent, /3 חשבוניות · .*1,689\.00/);
+  august.click(); await tick();
+  assert.deepEqual([...form.querySelectorAll('[name="invoiceSelection"]:checked')].map(el => el.value), ["owe-sep-1"],
+    "tapping the month again clears exactly what it added");
+});
+
 test("the camera opened from Home still asks who the supplier is", async t => {
   await setup(t, { request: async path => path === "me" ? { uid: "owner" } : SUPPLIER_FOLDER_DATA });
   await globalThis.appAuthCallback({});

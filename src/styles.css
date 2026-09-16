@@ -2098,3 +2098,11 @@ dialog.crop-modal {
 .recycle-section .trash-card { flex-wrap: wrap; gap: 14px; }
 .recycle-section .row-actions { width: 100%; }
 .folder-location .folder-add { margin-top: 12px; }
+.folder-location .folder-open-supplier { margin-top: 12px; display: block; width: 100%; text-align: start; }
+.month-section { margin-bottom: 18px; }
+.month-section-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 1.05rem; margin: 0 0 8px; padding-bottom: 6px; border-bottom: 2px solid var(--line); }
+.month-section-heading small { font-weight: 500; color: #526178; font-size: .85rem; }
+.batch-month { margin-bottom: 14px; }
+.batch-month-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
+.batch-month-heading span { color: #526178; font-size: .85rem; }
+.batch-month-heading .text-button { margin-inline-start: auto; min-height: 44px; }

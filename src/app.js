@@ -421,6 +421,16 @@ async function action(type, data = {}) {
       ctx.limit = 80;
       ctx.render();
       break;
+    case "supplier-open":
+      // Out of the month, into everything still owed to this one supplier.
+      navigation.visit(() => {
+        ctx.filters = { supplierId: data.id, status: "unpaid", view: "supplier-open" };
+        ctx.folderPath = {};
+        ctx.limit = 80;
+        ctx.render();
+        window.scrollTo(0, 0);
+      });
+      return;
     case "open-unpaid":
       navigation.visit(() => {
         ctx.filters = { status: "unpaid", view: "list" };
