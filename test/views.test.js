@@ -129,9 +129,33 @@ test("the main navigation does not duplicate the invoices entry already offered 
   };
   const render = route => new JSDOM(shell({ ...ctx, route })).window.document;
   const home = render("home"), nav = home.querySelector('nav[aria-label="ניווט ראשי"]');
-  assert.deepEqual([...nav.querySelectorAll("button")].map(b => b.dataset.route), ["home", "more"]);
+  assert.deepEqual([...nav.querySelectorAll("[data-route]")].map(b => b.dataset.route), ["home", "more"]);
   // The invoices entry belongs to Home, which keeps it reachable in one tap.
   assert.ok(home.querySelector('#main [data-route="invoices"]'));
   const invoicesNav = render("invoices").querySelector('nav[aria-label="ניווט ראשי"]');
   assert.equal(invoicesNav.querySelectorAll("button.active,[aria-current]").length, 0);
+});
+
+// Back sits with Home at the bottom of the phone, where the thumb rests, and
+// keeps its place on Home so the bar never shifts under a finger already aimed.
+test("Back rides the bottom bar beside Home, and only Back answers to a tap meant for it", async () => {
+  const { JSDOM } = await import("jsdom");
+  const base = { filters: {}, folderPath: {}, limit: 80, data: { invoices: [], suppliers: [], dailyCash: [] }, draftNames: [], lastRefresh: 123, syncError: false };
+  const render = extra => new JSDOM(shell({ ...base, ...extra })).window.document;
+  for (const [state, label, action] of [
+    [{ route: "invoices", folderPath: { month: "2026-09", supplierId: "s1" } }, "חזרה לספקים", "folder-back"],
+    [{ route: "invoices", folderPath: { month: "2026-09" } }, "חזרה לחודשים", "folder-back"],
+    [{ route: "suppliers" }, "חזור", "back"],
+  ]) {
+    const doc = render(state), nav = doc.querySelector('nav[aria-label="ניווט ראשי"]');
+    const back = nav.querySelector(".app-back");
+    assert.equal(nav.firstElementChild, back, "Back leads the bar, nearest the thumb in Hebrew");
+    assert.match(back.textContent, new RegExp(label));
+    assert.equal(back.dataset.action, action);
+    assert.equal(back.disabled, false);
+    assert.equal(doc.querySelectorAll(".topbar [data-route],.topbar [data-action]").length, 0, "nothing in the top bar competes with it");
+  }
+  const onHome = render({ route: "home" }).querySelector("nav .app-back");
+  assert.equal(onHome.disabled, true, "nothing to go back to, but the bar does not move");
+  assert.match(onHome.textContent, /חזור/);
 });

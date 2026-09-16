@@ -228,6 +228,13 @@ strong {
   color: #fff;
   font-weight: bold;
 }
+/* The shared arrow points the way a folder opens; back is the other way. */
+.sidebar nav .app-back svg {
+  transform: scaleX(-1);
+}
+.sidebar nav .app-back[disabled] {
+  opacity: 0.4;
+}
 .sidebar nav button:hover,
 .settings-link:hover {
   background: #254669;
