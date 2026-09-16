@@ -374,8 +374,12 @@ async function action(type, data = {}) {
       return shareDocuments(ctx, { invoiceId: data.id });
     case "invoice":
       return invoiceForm(ctx, null, [], { quick: true });
-    case "scan":
-      return scanDialog(ctx, { openCamera: true });
+    case "scan": {
+      // Started from a supplier's folder, the supplier travels with the scan
+      // and the questions open on the amount instead of asking who it is.
+      const from = ctx.data.suppliers.find(s => s.id === data.supplier && !s.deletedAt);
+      return scanDialog(ctx, { openCamera: true, supplier: from ? { id: from.id, name: from.name } : null });
+    }
     case "vat-preferences":
       return preferencesForm(ctx);
     case "supplier-restore":

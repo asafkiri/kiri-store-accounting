@@ -40,9 +40,15 @@ export function folderLocation(ctx) {
   const path = ctx.folderPath || {};
   if (!path.month) return "";
   const supplier = ctx.data.suppliers.find(s => s.id === path.supplierId);
+  // Standing in a supplier's folder already answers the first question the
+  // intake asks, so the camera opens from here with that answer filled in. A
+  // supplier in the recycle bin is not offered new invoices.
+  const addHere = path.supplierId && supplier && !supplier.deletedAt
+    ? `<button class="secondary folder-add" data-action="scan" data-supplier="${e(supplier.id)}">${icon("camera")} צלם חשבונית ל${e(supplier.name)}</button>`
+    : "";
   return `<section class="folder-location" aria-label="התיקייה הנוכחית">
     <h1 tabindex="-1" data-folder-heading>${e(path.supplierId ? supplier?.name || "ספק" : monthLabel(path.month))}</h1>
-    <p>${path.supplierId ? e(monthLabel(path.month)) : "בחר ספק"}</p>
+    <p>${path.supplierId ? e(monthLabel(path.month)) : "בחר ספק"}</p>${addHere}
   </section>`;
 }
 

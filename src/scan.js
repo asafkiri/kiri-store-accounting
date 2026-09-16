@@ -562,6 +562,7 @@ export async function scanDialog(ctx, options = {}) {
       await invoiceForm(ctx, null, draft.attachmentIds, {
         quick: true,
         fromScan: draft.files.length > 0,
+        supplier: options.supplier || null,
       });
     } catch (error) {
       status.hidden = true;

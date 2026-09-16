@@ -528,10 +528,12 @@ export async function invoiceForm(
       recordId: record?.id || crypto.randomUUID(),
       version: record?.version || 0,
       fields: {
-        supplierId: record?.supplierId || "",
+        // Only a brand-new draft is seeded: an intake already under way keeps
+        // whichever supplier it was typed with.
+        supplierId: record?.supplierId || options.supplier?.id || "",
         supplierName: record
           ? ctx.data.suppliers.find((s) => s.id === record.supplierId)?.name || ""
-          : "",
+          : options.supplier?.name || "",
         documentNumber: record?.documentNumber || "",
         // An invoice already told apart from its twin is not asked about again
         // when it is edited or paid.
@@ -577,7 +579,9 @@ export async function invoiceForm(
   // and stays behind the questions for the complex case.
   if (!record && !options.fullEditor && (options.quick || draft.quick)) return quickInvoiceReview(ctx, draft, {
     bindDraft, footer, buildMutation: values => invoiceMutation(draft, values, null, ctx.data.invoices),
-    openEditor: () => invoiceForm(ctx, null, [], { fullEditor: true }),
+    // An empty form saves no draft, so the supplier the folder supplied has to
+    // travel with the request for the detailed editor too.
+    openEditor: () => invoiceForm(ctx, null, [], { fullEditor: true, supplier: options.supplier }),
   });
   const root = ctx.dialog(
     record ? "עריכת חשבונית" : "הוספת חשבונית",
