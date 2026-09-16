@@ -2207,6 +2207,56 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(errors, []);
   });
 
+  // Fixing a mistake on an invoice already saved: the way in is at the top of
+  // the invoice, the amount is asked once, and the payment is corrected from
+  // the same screen instead of from a menu at the foot of the page.
+  test(`${engine.name()}: an invoice is corrected from the top, and its amount asked once`, { timeout: 60000 }, async t => {
+    const { server, requests } = workspaceFixture();
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch(); const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, "invoices");
+    await page.locator("#invoice-search").fill("\u05de\u05e8\u05d9\u05e0\u05d4");
+    await page.locator('[data-action="detail"][data-id="INV-102"]').click();
+    const edit = page.locator('[data-detail-action="edit"]');
+    assert.equal(await edit.isVisible(), true, "Edit is in sight, with nothing to open first");
+    assert.ok((await edit.boundingBox()).height >= 44);
+    await edit.click();
+    await page.locator("#invoice-form").waitFor();
+    assert.equal(await page.locator("[data-final-slot]").evaluate(el => el.hidden), true,
+      "the amount to pay equals the document's, so it is not a second field to fill");
+    assert.equal(await page.locator(".edit-rest").evaluate(el => el.open), false, "supplier, date and kind wait behind a fold");
+    assert.match(await page.locator("[data-edit-payment]").innerText(), /\u05e9\u05d5\u05dc\u05dd \u05d1\u05e6\u05f3\u05e7/);
+    await page.screenshot({ path: `test-artifacts/invoice-edit-${engine.name()}.png` });
+    // The check whose number was never written down is corrected from here, and
+    // backing out of that returns to the invoice rather than out of everything.
+    await page.locator("[data-edit-payment]").click();
+    await page.locator(".payment-form").waitFor();
+    assert.equal(await page.locator("#modal-title").innerText(), "\u05e2\u05d3\u05db\u05d5\u05df \u05e4\u05e8\u05d8\u05d9 \u05d4\u05ea\u05e9\u05dc\u05d5\u05dd");
+    await page.locator("#modal [data-close-modal]").click();
+    await page.locator("#invoice-form").waitFor();
+    assert.equal(await page.locator("#modal-title").innerText(), "\u05e2\u05e8\u05d9\u05db\u05ea \u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea", "Back lands on the invoice he was correcting");
+    await page.locator("#modal [data-close-modal]").click();
+    await page.locator(".invoice-hero").waitFor();
+    assert.equal(await page.locator("#modal-title").innerText(), "\u05e4\u05e8\u05d8\u05d9 \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d9\u05ea", "and once more lands on the invoice, not out of everything");
+    await page.locator('[data-detail-action="edit"]').click();
+    await page.locator("#invoice-form").waitFor();
+    await page.locator('[name="total"]').fill("512.40");
+    await page.locator('[name="review"]').check();
+    await page.locator('#invoice-form [type="submit"]').click();
+    await page.locator(".save-confirmation").waitFor();
+    const write = requests.findLast(r => r.path === "/api/v1/invoices/INV-102" && r.method === "PUT");
+    assert.equal(write.body.data.totalAgorot, 51240);
+    assert.equal(write.body.data.finalAgorot, 51240, "one number typed once became both");
+    await page.locator("[data-saved-done]").click();
+    await page.locator(".invoice-card").first().waitFor();
+    assert.match(await page.locator(".invoice-card").first().innerText(), /512\.40/);
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: number-free invoice search, readable rows and Back through retained answers`, { timeout: 60000 }, async t => {
     const { server, data, month, requests } = workspaceFixture();
     data.invoices.forEach(i => { i.documentNumber = ""; });
@@ -2236,17 +2286,22 @@ for (const engine of [chromium, webkit]) {
     await page.screenshot({ path: `test-artifacts/invoice-search-${engine.name()}.png`, fullPage: true });
     await invoice.click();
     assert.ok(await page.locator('.invoice-detail-primary').isVisible());
-    assert.equal(await page.locator('[data-detail-action="edit"]').isVisible(), false);
+    assert.equal(await page.locator('[data-detail-action="edit"]').isVisible(), true, "correcting it needs nothing opened first");
     await page.screenshot({ path: `test-artifacts/invoice-unpaid-${engine.name()}.png` });
     await page.locator('[data-close-modal]').click();
     assert.equal(await page.locator('#invoice-search').inputValue(), "תנובה 1,254");
     await page.locator('#invoice-search').fill(month + "-05");
     await page.locator('[data-action="detail"][data-id="INV-102"]').click();
     assert.ok(await page.locator('.payment-receipt').isVisible());
-    assert.equal(await page.locator('[data-detail-action="pay"]').isVisible(), false);
+    assert.equal(await page.locator('[data-detail-action="pay"]').isVisible(), false, "an invoice already paid is not asked to be paid again");
     await page.screenshot({ path: `test-artifacts/invoice-paid-${engine.name()}.png` });
+    // Its payment is corrected through the same Edit, not through a menu at the
+    // foot of the page; what stays folded away there is what destroys things.
+    await page.locator('[data-detail-action="edit"]').click();
+    await page.locator('[data-edit-payment]').waitFor();
+    await page.locator('[data-close-modal]').click();
     await page.locator('.invoice-edit-actions > summary').click();
-    assert.ok(await page.locator('[data-detail-action="pay"]').isVisible());
+    assert.ok(await page.locator('[data-detail-action="delete"]').isVisible());
     await page.locator('[data-close-modal]').click();
     await page.locator('[data-action="clear-search"]').click();
     assert.equal(await page.locator('.month-folder').count(), 2);

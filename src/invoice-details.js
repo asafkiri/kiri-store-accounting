@@ -36,6 +36,7 @@ export function invoiceDetails(invoice, supplier, { retentionDays = 0 } = {}) {
     <div class="invoice-identity-line"><div><span class="invoice-info-label">ספק${invoice.documentType && invoice.documentType !== "invoice" ? " · " + e(types[invoice.documentType]) : ""}</span><h3>${e(supplier?.name || "ספק")}</h3></div><span class="badge ${paid ? "paid" : "unpaid"}">${paid ? icon("check") + "שולם" : "טרם שולם"}</span></div>
     <div class="invoice-date-line"><span class="invoice-info-label">תאריך חשבונית</span><time datetime="${e(invoice.invoiceDate)}" dir="ltr">${e(displayDate(invoice.invoiceDate))}</time></div>
     <div class="invoice-hero-amount"><span>${invoice.documentType === "credit" ? "סכום הזיכוי" : paid ? "סכום החשבונית" : "סכום לתשלום"}</span><strong>${e(money(invoice.finalAgorot))}</strong></div></section>
+    <button class="secondary invoice-edit" data-detail-action="edit">${icon("edit")} ערוך חשבונית</button>
     ${payment ? `<section class="payment-receipt"><h3>פרטי התשלום</h3>${rowList([
       ["אמצעי תשלום", methods[payment.method]], [payment.method === "check" ? "יום מסירת הצ׳ק לספק" : "יום התשלום", displayDate(payment.paymentDate)],
       ...(payment.batch ? [["נרשמה בתשלום משותף", `${payment.batch.invoiceIds.length} חשבוניות · ${money(payment.batch.totalAgorot)}`]] : []),
@@ -52,7 +53,7 @@ export function invoiceDetails(invoice, supplier, { retentionDays = 0 } = {}) {
       <div class="invoice-secondary-actions">${files.length ? `<button class="secondary" data-detail-action="share-invoice">${icon("share")} שתף חשבונית</button>` : ""}${!paid ? '<button class="secondary" data-detail-action="pay-supplier">תשלום לכמה חשבוניות</button>' : ""}</div>
     </div>
     <details class="invoice-extra"><summary>מע״מ ופירוט הסכומים</summary>${rowList(rows)}${(invoice.deductions || []).map(d => `<p>${e(d.label)} · ${e(money(d.amountAgorot))} · ${d.includedInTotal ? "כלולה בסכום" : "נוספת"}</p>`).join("")}</details>
-    <details class="invoice-edit-actions"><summary>פעולות נוספות</summary><div class="invoice-more-actions"><button class="secondary" data-detail-action="edit">תקן פרטי חשבונית</button>${paid ? '<button class="secondary" data-detail-action="pay">תיקון פרטי התשלום</button><button class="text-button" data-detail-action="unpay">טעיתי — החשבונית לא שולמה</button>' : ""}
+    <details class="invoice-edit-actions"><summary>פעולות נוספות</summary><div class="invoice-more-actions">
     ${invoice.documentNumber?.trim() ? `<p class="muted">מספר חשבונית שמור: ${e(invoice.documentNumber)}</p>` : ""}
     ${attachmentRemovalRows(invoice)}<button class="text-button danger" data-detail-action="delete">מחק חשבונית</button><button class="secondary" data-detail-action="recycle">סל מחזור ושחזור</button>${files.length ? retentionNote(retentionDays) : ""}</div></details>`;
 }

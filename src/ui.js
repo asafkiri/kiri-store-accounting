@@ -19,6 +19,7 @@ export function icon(name) {
     settings:
       "M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5.6 5.6l2.1 2.1 M16.3 16.3l2.1 2.1 M5.6 18.4l2.1-2.1 M16.3 7.7l2.1-2.1 M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0",
     arrow: "M15 5l-7 7 7 7",
+    edit: "M4 20h4L20 8l-4-4L4 16z M14 6l4 4",
     download: "M12 3v12 M7 10l5 5 5-5 M4 16v5h16v-5",
     refresh:
       "M20 7v5h-5 M4 17v-5h5 M5 8a8 8 0 0 1 13-3l2 3 M19 16a8 8 0 0 1-13 3l-2-3",

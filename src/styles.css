@@ -2106,3 +2106,15 @@ dialog.crop-modal {
 .batch-month-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
 .batch-month-heading span { color: #526178; font-size: .85rem; }
 .batch-month-heading .text-button { margin-inline-start: auto; min-height: 44px; }
+/* The way to fix a mistake sits at the top of the invoice, beside its state,
+   rather than at the foot of the page behind a fold. */
+.invoice-edit { width: 100%; margin-top: 14px; min-height: 52px; }
+.edit-payment { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.edit-payment h3 { margin: 0 0 12px; font-size: 19px; }
+.edit-payment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; text-align: start; padding: 14px; }
+.edit-payment-row > span { display: grid; gap: 4px; min-width: 0; }
+.edit-payment-row small { color: var(--muted); font-weight: 500; white-space: normal; }
+.edit-payment-row svg { flex-shrink: 0; }
+.edit-payment .text-button { margin-top: 10px; }
+.edit-rest { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 14px; }
+.edit-rest > summary { min-height: 44px; display: flex; align-items: center; }

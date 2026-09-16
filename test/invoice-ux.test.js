@@ -78,18 +78,30 @@ test("invoice rows have one action and no number or missing-number label", () =>
   assert.equal(invoiceLabel(rows[0]), "חשבונית");
 });
 
-test("paid details show the payment while corrections and per-page deletions remain in More", () => {
+test("paid details show the payment, with Edit at the top and deletions still in More", () => {
   const original = structuredClone(rows[2]);
   const page = dom(invoiceDetails(rows[2], suppliers[1]));
   assert.ok(page.querySelector(".payment-receipt"));
   assert.equal(page.querySelectorAll(".invoice-detail-primary").length, 0);
+  // Correcting a mistake is reached from the top of the invoice, in sight,
+  // beside the supplier and the state — not from the foot of a long page.
+  const edit = page.querySelector('[data-detail-action="edit"]');
+  assert.ok(edit, "the invoice offers Edit above everything else");
+  assert.match(edit.textContent, /ערוך/);
+  assert.ok(edit.previousElementSibling.classList.contains("invoice-hero"), "right under the summary, ahead of every detail");
+  assert.equal(edit.closest("details"), null, "and never behind a fold");
   const more = page.querySelector(".invoice-edit-actions");
   assert.equal(more.open, false);
-  for (const action of ["pay", "edit", "unpay", "delete"]) assert.ok(more.querySelector(`[data-detail-action="${action}"]`));
+  assert.equal(more.querySelector('[data-detail-action="edit"]'), null, "and not a second time inside the fold");
+  // What is dangerous stays folded away, and never at the top.
+  for (const action of ["delete", "recycle"]) assert.ok(more.querySelector(`[data-detail-action="${action}"]`));
+  assert.equal(more.previousElementSibling.matches('[data-detail-action="delete"]'), false);
+  assert.ok(page.querySelector('[data-detail-action="delete"]').closest("details"), "deleting stays folded away");
   assert.ok(more.querySelector("[data-delete-document]"));
   assert.equal(page.querySelector(".attachment-row [data-delete-document]"), null);
   assert.ok(page.querySelector("[data-invoice-photo]"));
   const unpaid = dom(invoiceDetails(rows[0], suppliers[0]));
   assert.equal(unpaid.querySelector(".invoice-detail-primary").textContent, "סמן ששילמתי");
+  assert.ok(unpaid.querySelector('[data-detail-action="edit"]'), "an unpaid invoice is corrected the same way");
   assert.deepEqual(rows[2], original);
 });
