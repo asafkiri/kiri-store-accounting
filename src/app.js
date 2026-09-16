@@ -169,10 +169,37 @@ ctx.mergeRecord = (record, path) => {
   else if (record.version >= ctx.data[collection][index].version)
     ctx.data[collection][index] = record;
 };
+// A render rebuilds the section from scratch, so the field being typed into is
+// replaced by a new one mid-word: the caret disappears and the next character
+// goes nowhere. Renders arrive from elsewhere too — closing a window schedules
+// one for whenever the drafts finish being read from the device — so the field
+// that held the focus is handed it back, caret where it was left.
+const restoreSelector = value => /^[A-Za-z][\w-]*$/.test(value || "");
+const focusedField = () => {
+  const el = document.activeElement;
+  if (!el || !["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) return null;
+  if (!$("#app")?.contains(el)) return null;
+  const selector = restoreSelector(el.id) ? "#" + el.id : restoreSelector(el.name) ? `[name="${el.name}"]` : null;
+  if (!selector) return null;
+  // Dates, months and numbers carry no caret and answer the question by throwing.
+  let start = null, end = null;
+  try { start = el.selectionStart; end = el.selectionEnd; } catch { start = null; }
+  return { selector, start, end };
+};
+const restoreField = field => {
+  if (!field) return;
+  const el = $("#app " + field.selector);
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  if (field.start === null || field.start === undefined) return;
+  try { el.setSelectionRange(field.start, field.end); } catch { /* the field takes no caret */ }
+};
 ctx.render = () => {
   if (!ctx.api) return;
+  const typing = focusedField();
   $("#app").innerHTML = shell(ctx);
   bindShell();
+  restoreField(typing);
 };
 ctx.refresh = async (force = false) => {
   if (ctx.loading || !ctx.api) return;
@@ -305,11 +332,9 @@ function bindShell() {
       rememberOptions();
       ctx.filters.q = search.value;
       ctx.limit = 80;
-      const pos = search.selectionStart;
+      // The focus and the caret ride the render itself now, from wherever it
+      // was triggered, so typing here needs nothing of its own.
       ctx.render();
-      const next = $("#" + search.id);
-      next?.focus();
-      next?.setSelectionRange(pos, pos);
     };
   const active = $("#active-only");
   if (active)
