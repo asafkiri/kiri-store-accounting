@@ -46,10 +46,37 @@ export function folderLocation(ctx) {
   const addHere = path.supplierId && supplier && !supplier.deletedAt
     ? `<button class="secondary folder-add" data-action="scan" data-supplier="${e(supplier.id)}">${icon("camera")} צלם חשבונית ל${e(supplier.name)}</button>`
     : "";
+  // A supplier's debt does not end with the month being read. What is still
+  // open for him lives across months, so it is reachable from inside any one of
+  // them — and the button says how much, because that is the question being
+  // asked. Nothing owed, nothing offered.
+  const open = path.supplierId
+    ? ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid" && i.supplierId === path.supplierId)
+    : [];
+  const owed = open.length && `<button class="secondary folder-open-supplier" data-action="supplier-open" data-id="${e(path.supplierId)}">${icon("invoice")} כל מה שעוד לא שולם ל${e(supplier?.name || "ספק")} · ${e(open.length === 1 ? "חשבונית אחת" : open.length + " חשבוניות")} · ${e(money(open.reduce((sum, i) => sum + i.finalAgorot, 0)))}</button>`;
   return `<section class="folder-location" aria-label="התיקייה הנוכחית">
     <h1 tabindex="-1" data-folder-heading>${e(path.supplierId ? supplier?.name || "ספק" : monthLabel(path.month))}</h1>
-    <p>${path.supplierId ? e(monthLabel(path.month)) : "בחר ספק"}</p>${addHere}
+    <p>${path.supplierId ? e(monthLabel(path.month)) : "בחר ספק"}</p>${owed || ""}${addHere}
   </section>`;
+}
+
+// One supplier's open invoices read as a statement rather than a heap: a
+// heading per month with what it holds, so "two from August and one from
+// September" is something the eye can find before the hand starts ticking.
+export function monthSections(items, ctx, cards) {
+  // Oldest first, the order a debt is settled in — and the same order the
+  // payment screen this feeds puts them in, so the list does not flip over
+  // between looking and ticking.
+  const ordered = [...items].sort((a, b) => a.invoiceDate.localeCompare(b.invoiceDate));
+  const shown = ordered.slice(0, ctx.limit), months = new Map();
+  for (const invoice of shown) {
+    const month = invoice.invoiceDate?.slice(0, 7) || "";
+    if (!months.has(month)) months.set(month, []);
+    months.get(month).push(invoice);
+  }
+  return [...months].map(([month, rows]) =>
+    `<section class="month-section"><h2 class="month-section-heading">${e(monthLabel(month))}<small>${e(rows.length === 1 ? "חשבונית אחת" : rows.length + " חשבוניות")} · ${e(money(rows.reduce((sum, i) => sum + i.finalAgorot, 0)))}</small></h2>${cards(rows, { ...ctx, limit: rows.length })}</section>`).join("")
+    + (items.length > shown.length ? `<button class="secondary" data-action="more">${icon("plus")}הצג עוד (${items.length - shown.length})</button>` : "");
 }
 
 // Only the current directory is rendered. A large earlier month can never

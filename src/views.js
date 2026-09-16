@@ -1,4 +1,4 @@
-import { invoiceFolders, documentCards, periodPicker, statusTabs, summaryMoney, folderLocation } from "./invoice-browser.js";
+import { invoiceFolders, documentCards, periodPicker, statusTabs, summaryMoney, folderLocation, monthSections } from "./invoice-browser.js";
 import { creditSignIssues } from "./credit.js";
 import { recycleView } from "./recycle.js";
 import { icon, empty, select, field } from "./ui.js";
@@ -52,7 +52,11 @@ export function invoiceCards(items, ctx) {
       .map((i) => {
         const name =
           ctx.data.suppliers.find((s) => s.id === i.supplierId)?.name || "ספק";
-        const inSupplier = ctx.folderPath?.supplierId === i.supplierId;
+        // Every row on a screen already narrowed to one supplier says the same
+        // name; the date is what tells them apart, so it takes the headline.
+        const inSupplier =
+          ctx.folderPath?.supplierId === i.supplierId ||
+          ctx.filters?.supplierId === i.supplierId;
         const paid = i.status === "paid";
         return `<article class="invoice-card status-${paid ? "paid" : "unpaid"}"><button class="invoice-main" data-action="detail" data-id="${e(i.id)}" aria-label="פתח ${e(types[i.documentType] || "חשבונית")} של ${e(name)}, ${e(displayDate(i.invoiceDate))}, ${e(money(i.finalAgorot))}, ${paid ? "שולם" : "לא שולם"}"><span class="invoice-identity"><span class="supplier-name">${e(inSupplier ? displayDate(i.invoiceDate) : name)}</span>${!inSupplier ? `<span class="document-meta">${e(displayDate(i.invoiceDate))}</span>` : ""}${i.documentType && i.documentType !== "invoice" ? `<span class="document-meta">${e(types[i.documentType])}</span>` : ""}${i.attachmentIds?.length ? `<span class="document-meta attachment-indicator">${icon("image")}${i.attachmentIds.length === 1 ? "מסמך מצורף" : i.attachmentIds.length + " מסמכים מצורפים"}</span>` : ""}${ctx.route === "checks" && i.payment?.method === "check" ? `<span class="check-reference">צ׳ק ${e(i.payment.checkNumber || "ללא מספר")} · נמסר ${e(displayDate(i.payment.paymentDate))}</span>` : ""}${creditSignIssues(i).length ? '<span class="badge unpaid">זיכוי דורש תיקון</span>' : ""}</span><span class="invoice-values"><strong class="amount">${e(money(i.finalAgorot))}</strong><span class="badge ${paid ? "paid" : "unpaid"}">${paid ? icon("check") + "שולם" : "לא שולם"}</span></span>${icon("arrow")}</button></article>`;
       })
@@ -70,12 +74,21 @@ function filters(ctx, { status = false, period = true, invoiceActions = false } 
 const searchBox = (ctx, id, label) => `<div class="search">${icon("search")}<input id="${id}" placeholder="${label}" value="${e(ctx.filters.q || "")}" aria-label="${label}">${ctx.filters.q ? `<button class="icon-button clear-search" data-action="clear-search" aria-label="נקה חיפוש">${icon("close")}</button>` : ""}</div>`;
 export function invoicesView(ctx) {
   const f = ctx.filters, path = ctx.folderPath || {}, inFolder = Boolean(path.month);
-  const searching = Boolean(f.q?.trim()), direct = searching || f.view === "list";
+  // Everything still open for one supplier, across every month: a flat list
+  // like a search, but laid out month by month so the eye can find the sets.
+  const owing = f.view === "supplier-open" && !f.q?.trim();
+  const searching = Boolean(f.q?.trim()), direct = searching || f.view === "list" || owing;
   const items = filterInvoices(ctx.data.invoices, { ...f, ...(path.month ? { month: path.month } : {}), ...(path.supplierId ? { supplierId: path.supplierId } : {}) }, ctx.data.suppliers);
   const allOpen = ctx.data.invoices.filter(i => !i.deletedAt && i.status === "unpaid");
   const paymentSupplier = path.supplierId || f.supplierId || (direct && items.length && items.every(i => i.supplierId === items[0].supplierId) ? items[0].supplierId : null);
   const openTotals = totals(allOpen), itemTotals = totals(items);
-  return `${inFolder ? folderLocation(ctx) : `<div class="page-heading"><h1>${f.view === "list" ? "חשבוניות בכל החודשים" : "חשבוניות"}</h1></div>`}
+  const owingSupplier = owing ? ctx.data.suppliers.find(s => s.id === f.supplierId) : null;
+  // The screen opens on what is still owed, but the tabs above it can widen it;
+  // the subtitle has to keep saying what is actually on the screen.
+  const owingScope = f.status === "unpaid" ? "כל מה שעוד לא שולם" : f.status === "paid" ? "מה שכבר שולם" : "כל החשבוניות";
+  return `${inFolder ? folderLocation(ctx) : owing
+      ? `<section class="folder-location" aria-label="התיקייה הנוכחית"><h1 tabindex="-1" data-folder-heading>${e(owingSupplier?.name || "ספק")}</h1><p>${owingScope} · כל החודשים</p></section>`
+      : `<div class="page-heading"><h1>${f.view === "list" ? "חשבוניות בכל החודשים" : "חשבוניות"}</h1></div>`}
     ${searchBox(ctx, "invoice-search", "חפש ספק, תאריך או סכום")}
     ${draftReminders(ctx)}
     ${!inFolder && !direct ? `<button class="payable-summary payable-compact" data-action="open-unpaid"><span><strong>${allOpen.length ? (allOpen.length === 1 ? "חשבונית אחת לתשלום" : allOpen.length + " חשבוניות לתשלום") : "אין כרגע חשבוניות פתוחות"}</strong><small>בכל החודשים · ${e(summaryMoney(openTotals.final))}</small></span>${icon("arrow")}</button>` : ""}
@@ -83,7 +96,7 @@ export function invoicesView(ctx) {
     ${paymentSupplier && allOpen.some(i => i.supplierId === paymentSupplier) ? act("batch-payment", "בחר חשבוניות לתשלום יחד", "primary batch-payment-entry", "check", `data-id="${e(paymentSupplier)}"`) : ""}
     ${filters(ctx, { invoiceActions: true, status: !path.supplierId && !direct })}${creditNotice(itemTotals.invalidCredits || openTotals.invalidCredits)}
     ${direct || path.supplierId ? `<div class="list-heading" role="status"><span>${searching ? "תוצאות חיפוש · " : ""}${items.length} חשבוניות</span><span>${e(summaryMoney(itemTotals.final))}</span></div>` : ""}
-    ${items.length || (inFolder && !direct) ? direct ? `<div class="invoice-list">${invoiceCards(items, ctx)}</div>` : invoiceFolders(items, ctx, invoiceCards) : empty(searching || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", searching || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "צלם חשבונית ממסך הבית, מלא את הפרטים ושמור.", searching || f.month || f.supplierId || f.status ? act("clear-filters", "נקה חיפוש וסינון", "secondary", null) : "")}`;
+    ${items.length || (inFolder && !direct) ? owing ? `<div class="invoice-list">${monthSections(items, ctx, invoiceCards)}</div>` : direct ? `<div class="invoice-list">${invoiceCards(items, ctx)}</div>` : invoiceFolders(items, ctx, invoiceCards) : empty(searching || f.month || f.supplierId || f.status ? "אין חשבוניות שמתאימות לסינון" : "כאן יישמרו החשבוניות שלך", searching || f.month || f.supplierId || f.status ? "אפשר לנקות את הסינון ולראות את כל החשבוניות." : "צלם חשבונית ממסך הבית, מלא את הפרטים ושמור.", searching || f.month || f.supplierId || f.status ? act("clear-filters", "נקה חיפוש וסינון", "secondary", null) : "")}`;
 }
 export function suppliersView(ctx) {
   const q = (ctx.filters.q || "").toLowerCase();
@@ -227,8 +240,11 @@ export function shell(ctx) {
   ];
   const selected = ["home", "more"].includes(ctx.route) ? ctx.route : null;
   const inFolder = ["invoices", "documents"].includes(ctx.route) && ctx.folderPath?.month;
-  const inList = ctx.route === "invoices" && !inFolder && ctx.filters.view === "list";
-  const backLabel = inFolder ? (ctx.folderPath.supplierId ? "חזרה לספקים" : "חזרה לחודשים") : inList ? "חזרה לחודשים" : "חזור";
+  const inList = ctx.route === "invoices" && !inFolder && ["list", "supplier-open"].includes(ctx.filters.view);
+  // A supplier's open invoices are reached from inside a month, so Back returns
+  // there rather than to the months — the label must not promise otherwise.
+  const backLabel = inFolder ? (ctx.folderPath.supplierId ? "חזרה לספקים" : "חזרה לחודשים")
+    : inList ? (ctx.filters.view === "supplier-open" ? "חזור" : "חזרה לחודשים") : "חזור";
   // Back sits with Home at the bottom of the phone, where the thumb already
   // rests, rather than at the top corner. It keeps its place on Home too — a
   // bar whose buttons move between screens is harder to learn than a button

@@ -1815,6 +1815,67 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(errors, []);
   });
 
+  // What he actually does: part of last month and part of this one, settled in
+  // one check. The whole debt is on one screen, laid out month by month, and
+  // the months can be ticked a set at a time.
+  test(`${engine.name()}: a supplier's open invoices span months and pay together in one check`, { timeout: 60000 }, async t => {
+    const { server, data, requests, month, previous } = workspaceFixture();
+    const base = data.invoices[0];
+    data.invoices.push({ ...base, id: "INV-OLD-1", documentNumber: "INV-OLD-1", invoiceDate: previous + "-04", attachmentIds: [], subtotalAgorot: 20000, totalAgorot: 20000, finalAgorot: 20000 },
+      { ...base, id: "INV-OLD-2", documentNumber: "INV-OLD-2", invoiceDate: previous + "-19", attachmentIds: [], subtotalAgorot: 23500, totalAgorot: 23500, finalAgorot: 23500 });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch(); const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, "invoices");
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
+    const entry = page.locator(".folder-open-supplier");
+    assert.match(await entry.innerText(), /כל מה שעוד לא שולם לתנובה/);
+    assert.match(await entry.innerText(), /3 חשבוניות/, "the month he is standing in does not bound the debt");
+    assert.match(await entry.innerText(), /1,689\.00/);
+    await entry.click();
+    await page.locator(".month-section").first().waitFor();
+    const months = await page.locator(".month-section-heading").allInnerTexts();
+    assert.equal(months.length, 2, "one heading per month, so nothing reads as a heap");
+    assert.match(months[0], /2 חשבוניות/); assert.match(months[0], /435\.00/);
+    assert.match(months[1], /חשבונית אחת/); assert.match(months[1], /1,254\.00/);
+    assert.deepEqual(await page.locator(".invoice-card .supplier-name").allInnerTexts(),
+      [`04.${previous.slice(5)}.${previous.slice(0, 4)}`, `19.${previous.slice(5)}.${previous.slice(0, 4)}`, `08.${month.slice(5)}.${month.slice(0, 4)}`],
+      "oldest first, and every row headed by its date rather than the same name three times");
+    await page.screenshot({ path: `test-artifacts/supplier-open-${engine.name()}.png` });
+    await page.locator('[data-action="batch-payment"]').click();
+    await page.locator(".batch-payment-form").waitFor();
+    assert.equal(await page.locator(".batch-month").count(), 2);
+    await page.locator(`[data-select-month="${previous}"]`).click();
+    assert.equal(await page.locator('[name="invoiceSelection"]:checked').count(), 2, "the whole of last month in one tap");
+    await page.locator('[name="invoiceSelection"][value="INV-101"]').check();
+    assert.match(await page.locator("[data-batch-total]").innerText(), /3 חשבוניות/);
+    await page.locator("[data-batch-next]").click();
+    await page.locator('[data-batch-method="check"]').click();
+    await page.locator('[name="checkNumber"]').fill("00998877");
+    await page.locator('[name="paymentDate"]').fill(month + "-14");
+    await page.locator('.batch-payment-form [type="submit"]').click();
+    await page.locator("[data-batch-done]").waitFor();
+    assert.match(await page.locator(".save-confirmation").innerText(), /3 חשבוניות/);
+    await page.locator("[data-batch-done]").click();
+    const write = requests.findLast(r => r.path.endsWith("/pay-batch"));
+    assert.deepEqual(write.body.items.map(i => i.id).sort(), ["INV-101", "INV-OLD-1", "INV-OLD-2"]);
+    assert.equal(write.body.totalAgorot, 168900);
+    const batches = new Set(data.invoices.filter(i => i.payment?.batch).map(i => i.payment.batch.id));
+    assert.equal(batches.size, 1, "one payment across two months, not one per month");
+    // Nothing is owed any more, so the screen that offered the debt says so.
+    await page.locator(".invoice-list, .empty").first().waitFor();
+    assert.equal(await page.locator(".invoice-card").count(), 0);
+    await page.locator(".app-back").click();
+    await page.locator("[data-folder-heading]").waitFor();
+    assert.match(await page.locator("[data-folder-heading]").innerText(), /תנובה/, "Back returns to the folder he came from");
+    assert.equal(await page.locator(".folder-open-supplier").count(), 0, "with nothing left to offer");
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: batch payment selects supplier invoices, resumes after lost response and confirms the total once`, { timeout: 60000 }, async t => {
     const { server, data, requests, month, previous } = workspaceFixture();
     const base = data.invoices[0];
