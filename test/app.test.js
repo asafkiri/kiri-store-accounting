@@ -566,3 +566,49 @@ test("the camera opened from Home still asks who the supplier is", async t => {
   assert.match(document.querySelector(".quick-question h3").textContent, /מי הספק/);
   assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 1 מתוך 4/);
 });
+
+// Closing a window schedules a render for whenever the drafts finish being read
+// off the device. It used to land on whatever he had started typing in the
+// meantime and rebuild the box under his finger, taking the focus and the caret
+// with it — so the next characters went nowhere.
+const searchBox = () => document.querySelector("#invoice-search");
+async function searching(t) {
+  await setup(t, { request: async path => path === "me" ? { uid: "owner" } : SUPPLIER_FOLDER_DATA });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click(); await tick();
+}
+const typeSearch = value => {
+  searchBox().focus();
+  searchBox().value = value;
+  searchBox().dispatchEvent(new Event("input", { bubbles: true }));
+};
+
+test("typing in the search box keeps the box, the focus and the caret", async t => {
+  await searching(t);
+  typeSearch("תנובה");
+  assert.equal(document.activeElement.id, "invoice-search");
+  assert.equal(searchBox().selectionStart, "תנובה".length, "the caret stays at the end of what he typed");
+  assert.equal(document.querySelectorAll(".invoice-card").length, 1);
+});
+
+test("a window closing behind the search box does not empty his hands", async t => {
+  await searching(t);
+  typeSearch("תנובה");
+  document.querySelector('[data-action="detail"]').click(); await tick();
+  document.querySelector("[data-close-modal]").click();
+  // He goes straight back to the box; the render that the closing window
+  // scheduled is still on its way.
+  searchBox().focus();
+  searchBox().setSelectionRange(2, 2);
+  await tick(); await tick();
+  assert.equal(document.activeElement.id, "invoice-search", "the late render must not take the box away from him");
+  assert.equal(searchBox().selectionStart, 2, "nor move the caret he placed");
+});
+
+test("a render nobody was typing into leaves the focus alone", async t => {
+  await searching(t);
+  document.querySelector('[data-action="detail"],[data-action="folder-month"]').click(); await tick();
+  document.querySelector("[data-close-modal],[data-action='folder-back']")?.click();
+  await tick(); await tick();
+  assert.notEqual(document.activeElement?.id, "invoice-search", "nothing was focused, so nothing is grabbed");
+});
