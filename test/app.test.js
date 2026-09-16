@@ -394,7 +394,7 @@ for (const route of ["invoices", "documents"]) {
     document.querySelector('[data-action="folder-month"]').click(); await tick();
     document.querySelector('[data-action="folder-supplier"]').click(); await tick();
     assert.equal(folderLevel(), "one supplier");
-    document.querySelector('.topbar [data-route="home"]').click(); await tick();
+    document.querySelector('.sidebar [data-route="home"]').click(); await tick();
     document.querySelector(`[data-route="${route}"]`).click(); await tick();
     assert.equal(folderLevel(), "one supplier", "the section resumes where he left it");
     assert.match(document.querySelector(".app-back").textContent, /חזרה לספקים/);
