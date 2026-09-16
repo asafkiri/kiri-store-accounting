@@ -1777,6 +1777,44 @@ for (const engine of [chromium, webkit]) {
 }
 
 for (const engine of [chromium, webkit]) {
+  // The shop owner's father, in his own words: he pays a supplier by check,
+  // and from then on Back sticks on that supplier. Paying is what triggers it —
+  // the way out of the payment window is its own בית button, and leaving that
+  // way is what saves the supplier folder as the place the section resumes to.
+  test(`${engine.name()}: after a check payment, Back out of the supplier reaches the suppliers list`, { timeout: 60000 }, async t => {
+    const { server, month } = workspaceFixture();
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    let browser;
+    t.after(async () => { try { await browser?.close(); } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); } });
+    browser = await engine.launch(); const page = await browser.newPage(phoneOptions(engine));
+    const errors = []; page.on("pageerror", err => errors.push(err.message));
+    await page.goto(`http://127.0.0.1:${server.address().port}`);
+    await workspaceRoute(page, "invoices");
+    await page.locator(`[data-action="folder-month"][data-value="${month}"]`).click();
+    await page.locator('[data-action="folder-supplier"][data-value="supplier-tnuva"]').click();
+    await page.locator('[data-action="detail"][data-id="INV-101"]').click();
+    await page.locator('[data-detail-action="pay"]').click();
+    await page.locator('[data-payment-method="check"]').click();
+    await page.locator('[name="checkNumber"]').fill("00123456");
+    await page.locator('[name="paymentDate"]').fill(month + "-09");
+    await page.locator('.payment-form [type="submit"]').click();
+    await page.locator(".save-confirmation").waitFor();
+    // Out through the payment window's own Home button, the way he does it.
+    await page.locator("#modal [data-modal-home]").click();
+    await page.locator(".home-actions").waitFor();
+    await workspaceRoute(page, "invoices");
+    await page.locator('[data-folder-heading]').waitFor();
+    assert.match(await page.locator("[data-folder-heading]").innerText(), /תנובה/, "the section resumes inside the supplier he paid");
+    assert.match(await page.locator(".app-back").innerText(), /חזרה לספקים/);
+    await page.locator(".app-back").click();
+    await page.locator(".supplier-folder").first().waitFor();
+    assert.match(await page.locator("[data-folder-heading]").innerText(), /ספטמבר|אוגוסט|יולי|יוני|מאי|אפריל|מרץ|פברואר|ינואר|אוקטובר|נובמבר|דצמבר/, "Back climbs to the suppliers of that month, not out to Home");
+    await page.locator(".app-back").click();
+    await page.locator(".month-folder").first().waitFor();
+    assert.equal(await page.locator(".supplier-folder").count(), 0, "and the next Back reaches the months");
+    assert.deepEqual(errors, []);
+  });
+
   test(`${engine.name()}: batch payment selects supplier invoices, resumes after lost response and confirms the total once`, { timeout: 60000 }, async t => {
     const { server, data, requests, month, previous } = workspaceFixture();
     const base = data.invoices[0];
