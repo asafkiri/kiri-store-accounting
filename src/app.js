@@ -257,6 +257,9 @@ ctx.refresh = async (force = false) => {
           : "אין חיבור לרשת";
   }
 };
+// The edit screen offers "I was wrong — it was not paid" beside the payment it
+// is showing, and that is the same correction the invoice itself offers.
+ctx.unpay = id => action("unpay", { id });
 ctx.reopen = async (key, id) => {
   if (key === "payment") {
     const draft = await ctx.drafts.load("payment");
@@ -434,7 +437,10 @@ async function action(type, data = {}) {
     case "documents":
       return documentList(data.id);
     case "edit":
-      return invoiceForm(ctx, record);
+      // Reached from the invoice itself, so backing out lands there again.
+      return invoiceForm(ctx, record, [], {
+        onBack: () => detail(ctx.data.invoices.find(i => i.id === record.id) || record),
+      });
     case "refresh":
       return ctx.refresh(true);
     case "more":

@@ -1055,3 +1055,134 @@ test("editing an invoice already told apart from its twin is not asked about aga
   assert.equal(saved[0].body.data.duplicateAllowed, true);
   assert.equal(saved[0].body.data.notes, "תוקן");
 });
+
+// Fixing a mistake used to mean scrolling past the photograph, opening "More
+// actions", choosing between two different corrections, and then meeting a form
+// that asks about the supplier and the kind of document before it asks about
+// the amount — and asks for the amount twice.
+const paidInvoice = () => ({
+  ...existingInvoice(), status: "paid",
+  payment: { method: "check", paymentDate: "2026-09-14", checkNumber: "1234", checkDueDate: "2026-12-01" },
+});
+const unpaidInvoice = () => ({ ...existingInvoice(), status: "unpaid" });
+
+test("editing a saved invoice leads with the amount and asks for it once", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  await invoiceForm(ctx, unpaidInvoice());
+  const form = document.querySelector("#invoice-form");
+  const fields = [...form.querySelectorAll("input,select,textarea")].map(el => el.name).filter(Boolean);
+  assert.equal(fields[0], "total", "the amount comes first, ahead of the supplier and the date");
+  assert.equal(document.querySelector("[data-final-slot]").hidden, true,
+    "the amount to pay is the document's amount, so it is not asked for a second time");
+  assert.equal(form.elements.final.value, form.elements.total.value);
+  const rest = form.querySelector(".edit-rest");
+  assert.equal(rest.open, false, "everything else waits behind a fold");
+  for (const name of ["supplierName", "documentNumber", "invoiceDate", "documentType", "subtotal", "notes"])
+    assert.ok(rest.querySelector(`[name="${name}"]`), name + " is still reachable");
+});
+
+test("one amount typed once reaches both the document and the payment", async () => {
+  const { ctx, saved } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  await invoiceForm(ctx, unpaidInvoice());
+  fill("total", "250.00");
+  assert.equal(document.querySelector("[name=final]").value, "250.00");
+  document.querySelector("[name=review]").click();
+  submit(); await tick();
+  assert.equal(saved[0].body.data.totalAgorot, 25000);
+  assert.equal(saved[0].body.data.finalAgorot, 25000);
+});
+
+test("two amounts that really differ are both kept, and never quietly overwritten", async () => {
+  const { ctx } = setup();
+  const different = { ...unpaidInvoice(), totalAgorot: 10000, finalAgorot: 9000 };
+  ctx.data.invoices = [different];
+  await invoiceForm(ctx, different);
+  assert.equal(document.querySelector("[data-final-slot]").hidden, false);
+  assert.equal(document.querySelector("[name=final]").value, "90.00");
+  fill("total", "120.00");
+  assert.equal(document.querySelector("[name=final]").value, "90.00", "his number stands");
+});
+
+test("a deduction makes the two amounts different questions again", async () => {
+  const { ctx } = setup();
+  const deducted = { ...unpaidInvoice(), deductions: [{ label: "החזר ארגזים", amountAgorot: 500, includedInTotal: false }] };
+  ctx.data.invoices = [deducted];
+  await invoiceForm(ctx, deducted);
+  assert.equal(document.querySelector("[data-final-slot]").hidden, false);
+});
+
+test("adding a deduction while editing brings the amount to pay back", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  await invoiceForm(ctx, unpaidInvoice());
+  assert.equal(document.querySelector("[data-final-slot]").hidden, true);
+  document.querySelector("#add-deduction").click();
+  assert.equal(document.querySelector("[data-final-slot]").hidden, false);
+});
+
+test("the edit screen shows the payment and opens the correction for it", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [paidInvoice()];
+  await invoiceForm(ctx, paidInvoice());
+  const row = document.querySelector("[data-edit-payment]");
+  assert.match(row.textContent, /שולם בצ׳ק/);
+  assert.match(row.textContent, /14\.09\.2026/);
+  assert.match(row.textContent, /צ׳ק 1234/, "the check he never wrote down is named here");
+  row.click(); await tick();
+  assert.ok(document.querySelector(".payment-form"), "and its details open from the same screen");
+});
+
+test("an unpaid invoice is marked from that same place, with nothing to undo", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  await invoiceForm(ctx, unpaidInvoice());
+  assert.match(document.querySelector("[data-edit-payment]").textContent, /עדיין לא סומנה כשולמה/);
+  assert.equal(document.querySelector("[data-edit-unpay]"), null);
+});
+
+test("“I was wrong — it was not paid” reaches the same correction the invoice offers", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [paidInvoice()];
+  let undone = null;
+  ctx.unpay = id => { undone = id; };
+  await invoiceForm(ctx, paidInvoice());
+  document.querySelector("[data-edit-unpay]").click();
+  assert.equal(undone, "invoice-existing");
+});
+
+test("a required detail behind the fold opens it instead of refusing in silence", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  await invoiceForm(ctx, unpaidInvoice());
+  const rest = document.querySelector(".edit-rest");
+  assert.equal(rest.open, false);
+  const date = document.querySelector("[name=invoiceDate]");
+  date.value = "";
+  date.dispatchEvent(new Event("invalid", { bubbles: true }));
+  assert.equal(rest.open, true, "the browser can only refuse a field it can show him");
+});
+
+test("adding a new invoice still asks in the order it is read off the paper", async () => {
+  const { ctx } = setup();
+  await invoiceForm(ctx);
+  const form = document.querySelector("#invoice-form");
+  assert.equal(form.querySelector(".edit-rest"), null, "nothing is folded away from a first entry");
+  assert.equal(form.querySelector("[data-edit-payment]"), null, "a new invoice has no payment to correct yet");
+  assert.equal(form.querySelector("[data-final-slot]"), null);
+  const fields = [...form.querySelectorAll("input,select,textarea")].map(el => el.name).filter(Boolean);
+  assert.ok(fields.indexOf("supplierName") < fields.indexOf("total"), "the supplier is still the first question");
+  assert.ok(form.elements.final);
+});
+
+test("backing out of the edit screen lands on the invoice, not out of everything", async () => {
+  const { ctx } = setup();
+  ctx.data.invoices = [unpaidInvoice()];
+  let landed = null, closed = false;
+  ctx.closeModal = () => { closed = true; };
+  await openInvoiceForm(ctx, unpaidInvoice(), [], { fullEditor: true, onBack: () => { landed = "invoice"; } });
+  ctx.modalBack();
+  assert.equal(landed, "invoice", "he came from the invoice, so Back belongs to it");
+  assert.equal(closed, false);
+});

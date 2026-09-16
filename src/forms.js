@@ -583,20 +583,45 @@ export async function invoiceForm(
     // travel with the request for the detailed editor too.
     openEditor: () => invoiceForm(ctx, null, [], { fullEditor: true, supplier: options.supplier }),
   });
+  // A new invoice is typed in the order it is read off the paper. Editing a
+  // saved one is almost always a correction of one number or of the payment, so
+  // those come first and the rest — the supplier, the date, the kind of
+  // document — waits behind a fold instead of standing between him and the
+  // number he came to fix.
+  const editing = Boolean(record);
+  const identity = `${supplierPickerMarkup(f)}
+      ${field("מספר חשבונית (רשות)", "documentNumber", f.documentNumber)}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true })}
+      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal)}`;
+  const vatField = field("מע״מ כפי שרשום", "vat", f.vat, { hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." });
+  const totalField = field("סכום כולל מע״מ", "total", f.total, { required: true, wide: true });
+  const finalField = field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true });
+  const calculateButton = '<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>';
+  const notesArea = textArea("notes", f.notes, "הערות (רשות)");
+  const deductionsSection = `<section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>`;
+  const notices = `<div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך.</div>
+    <div id="arithmetic-note" class="notice warning" hidden></div>
+    <div data-duplicate-slot></div>`;
+  const attachments = f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : "";
+  // The payment is the other half of what gets corrected — a method chosen by
+  // mistake, a check whose number was never written down, an invoice that was
+  // never paid at all — so the way to it sits on this screen rather than back
+  // in a menu he has to find again.
+  const paid = record?.status === "paid", payment = record?.payment;
+  const paymentSummary = paid && payment
+    ? `שולם ב${methods[payment.method] || ""} · ${displayDate(payment.paymentDate)}${payment.method === "check" ? " · צ׳ק " + (payment.checkNumber || "ללא מספר") : ""}`
+    : "החשבונית עדיין לא סומנה כשולמה";
+  const paymentSection = editing ? `<section class="edit-payment"><h3>התשלום</h3>
+    <button type="button" class="secondary edit-payment-row" data-edit-payment><span><strong>${e(paymentSummary)}</strong><small>${paid ? "שינוי אמצעי התשלום, יום התשלום או פרטי הצ׳ק" : "סימון ששולמה ורישום פרטי התשלום"}</small></span>${icon("arrow")}</button>
+    ${paid ? '<button type="button" class="text-button" data-edit-unpay>טעיתי — החשבונית לא שולמה</button>' : ""}</section>` : "";
+  const review = '<label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>';
+  const body = editing
+    ? `<div class="form-grid">${totalField}${vatField}</div><div data-final-slot><div class="form-grid">${finalField}${calculateButton}</div></div>${notices}
+    ${paymentSection}
+    <details class="edit-rest"><summary>שאר פרטי החשבונית</summary><div class="form-grid">${identity}</div>${deductionsSection}<div class="form-grid">${notesArea}</div>${attachments}</details>`
+    : `<div class="form-grid">${identity}${vatField}${totalField}</div>${deductionsSection}<div class="form-grid">${finalField}${calculateButton}${notesArea}</div>${notices}${attachments}`;
   const root = ctx.dialog(
     record ? "עריכת חשבונית" : "הוספת חשבונית",
-    `${staleNotice(old, record, draft)}<form id="invoice-form">
-    <div class="form-grid">${supplierPickerMarkup(f)}
-      ${field("מספר חשבונית (רשות)", "documentNumber", f.documentNumber)}${field("תאריך החשבונית", "invoiceDate", f.invoiceDate, { type: "date", required: true })}
-      ${select("סוג מסמך", "documentType", f.documentType, { "": "בחר סוג מסמך", invoice: "חשבונית", credit: "חשבונית זיכוי", ...(record && !["invoice", "credit"].includes(record.documentType) ? { [record.documentType]: types[record.documentType] + " (רישום קיים)" } : {}) }, { wide: true, required: true })}${field("לפני מע״מ (רשות)", "subtotal", f.subtotal)}${field("מע״מ כפי שרשום", "vat", f.vat, { hint: "לא ידוע? השאר ריק. 0 רק כשאין מע״מ." })}
-      ${field("סכום כולל מע״מ", "total", f.total, { required: true, wide: true })}
-    </div><section class="deductions"><div class="section-label"><h3>הפחתות וניכויים</h3><button type="button" class="text-button" id="add-deduction">${icon("plus")} הוסף שורה</button></div><div id="deductions-list"></div><small>סמן אם ההפחתה כבר כלולה בסכום המסמך, כדי שלא תרד פעמיים.</small></section>
-    <div class="form-grid">${field("סכום סופי לתשלום", "final", f.final, { required: true, wide: true })}<button type="button" class="text-button wide" id="calculate-final">מלא לפי הסכום וההפחתות שהזנתי</button>${textArea("notes", f.notes, "הערות (רשות)")}</div>
-    <div class="notice warning wide" data-credit-notice hidden>הזן את גובה הזיכוי כמספר חיובי. לדוגמה: 30 ₪ יירשמו כהפחתה של 30 ₪ לפי סוג המסמך.</div>
-    <div id="arithmetic-note" class="notice warning" hidden></div>
-    <div data-duplicate-slot></div>
-    ${f.attachmentIds.length ? `<div class="attachment-links"><strong>המסמך המצורף</strong>${f.attachmentIds.map((id, i) => `<button type="button" class="secondary" data-open-document="${e(id)}">פתח עמוד / קובץ ${i + 1}</button>`).join("")}</div>` : ""}
-    <label class="checkbox"><input name="review" type="checkbox" required> בדקתי את הפרטים ואת הסכום לתשלום</label>${footer("שמור חשבונית")}</form>`,
+    `${staleNotice(old, record, draft)}<form id="invoice-form">${body}${review}${footer("שמור חשבונית")}</form>`,
   );
   const form = $("form", root);
   const renderDeductions = () => {
@@ -609,7 +634,10 @@ export async function invoiceForm(
   };
   renderDeductions();
   const creditNoticeElement = $("[data-credit-notice]", form);
-  form.elements.documentType.closest(".field").after(creditNoticeElement);
+  // The warning belongs beside the amounts it is about. While the kind of
+  // document is being chosen that is right under the chooser; when editing, the
+  // chooser is folded away and the notice stays up with the amounts.
+  if (!editing) form.elements.documentType.closest(".field").after(creditNoticeElement);
   const creditNotice = () => {
     const isCredit = form.elements.documentType.value === "credit";
     creditNoticeElement.hidden = !isCredit;
@@ -697,6 +725,7 @@ export async function invoiceForm(
     if (f.deductions.length >= 30) return;
     f.deductions.push({ label: "", amount: "", included: "no" });
     renderDeductions();
+    syncFinal();
     draft.fields = f;
     binding.persist();
   };
@@ -706,6 +735,7 @@ export async function invoiceForm(
       Object.assign(f, collect());
       f.deductions.splice(Number(b.dataset.removeDeduction), 1);
       renderDeductions();
+      syncFinal();
       draft.fields = f;
       binding.persist();
     }
@@ -737,7 +767,45 @@ export async function invoiceForm(
       toast(errorText(err), true);
     }
   };
+  // Two amount fields holding the same number are two chances to get it wrong.
+  // While nothing is deducted, the amount to pay is the document's amount, so
+  // one field is shown and the other follows it. An invoice whose two amounts
+  // already differ keeps both: that difference is real and is not overwritten.
+  const finalSlot = $("[data-final-slot]", form);
+  let mirrorFinal = editing && !f.deductions.length && f.total.trim() !== "" && f.final.trim() === f.total.trim();
+  const syncFinal = () => {
+    if (!finalSlot) return;
+    if (mirrorFinal && f.deductions.length) mirrorFinal = false;
+    finalSlot.hidden = mirrorFinal;
+    if (mirrorFinal) form.elements.final.value = form.elements.total.value;
+  };
+  syncFinal();
+  if (editing) {
+    $("[data-edit-payment]", form).onclick = () => {
+      if (draft.pending || ctx.modalBusy) return;
+      // Whatever was typed here is already in the draft, so the way back finds
+      // it again; the invoice itself is re-read in case the payment changed it.
+      const current = () => ctx.data.invoices.find(i => i.id === record.id) || record;
+      paymentForm(ctx, current(), { onBack: () => invoiceForm(ctx, current(), [], options) });
+    };
+    const unpayButton = $("[data-edit-unpay]", form);
+    if (unpayButton) unpayButton.onclick = () => {
+      if (draft.pending || ctx.modalBusy) return;
+      void ctx.unpay?.(record.id);
+    };
+    // He came here from the invoice, so Back belongs to the invoice — not out
+    // of everything, which is what it used to do from the detailed editor.
+    if (options.onBack) ctx.modalBack = () => {
+      if (ctx.modalBusy) return;
+      if (draft.pending) { ctx.closeModal(); return; }
+      options.onBack();
+    };
+  }
+  // A required field folded out of sight cannot be focused, and the browser
+  // then refuses the save without saying why. The fold opens for it.
+  form.addEventListener("invalid", ev => { ev.target.closest("details")?.setAttribute("open", ""); }, true);
   form.addEventListener("input", () => {
+    syncFinal();
     try {
       const values = collect(),
         s = parseMoney(values.subtotal, true),
@@ -787,7 +855,8 @@ export async function paymentForm(ctx, record, { onBack = null } = {}) {
   const f = draft.fields;
   const supplier = ctx.data.suppliers.find(s => s.id === record.supplierId)?.name || "הספק";
   const root = ctx.dialog(
-    "סימון חשבונית כשולמה",
+    // Reached from the edit screen, this is a correction, not a first marking.
+    record.status === "paid" ? "עדכון פרטי התשלום" : "סימון חשבונית כשולמה",
     `<form class="payment-form"><div class="payment-amount"><span><strong>${e(supplier)}</strong> · ${e(invoiceLabel(record))}</span><strong>${e(money(record.finalAgorot))}</strong></div>
       <input type="hidden" name="method" value="${e(f.method)}">
       <section data-payment-methods><h3>איך שילמת?</h3><div class="payment-methods">${Object.entries(methods).map(([value, label]) => `<button type="button" class="secondary" data-payment-method="${value}" aria-pressed="${value === f.method}">${e(label)}</button>`).join("")}</div></section>
@@ -832,7 +901,10 @@ export async function paymentForm(ctx, record, { onBack = null } = {}) {
   ctx.modalBack = () => {
     if (ctx.modalBusy) return;
     if (draft.pending) { ctx.closeModal(); return; }
-    if (!$("[data-payment-details]", form).hidden) $("[data-change-method]", form).click();
+    // Back retreats to the method chooser only when that chooser was a step he
+    // actually came through. Correcting a payment already recorded opens on the
+    // details, so Back there means back out, not into a question he never saw.
+    if (draft.paymentDetails && !$("[data-payment-details]", form).hidden) $("[data-change-method]", form).click();
     else if (onBack) onBack();
     else ctx.closeModal();
   };
