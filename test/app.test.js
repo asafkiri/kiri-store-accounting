@@ -420,3 +420,59 @@ test("walking into a folder by hand still unwinds through the history it built",
   window.history.forward(); await tick(); await tick();
   assert.equal(folderLevel(), "suppliers");
 });
+
+// Standing in a supplier's folder already answers the intake's first question.
+const SUPPLIER_FOLDER_DATA = {
+  full: true, version: 1, dailyCash: [],
+  suppliers: [{ id: "s1", name: "תנובה", active: true }, { id: "s2", name: "גלוברנס", active: true }],
+  invoices: [{
+    id: "a", supplierId: "s1", documentNumber: "A", documentType: "invoice",
+    invoiceDate: "2026-09-01", status: "unpaid", finalAgorot: 100, totalAgorot: 100,
+    deductions: [], attachmentIds: ["page-a"],
+  }],
+};
+for (const route of ["invoices", "documents"]) {
+  test(`${route}: a supplier folder opens the camera for that supplier, and the questions skip past it`, async t => {
+    await setup(t, { request: async path => path === "me" ? { uid: "owner" } : SUPPLIER_FOLDER_DATA });
+    await globalThis.appAuthCallback({});
+    document.querySelector(`[data-route="${route}"]`).click(); await tick();
+    document.querySelector('[data-action="folder-month"]').click(); await tick();
+    assert.equal(document.querySelector(".folder-add"), null, "the month has no one supplier to add for");
+    document.querySelector('[data-action="folder-supplier"]').click(); await tick();
+    const add = document.querySelector(".folder-add");
+    assert.match(add.textContent, /צלם חשבונית לתנובה/);
+    assert.equal(add.dataset.supplier, "s1");
+    add.click(); await tick(); await tick();
+    document.querySelector("#fill-details").click(); await tick(); await tick(); await tick();
+    assert.match(document.querySelector(".quick-question h3").textContent, /מה הסכום כולל מע״מ/,
+      "the supplier is already known, so the first question is the amount");
+    assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 2 מתוך 4/);
+    // Not merely a skipped question: the full editor shows the supplier filled in.
+    document.querySelector("[data-full-invoice]").click(); await tick(); await tick();
+    assert.equal(document.querySelector("#invoice-form").elements.supplierId.value, "s1");
+    assert.equal(document.querySelector("#invoice-form").elements.supplierName.value, "תנובה");
+  });
+}
+
+test("a supplier in the recycle bin is not offered new invoices", async t => {
+  const deleted = {
+    ...SUPPLIER_FOLDER_DATA,
+    suppliers: [{ id: "s1", name: "תנובה", active: false, deletedAt: 1 }, { id: "s2", name: "גלוברנס", active: true }],
+  };
+  await setup(t, { request: async path => path === "me" ? { uid: "owner" } : deleted });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-route="invoices"]').click(); await tick();
+  document.querySelector('[data-action="folder-month"]').click(); await tick();
+  document.querySelector('[data-action="folder-supplier"]').click(); await tick();
+  assert.match(document.querySelector("[data-folder-heading]").textContent, /תנובה/, "his history is still readable");
+  assert.equal(document.querySelector(".folder-add"), null);
+});
+
+test("the camera opened from Home still asks who the supplier is", async t => {
+  await setup(t, { request: async path => path === "me" ? { uid: "owner" } : SUPPLIER_FOLDER_DATA });
+  await globalThis.appAuthCallback({});
+  document.querySelector('[data-action="scan"]').click(); await tick(); await tick();
+  document.querySelector("#fill-details").click(); await tick(); await tick(); await tick();
+  assert.match(document.querySelector(".quick-question h3").textContent, /מי הספק/);
+  assert.match(document.querySelector(".quick-progress span").textContent, /שאלה 1 מתוך 4/);
+});
