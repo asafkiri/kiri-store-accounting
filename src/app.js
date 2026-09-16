@@ -64,6 +64,7 @@ window.visualViewport?.addEventListener("resize", sizeDialogs);
 sizeDialogs();
 const routePositions = new Map();
 const pageSnapshot = () => ({ route: ctx.route, filters: ctx.filters, folderPath: ctx.folderPath, limit: ctx.limit, scrollY: window.scrollY });
+const samePath = (a = {}, b = {}) => (a?.month || "") === (b?.month || "") && (a?.supplierId || "") === (b?.supplierId || "");
 const restorePage = state => {
   const { scrollY, ...page } = state;
   Object.assign(ctx, page);
@@ -349,12 +350,19 @@ async function action(type, data = {}) {
         window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
       });
       return;
-    case "folder-back":
-      navigation.back(() => {
-        ctx.folderPath = ctx.folderPath.supplierId ? { month: ctx.folderPath.month } : {};
-        ctx.render();
-      });
+    case "folder-back": {
+      // One level up, whatever the history behind this screen happens to hold.
+      const parent = ctx.folderPath.supplierId ? { month: ctx.folderPath.month } : {};
+      navigation.up(
+        entry => entry.route === ctx.route && samePath(entry.folderPath, parent),
+        () => {
+          ctx.folderPath = parent;
+          ctx.limit = 80; ctx.render();
+          window.scrollTo(0, 0); $("[data-folder-heading]")?.focus({ preventScroll: true });
+        },
+      );
       return;
+    }
     case "paid-color":
       ctx.paidColor = data.value === "red" ? "red" : "green";
       try { window.localStorage.setItem("ksa-paid-color", ctx.paidColor); } catch { /* Current session remains usable. */ }
